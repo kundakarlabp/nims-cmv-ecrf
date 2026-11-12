@@ -1,0 +1,18 @@
+# Formal go-live gates — must complete BEFORE identifiable patient data
+
+This is a **development starter**, not a validated clinical trial EDC or full 552-field registry. Do not deploy with real patient records before the following are implemented, verified, and signed off.
+
+1. **Account / infrastructure**: OCI tenancy home-region `ap-hyderabad-1`; verified A1 shape, limits, boot/block storage, public IP, backups, alerting, reserved cost controls; independently confirmed service terms and institutional governance.
+2. **Data boundaries**: approve identity-vault segregation and project-based access: registry vs CMV trial; get written authorization for personal Gmail backup destination or select approved institutional account.
+3. **Migrations and DB privileges**: replace staging `Base.metadata.create_all()` with versioned Alembic migrations; separate migration owner from restricted app DB role; append-only audit table with database-level restrictions/triggers and off-host integrity anchoring. Current starter database owner can edit audit events and is NOT immutable.
+4. **Authentication**: add MFA/SSO, per-user delegated accounts, password reset, session/device revocation, login throttling/lockout, access reviews, trusted backups of authentication config. Current password-only login is for staging.
+5. **Full schema**: replace flexible JSON entry payloads with reviewed 552-field dictionary and proper entities (patient, transplant, admissions, visits, laboratory samples, AST, treatment courses, infection episodes, biopsies, AEs, pharmacy, outcomes). Add strict validations and files.
+6. **Randomization**: approved/independently generated variable-block, 1:1, donor-type and rATG-stratified concealed allocation stored with independent key protection; transactional consumption and no re-randomization; audit; adjudicator masking. Not yet implemented.
+7. **Dose engine**: verify Cockcroft–Gault weight selection/unstable SCr/dialysis, unit conversions, renal dosing thresholds, arm retrieval from immutable allocation, clinician authorization and evidence of order review. Current test endpoint accepts user-selected arm: NOT FOR PATIENT DOSING.
+8. **Clinical exports and statistics**: locked datasets, ITT/PP definitions, time-zone safe dates, reproducible exports, precise missing states, blinded EAC/DSMB interim separation.
+9. **Follow-up**: approved schedule windows, repeat/unscheduled visits, withdrawal and death suppression, secure patient-contact consent, notification channel/permissions, escalation ownership. Current worklist does not send notifications.
+10. **Uploads**: private encrypted attachments, no public bucket, signed expiring downloads, malware scanning, image DICOM deidentification controls, content-based access rules.
+11. **Backups**: rclone encrypted personal Drive destination authorized, recovery key separately escrowed, 6-hour snapshots plus WAL/PITR if tighter RPO needed; second independent copy, checksums, daily alert, monthly restore verification. Current scripts NOT configured on Oracle or connected to Drive.
+12. **Security/testing**: HTTPS, network isolation, admin SSH key/MFA, patches, vulnerability scan, dependency lock, monitoring, load test at least 15 simultaneous users, incident SOPs, breach-response procedure, signed UAT, periodic audits.
+13. **Protocol conformity**: check final approved protocol/CRF/CTRI/NIEC amendments and lock trial-specific fields before production enrollment.
+14. **Availability**: Oracle Always Free may be out of capacity and idle instances can be reclaimed; maintain independent backup plus documented recovery and spare migration plan.

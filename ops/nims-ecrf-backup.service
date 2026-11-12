@@ -1,0 +1,12 @@
+[Unit]
+Description=NIMS eCRF PostgreSQL snapshot to encrypted Drive
+After=network-online.target docker.service
+Wants=network-online.target
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/opt/nims-cmv
+Environment=RCLONE_CONFIG=/home/ubuntu/.config/rclone/rclone.conf
+Environment=BACKUP_REMOTE=ecrfcrypt:oracle-nims-backups
+ExecStart=/opt/nims-cmv/ops/backup_to_drive.sh
+NoNewPrivileges=true

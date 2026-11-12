@@ -1,0 +1,68 @@
+name: nims-cmv
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      POSTGRES_DB: nims_ecrf
+      POSTGRES_USER: nims_ecrf
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set a strong PostgreSQL password}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nims_ecrf -d nims_ecrf"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [private]
+  api:
+    build: .
+    restart: unless-stopped
+    logging: *logging
+    init: true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    environment:
+      DB_HOST: db
+      DB_USER: nims_ecrf
+      DB_NAME: nims_ecrf
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      COOKIE_SECURE: "true"
+      SESSION_HOURS: "12"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [private]
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      SITE_DOMAIN: ${SITE_DOMAIN:?Set your owned domain}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+    networks: [private]
+volumes:
+  postgres_data:
+  caddy_data:
+  caddy_config:
+networks:
+  private:

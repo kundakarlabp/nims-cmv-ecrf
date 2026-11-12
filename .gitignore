@@ -1,0 +1,16 @@
+.env
+*.sqlite3
+*.db
+*.log
+__pycache__/
+.pytest_cache/
+backups/
+*.pem
+*.key
+rclone.conf
+.venv/
+.deploy-state/
+*.dump
+*.zip
+.env.*
+!.env.example
