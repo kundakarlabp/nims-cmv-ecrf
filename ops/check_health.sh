@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-docker compose ps
-docker compose exec -T api python - <<'PY'
+docker_cmd=(docker)
+if ! docker info >/dev/null 2>&1; then
+  sudo -n docker info >/dev/null
+  docker_cmd=(sudo -n docker)
+fi
+"${docker_cmd[@]}" compose ps
+"${docker_cmd[@]}" compose exec -T api python - <<'PY'
 import json, urllib.request
 for path in ('/healthz', '/readyz'):
     with urllib.request.urlopen('http://127.0.0.1:8000'+path, timeout=5) as response:
@@ -10,3 +15,4 @@ for path in ('/healthz', '/readyz'):
         assert json.load(response)['ok'] is True
 print('API and database readiness passed. Public HTTPS must be checked separately.')
 PY
+

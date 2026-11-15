@@ -1,0 +1,12 @@
+[Unit]
+Description=Deploy approved NIMS CMV staging release
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/nims-cmv
+ExecStart=/bin/bash /home/ubuntu/nims-cmv/ops/auto_deploy.sh
+StandardOutput=journal
+StandardError=journal

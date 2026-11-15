@@ -1,0 +1,47 @@
+name: Mark reviewed staging release
+on:
+  workflow_run:
+    workflows: [Application checks]
+    types: [completed]
+permissions:
+  contents: write
+jobs:
+  mark:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify explicit release intent and current CI head
+        id: intent
+        env:
+          CHECKED_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin main --no-tags
+          test "$(git rev-parse origin/main)" = "$CHECKED_SHA"
+          git checkout --detach "$CHECKED_SHA"
+          if ! git diff-tree --no-commit-id --name-only -r HEAD | grep -Fxq ops/staging-release.txt; then
+            echo 'No explicit staging release in this commit.'
+            exit 0
+          fi
+          target=$(cat ops/staging-release.txt)
+          [[ "$target" =~ ^[0-9a-f]{40}$ ]]
+          git merge-base --is-ancestor "$target" HEAD
+          test "$target" != "$CHECKED_SHA"
+          printf 'TARGET=%s\n' "$target" >> "$GITHUB_ENV"
+          printf 'publish=true\n' >> "$GITHUB_OUTPUT"
+      - name: Publish immutable release tag
+        if: steps.intent.outputs.publish == 'true'
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          tag="cmv-staging-$(date -u +%Y%m%dT%H%M%SZ)-$TARGET"
+          git tag -a "$tag" "$TARGET" -m "CI-approved CMV staging release $TARGET"
+          git push origin "refs/tags/$tag"
