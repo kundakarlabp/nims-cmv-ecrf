@@ -10,11 +10,16 @@ GitHub keeps the code and change history; Oracle will run the application and da
 Chat messages do not automatically synchronize into the application or change patient
 records. Never paste patient records into GitHub issues or chat for software fixes.
 
-Current status: **OCI staging VM provisioned in Hyderabad; application not deployed; no public live URL; staging only.**
+Current status (16 November 2026): **synthetic-only staging is live** at
+<https://152-70-77-77.sslip.io/> on the OCI Hyderabad E2.1.Micro VM.
+PostgreSQL/API health, HTTPS and an authenticated admin dashboard request were verified.
+The VM currently runs a transferred source bundle, so GitHub changes do not yet deploy
+automatically. The public IP hostname should be replaced with an owned domain before
+clinical go-live.
 `app/ui.html` is the real connected staging interface. `reference/synthetic_prototype.html`
 is a richer design mockup, not a fully connected application.
 
-## Before Oracle is available
+## CI checks
 
 `Application checks` runs API tests on SQLite and disposable PostgreSQL and builds the
 container stack with an HTTP proxy smoke check. It uses no cloud credentials or patient data.
@@ -22,7 +27,26 @@ No scheduled jobs, paid runners or automatic deployments are configured. Include
 Actions usage is account-wide: keep paid overage disabled in GitHub billing settings.
 Do not assume a repository workflow can enforce the account's spending budget.
 
-## When Oracle is available
+## Repeatable releases from ChatGPT chat
+
+ChatGPT chat can prepare a GitHub branch and PR, inspect CI, merge a reviewed correction,
+and request a staging release by updating `ops/staging-release.txt` to the full reviewed
+commit SHA in a separate commit. When the release-intent commit passes `Application checks`,
+`.github/workflows/staging-release.yml` publishes a `cmv-staging-TIMESTAMP-SHA` tag.
+The VM timer in `ops/nims-cmv-auto-deploy.timer` polls tags using a **read-only repository
+deploy key** and applies the tagged commit through `ops/deploy.sh`. Each update takes a
+local pre-deployment database snapshot, checks container readiness, and attempts to
+restore the previous application commit on failure. Publishing a release is separate
+from merging a PR. Never use this mechanism for identifiable patient data before the
+formal go-live gates are satisfied.
+
+**The pull-based release timer is not enabled on OCI yet.** The owner must add the VM's
+public SSH deploy key to this private repository with read-only access. Then replace the
+transferred bundle with a read-only Git checkout while preserving `.env`, `.initial-admin`,
+and the named Docker volumes. Verify the first release and rollback, then enable the timer.
+Never store a GitHub Actions SSH key or an account-wide write token on the VM.
+
+## Initial Oracle setup (historical)
 
 1. Provision an eligible Always Free host; verify the tenancy's actual free limits and
    capacity. Install Docker Engine + Compose from official Ubuntu instructions.
@@ -47,7 +71,7 @@ reviewed SHA with the same script. Database migrations/restoration require a sep
 review; code rollback does not reverse a schema or data change. Do not run
 `docker compose down -v` on the server: it destroys stored volumes.
 
-**State: a locally tested staging foundation. NOT a live deployment, NOT yet a validated eCRF, NOT approved for identifiable clinical data.**
+**State: live synthetic-only staging, NOT yet a validated eCRF or approved for identifiable clinical data.**
 
 The user requested an independently hosted custom website for approximately 10â€“15 nephrology consultants, PGs and trial staff; 12-month CMV trial follow-up; full transplant/infection registry; individual audit logs; clinician-reviewed VGCV renal dosing and encrypted backups to their Google Drive. This package begins the custom build with PostgreSQL, FastAPI, a responsive test interface, Docker Compose, a TLS reverse proxy, deployment instructions, and encrypted Drive backup scripts. No user records or credentials are included.
 
@@ -70,11 +94,13 @@ The user requested an independently hosted custom website for approximately 10â€
 
 ## Explicitly NOT yet implemented or validated
 
-- A Free Tier E2.1.Micro VM and public subnet exist in OCI Hyderabad, but **no domain, HTTPS live endpoint, Google Drive OAuth, backup timer, external monitoring, or 15-user load test has been configured or verified**. OCI Run Command has not delivered the staging diagnostic; the instance has no deployed application.
+- The staging URL uses a shared IP-based hostname. An owned domain, Google Drive OAuth,
+  encrypted off-host backup timer, external monitoring, 15-user load test, and the
+  pull-based GitHub deployment timer are not configured or verified.
 - Login lacks rate limiting and MFA, schema migrations, DB-enforced immutable audit, fully typed 552-field forms, document uploads, independent randomization, blinded adjudication, correct clinical-grade medication orders, full unit-based access control, formal data-validation queries and official statistical outputs.
 - Clinical use must wait until all items in `ops/GO_LIVE_GATES.md` are signed off. Current database uses its owner account and staging schema creation, so its audit log is not immutable against database administrators.
 - The worklist displays due visits but does not message patients, send email reminders or authorize contact.
-- Site/website deployment and Google Drive backup remain **unconnected**.
+- Google Drive backup remains **unconnected**. The staging website is live on OCI.
 
 ## Read next
 
