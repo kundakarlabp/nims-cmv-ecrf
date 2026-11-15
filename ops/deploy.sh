@@ -38,7 +38,9 @@ rollback() {
   if (( switched )); then
     echo 'Deployment failed. Restoring the previous application commit.' >&2
     git checkout --detach "$previous" || true
-    "${docker_cmd[@]}" compose build api && "${docker_cmd[@]}" compose up -d --wait --wait-timeout 180 || true
+    "${docker_cmd[@]}" compose build api &&
+      "${docker_cmd[@]}" compose up -d --wait --wait-timeout 180 &&
+      "${docker_cmd[@]}" compose up -d --force-recreate --no-deps caddy || true
   fi
   echo 'Inspect the containers and backup before retrying. No database restore was attempted.' >&2
   exit "$code"
@@ -49,6 +51,7 @@ switched=1
 "${docker_cmd[@]}" compose config --quiet
 "${docker_cmd[@]}" compose build --pull api
 "${docker_cmd[@]}" compose up -d --wait --wait-timeout 180
+"${docker_cmd[@]}" compose up -d --force-recreate --no-deps caddy
 bash ops/check_health.sh
 trap - ERR
 printf '%s\n' "$target" > .deploy-state/current-commit
