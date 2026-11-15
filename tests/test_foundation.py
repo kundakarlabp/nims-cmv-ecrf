@@ -96,3 +96,39 @@ def test_duplicate_registration_returns_conflict():
         payload={'name':'Synthetic duplicate','cr_number':'TEST-DUP'}
         assert c.post('/api/patients',headers=h,json=payload).status_code==200
         assert c.post('/api/patients',headers=h,json=payload).status_code==409
+
+def test_independent_review_requires_role_and_current_revision():
+    with TestClient(app) as author:
+        admin=auth(author)
+        pid=author.post('/api/patients',headers=admin,json={'name':'Synthetic review','cr_number':'TEST-REVIEW'}).json()['id']
+        eid=author.post(f'/api/patients/{pid}/entries',headers=admin,json={
+            'kind':'visit','occurred_on':'2026-11-10','payload':{'synthetic':True}}).json()['id']
+        assert author.get('/api/dashboard').json()['review']['pending']==1
+        payload={'expected_revision':1,'decision':'verified','reason':'Synthetic source checked'}
+        assert author.post(f'/api/entries/{eid}/review',headers=admin,json=payload).status_code==403
+        author.post('/api/users',headers=admin,json={'username':'reviewer','display_name':'Independent reviewer',
+            'role':'monitor','password':'SyntheticReviewerPassword123!'})
+    with TestClient(app) as reviewer:
+        rh=auth(reviewer,'reviewer','SyntheticReviewerPassword123!')
+        assert reviewer.get('/api/review-queue').json()[0]['review_status']=='pending'
+        assert reviewer.post(f'/api/entries/{eid}/review',headers=rh,json=payload).status_code==200
+        assert reviewer.post(f'/api/entries/{eid}/review',headers=rh,json=payload).status_code==409
+        assert reviewer.get('/api/dashboard').json()['review']['verified']==1
+    with TestClient(app) as author:
+        admin=auth(author)
+        edit=author.put(f'/api/entries/{eid}',headers=admin,json={'expected_revision':1,
+            'occurred_on':'2026-11-10','payload':{'synthetic':True,'corrected':True},
+            'reason':'Corrected synthetic source'})
+        assert edit.status_code==200
+        assert author.get(f'/api/patients/{pid}').json()['entries'][0]['review_status']=='pending'
+    with TestClient(app) as reviewer:
+        rh=auth(reviewer,'reviewer','SyntheticReviewerPassword123!')
+        assert reviewer.post(f'/api/entries/{eid}/review',headers=rh,json=payload).status_code==409
+        assert reviewer.post(f'/api/entries/{eid}/review',headers=rh,json={
+            **payload,'expected_revision':2,'decision':'needs_correction'}).status_code==200
+        assert reviewer.get('/api/dashboard').json()['review']['needs_correction']==1
+        assert len(reviewer.get(f'/api/patients/{pid}/audit').json())==5
+    with TestClient(app) as pg:
+        auth(pg,'testpg','AnotherLongTestingPassword456!')
+        assert pg.get('/api/review-queue').status_code==403
+

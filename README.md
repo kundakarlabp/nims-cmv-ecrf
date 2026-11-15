@@ -10,7 +10,7 @@ GitHub keeps the code and change history; Oracle will run the application and da
 Chat messages do not automatically synchronize into the application or change patient
 records. Never paste patient records into GitHub issues or chat for software fixes.
 
-Current status: **Oracle not connected; no public live URL; staging only.**
+Current status: **OCI staging VM provisioned in Hyderabad; application not deployed; no public live URL; staging only.**
 `app/ui.html` is the real connected staging interface. `reference/synthetic_prototype.html`
 is a richer design mockup, not a fully connected application.
 
@@ -63,13 +63,14 @@ The user requested an independently hosted custom website for approximately 10â€
 - Persisted patients (CR/name/study ID/transplant date), repeated dated records in nine event categories, optimistic revision checks and attributable server-generated audit events.
 - PG, consultant, scientist, nurse, lab, pharmacy role write rules at API level; role test coverage for PG.
 - Searchable patient list, timeline, clinical entry staging interface, and schedule-derived follow-up worklist.
+- Aggregate dashboard, correction form and independent review queue for synthetic staging records. Review decisions bind to an entry revision; later correction returns it to pending. Reviewer cannot verify their own creation or latest edit. This application-level review history is not a validated, immutable clinical audit trail.
 - Dose-preview API matching protocol v5.0 renal adjustment thresholds, with automated tests around boundaries.
 - ARM64-compatible container definitions, PostgreSQL database, TLS-capable Caddy proxy. Exposed ports: 80/443; SQL DB isolated on private Docker network.
 - Opt-in **6-hour encrypted snapshot backup script** (only functions after rclone OAuth and crypt configuration); SHA-256 remote roundtrip verification; separate non-destructive restore-check script.
 
 ## Explicitly NOT yet implemented or validated
 
-- **No OCI instance, domain, HTTPS live endpoint, Google Drive OAuth, backup timer, external monitoring, or 15-user load test has been created or executed**.
+- A Free Tier E2.1.Micro VM and public subnet exist in OCI Hyderabad, but **no domain, HTTPS live endpoint, Google Drive OAuth, backup timer, external monitoring, or 15-user load test has been configured or verified**. OCI Run Command has not delivered the staging diagnostic; the instance has no deployed application.
 - Login lacks rate limiting and MFA, schema migrations, DB-enforced immutable audit, fully typed 552-field forms, document uploads, independent randomization, blinded adjudication, correct clinical-grade medication orders, full unit-based access control, formal data-validation queries and official statistical outputs.
 - Clinical use must wait until all items in `ops/GO_LIVE_GATES.md` are signed off. Current database uses its owner account and staging schema creation, so its audit log is not immutable against database administrators.
 - The worklist displays due visits but does not message patients, send email reminders or authorize contact.
@@ -102,3 +103,4 @@ All source code, schema definition, reference field dictionary, instructions and
 
 Oracle documentation: https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm
 rclone docs: https://rclone.org/crypt/ and https://rclone.org/drive/
+

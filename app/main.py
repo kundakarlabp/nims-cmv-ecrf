@@ -10,7 +10,7 @@ from fastapi import FastAPI, Depends, HTTPException, Response, Request
 from fastapi.responses import FileResponse
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field, ConfigDict
-from sqlalchemy import create_engine, String, Integer, DateTime, ForeignKey, Date, JSON, Text, select, func, URL
+from sqlalchemy import create_engine, String, Integer, DateTime, ForeignKey, Date, JSON, Text, select, func, URL, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker, Session
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from argon2 import PasswordHasher
@@ -82,6 +82,18 @@ class Audit(Base):
     reason: Mapped[str]=mapped_column(Text,nullable=False)
     created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=now,nullable=False)
 
+class EntryReview(Base):
+    """Staging review history. This is not an immutable regulatory audit trail."""
+    __tablename__='entry_reviews'
+    __table_args__=(UniqueConstraint('entry_id','entry_revision'),)
+    id: Mapped[str]=mapped_column(String(36),primary_key=True,default=uid)
+    entry_id: Mapped[str]=mapped_column(ForeignKey('entries.id'),index=True,nullable=False)
+    entry_revision: Mapped[int]=mapped_column(Integer,nullable=False)
+    decision: Mapped[str]=mapped_column(String(30),nullable=False)
+    reason: Mapped[str]=mapped_column(Text,nullable=False)
+    reviewer_id: Mapped[str]=mapped_column(ForeignKey('users.id'),nullable=False)
+    created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=now,nullable=False)
+
 app=FastAPI(title='NIMS Transplant Registry — staging foundation',docs_url=None,redoc_url=None)
 Base.metadata.create_all(bind=ENGINE)  # Staging convenience; replace with reviewed migrations before production
 
@@ -130,6 +142,14 @@ def audit(s:Session,u:AuthContext,action:str,entity_type:str,entity_id:str,patie
 def permission(u,kind):
     if u.role not in (WRITE_ROLES.get(kind) or set()) and u.role!='admin':
         raise HTTPException(403,'Insufficient delegated role permission')
+
+REVIEW_ROLES={'pi','consultant','scientist','monitor'}
+def review_permission(u):
+    if u.role not in REVIEW_ROLES: raise HTTPException(403,'Reviewer role required')
+
+def review_state(s:Session,e:Entry):
+    r=s.scalar(select(EntryReview).where(EntryReview.entry_id==e.id,EntryReview.entry_revision==e.revision))
+    return r.decision if r else 'pending'
 
 class LoginInput(BaseModel):
     username:str=Field(min_length=2,max_length=100)
@@ -208,7 +228,7 @@ def patient(patient_id:str,u:AuthContext=Depends(current),s:Session=Depends(db))
     p=s.get(Patient,patient_id)
     if not p: raise HTTPException(404)
     es=s.scalars(select(Entry).where(Entry.patient_id==patient_id).order_by(Entry.occurred_on.desc(),Entry.created_at.desc())).all()
-    return {'patient':as_dict(p),'entries':[as_dict(e) for e in es]}
+    return {'patient':as_dict(p),'entries':[dict(as_dict(e),review_status=review_state(s,e)) for e in es]}
 class EntryIn(BaseModel):
     kind:Literal['admission','visit','lab','infection','medication','transplant','safety','pharmacy','rejection']
     occurred_on:date
@@ -246,6 +266,49 @@ def audit_history(patient_id:str,u:AuthContext=Depends(current),s:Session=Depend
     if u.role not in {'admin','pi','consultant','monitor','scientist'}: raise HTTPException(403)
     rows=s.scalars(select(Audit).where(Audit.patient_id==patient_id).order_by(Audit.created_at.desc()).limit(500)).all()
     return [as_dict(x) for x in rows]
+
+@app.get('/api/dashboard')
+def dashboard(u:AuthContext=Depends(current),s:Session=Depends(db)):
+    entries=s.scalars(select(Entry)).all()
+    counts={'pending':0,'verified':0,'needs_correction':0}
+    by_kind={}
+    for e in entries:
+        counts[review_state(s,e)]+=1
+        by_kind[e.kind]=by_kind.get(e.kind,0)+1
+    return {'patients':s.scalar(select(func.count(Patient.id))), 'entries':len(entries),
+            'review':counts,'by_kind':by_kind,'scope':'staging synthetic data only'}
+
+@app.get('/api/review-queue')
+def review_queue(u:AuthContext=Depends(current),s:Session=Depends(db)):
+    review_permission(u)
+    rows=s.execute(select(Entry,Patient).join(Patient,Entry.patient_id==Patient.id)
+                   .order_by(Entry.updated_at.desc()).limit(200)).all()
+    return [{'entry_id':e.id,'patient_id':p.id,'study_id':p.study_id,'cr_number':p.cr_number,
+             'kind':e.kind,'occurred_on':e.occurred_on,'revision':e.revision,
+             'review_status':review_state(s,e),'payload':e.payload,
+             'updated_by':e.updated_by} for e,p in rows]
+
+class ReviewInput(BaseModel):
+    expected_revision:int=Field(ge=1)
+    decision:Literal['verified','needs_correction']
+    reason:str=Field(min_length=5,max_length=500)
+
+@app.post('/api/entries/{entry_id}/review')
+def review_entry(entry_id:str,data:ReviewInput,u:AuthContext=Depends(current),s:Session=Depends(db)):
+    review_permission(u)
+    e=s.get(Entry,entry_id)
+    if not e: raise HTTPException(404)
+    if e.revision!=data.expected_revision: raise HTTPException(409,'Revision changed; reload before review')
+    if u.user_id in (e.created_by,e.updated_by): raise HTTPException(403,'Independent reviewer required')
+    if review_state(s,e)!='pending': raise HTTPException(409,'This revision was already reviewed')
+    r=EntryReview(entry_id=e.id,entry_revision=e.revision,decision=data.decision,
+                  reason=data.reason,reviewer_id=u.user_id)
+    s.add(r)
+    audit(s,u,'review',e.kind,e.id,e.patient_id,None,
+          {'entry_revision':e.revision,'decision':data.decision},data.reason)
+    try: s.commit()
+    except IntegrityError: s.rollback();raise HTTPException(409,'This revision was already reviewed')
+    return {'entry_id':e.id,'revision':e.revision,'review_status':data.decision}
 
 DOSE_TABLE={
     'low':'Withhold protocol tablets; clinician review',
@@ -288,3 +351,4 @@ def due(u:AuthContext=Depends(current),s:Session=Depends(db)):
                 if not any(v.payload.get('scheduled_month')==month and v.payload.get('visit_complete') for v in visits):
                     records.append({'patient_id':p.id,'cr_number':p.cr_number,'scheduled_month':month,'target_date':target.isoformat(),'days_until':(target-today).days})
     return sorted(records,key=lambda x:x['days_until'])
+
