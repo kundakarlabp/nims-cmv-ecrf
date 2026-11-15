@@ -35,6 +35,8 @@ def test_approved_release_is_idempotent_and_rejects_mismatched_tag(tmp_path):
 
     run("git", "tag", "-a", f"cmv-staging-20261116T010000Z-{sha}", sha,
         "-m", "approved", cwd=work)
+    run("git", "push", "origin", f"refs/tags/cmv-staging-20261116T010000Z-{sha}", cwd=work)
+    run("git", "tag", "-d", f"cmv-staging-20261116T010000Z-{sha}", cwd=work)
     run("bash", "ops/auto_deploy.sh", cwd=work)
     run("bash", "ops/auto_deploy.sh", cwd=work)
     assert (work / "executions.log").read_text().splitlines() == [sha]
@@ -42,6 +44,8 @@ def test_approved_release_is_idempotent_and_rejects_mismatched_tag(tmp_path):
     wrong_sha = "0" * 40
     run("git", "tag", "-a", f"cmv-staging-20261116T020000Z-{wrong_sha}", sha,
         "-m", "mismatch", cwd=work)
+    run("git", "push", "origin", f"refs/tags/cmv-staging-20261116T020000Z-{wrong_sha}", cwd=work)
+    run("git", "tag", "-d", f"cmv-staging-20261116T020000Z-{wrong_sha}", cwd=work)
     result = subprocess.run(["bash", "ops/auto_deploy.sh"], cwd=work,
                             text=True, capture_output=True)
     assert result.returncode != 0
