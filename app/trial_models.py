@@ -134,3 +134,12 @@ class LoginThrottle(Base):
     username: Mapped[str] = mapped_column(String(100), primary_key=True)
     failures: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+class StaffAccess(Base):
+    """A named staff member's access validity; no plaintext password ever stored."""
+    __tablename__ = "trial_staff_access"
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    activated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=now)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    renewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    renewed_by: Mapped[str | None] = mapped_column(ForeignKey("users.id"))
