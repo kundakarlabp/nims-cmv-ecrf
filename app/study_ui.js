@@ -148,7 +148,7 @@ panel('randomization','Concealed randomization',
  '<label>Locally held signed sequence JSON<input id="tw-rand-file" type="file" accept=".json,application/json"></label>'+
  '<div id="tw-rand-file-info" class="hint">No confidential sequence uploaded.</div>'+
  btn('Permanently lock signed sequence','tw-rand-lock')+'</div>'+
- '<div class="study-card" id="tw-rand-groups-panel"><h3>Realized group balance</h3>'+
+ '<div class="study-card" id="tw-rand-groups-panel"><h3>Independent custodian: realized balance only</h3>'+
  '<div id="tw-rand-groups" class="hint">Only assigned participants are counted.</div></div>'+
  '<div id="tw-rand-status" class="status hide" role="status"></div>'
 );
@@ -802,7 +802,7 @@ async function loadRandomization(){
  const isCustodian=role==='randomization_custodian';
  $('tw-rand-assign-panel').classList.toggle('hide',role!=='pi');
  $('tw-rand-custodian-panel').classList.toggle('hide',!isCustodian);
- $('tw-rand-groups-panel').classList.toggle('hide',!['pi','consultant','pharmacy'].includes(role));
+ $('tw-rand-groups-panel').classList.toggle('hide',!isCustodian);
  if(!isCustodian){
   await loadSubjects();
   await loadRandSubject();
@@ -814,7 +814,7 @@ async function loadRandomization(){
   ' | Randomized: '+r.randomized+
   ' | Release: '+(r.activation_ready?'configured':'blocked')+
   ' | Mode: '+(r.clinical_mode?'clinical gated':'synthetic staging');
- if(['pi','consultant','pharmacy'].includes(role)){
+ if(isCustodian){
   const groups=await api('/api/trial/randomization/assigned-group-counts');
   $('tw-rand-groups').textContent=
    'Already randomized: '+groups.randomized+
