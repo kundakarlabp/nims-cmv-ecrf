@@ -204,7 +204,7 @@ def current(request:Request,s:Session=Depends(db)) -> AuthContext:
 
     if user.role=='randomization_custodian' and not (
         request.url.path.startswith('/api/trial/randomization/')
-        or request.url.path in {'/api/me','/api/logout',
+        or request.url.path in {'/api/me','/api/logout','/api/system/mode',
           '/api/trial/staff/change-password','/api/trial/staff/mfa-setup',
           '/api/trial/staff/mfa-confirm'}
     ):
