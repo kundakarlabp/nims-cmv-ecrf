@@ -525,3 +525,116 @@ def test_pcr_anchor_and_eligibility_exclusion_review():
         bad=dict(base,pcr_anchor_basis='enrollment_date',pcr_anchor_on='2026-10-03')
         assert pi.post(f'/api/trial/subjects/{sid}/enroll',headers=h,json=bad).status_code==422
         assert pi.post(f'/api/trial/subjects/{sid}/enroll',headers=h,json=base).status_code==200
+
+
+def test_crf_v3_schema_contains_all_remaining_signed_sections():
+    from app.crf_schema import CRF_FORMS, validate_payload
+    assert list(CRF_FORMS)==[
+        'C_baseline','D_adherence','E_followup','F_unscheduled_pcr',
+        'G_cmv_event','H_adverse_event','I_clinical_outcome',
+        'J_deviation','K_resource_cost','L_final_status']
+    assert len(CRF_FORMS['E_followup']['fields']) >= 17
+    assert validate_payload('E_followup',{
+        'scheduled_month':'3','actual_visit_on':'2026-10-30',
+        'hemoglobin_g_dl':12.5})['hemoglobin_g_dl']==12.5
+    import pytest
+    with pytest.raises(ValueError,match='threshold'):
+        validate_payload('G_cmv_event',{'event_on':'2026-10-30',
+            'qualifying_pcr_iu_ml':1300,'pcr_at_least_1000':'no'})
+    with pytest.raises(ValueError,match='Required'):
+        validate_payload('F_unscheduled_pcr',{'pcr_iu_ml':700})
+    with pytest.raises(ValueError,match='IEC'):
+        validate_payload('H_adverse_event',{'ae_term':'neutropenia',
+            'onset_on':'2026-10-30','serious':'yes'})
+
+
+def test_structured_crf_autosave_submission_and_independent_review():
+    with TestClient(app) as admin:
+        h=auth(admin)
+        _,sid=setup_synthetic_trial(admin,h)
+        for username,role in [('formpi','pi'),('formnurse','nurse'),
+                              ('formmonitor','monitor')]:
+            r=admin.post('/api/users',headers=h,json={'username':username,
+                'display_name':'Synthetic '+role,'role':role,
+                'password':'SyntheticFormPassword123!'})
+            assert r.status_code==200,r.text
+    with TestClient(app) as pi:
+        h=auth(pi,'formpi','SyntheticFormPassword123!')
+        r=pi.post(f'/api/trial/subjects/{sid}/enroll',headers=h,json={
+            'enrolled_on':'2026-10-03','pcr_anchor_on':'2026-10-01',
+            'pcr_anchor_basis':'transplant_date','protocol_reference':'protocol-v5',
+            'reviewed_eligibility_and_consent':True,'approved_visit_anchor':True})
+        assert r.status_code==200,r.text
+        assert 'C_baseline' in pi.get('/api/trial/crf/schema').json()['forms']
+    with TestClient(app) as nurse:
+        h=auth(nurse,'formnurse','SyntheticFormPassword123!')
+        schema=nurse.get('/api/trial/crf/schema').json()['forms']
+        assert 'E_followup' in schema
+        assert 'C_baseline' not in schema
+        path=f'/api/trial/crf/subjects/{sid}/drafts/E_followup'
+        raw={'occurred_on':'2026-11-02','occurrence_key':'M01',
+             'payload':{'scheduled_month':'1','actual_visit_on':'2026-11-02',
+                        'hemoglobin_g_dl':11.2,'hospitalization':'no'}}
+        created=nurse.put(path,headers=h,json=raw)
+        assert created.status_code==200,created.text
+        assert created.json()['is_draft']
+        assert nurse.get(path+'?occurrence_key=M01').json()['draft']['payload']==raw['payload']
+        assert nurse.put(path,headers=h,json=raw).status_code==409
+        revise=nurse.put(path,headers=h,json=dict(raw,expected_revision=1))
+        assert revise.status_code==200
+        submitted=nurse.post(f'/api/trial/crf/subjects/{sid}/entries',headers=h,
+            json={'section':'E_followup','occurred_on':'2026-11-02',
+                  'payload':raw['payload']})
+        assert submitted.status_code==200,submitted.text
+        entry_id=submitted.json()['entry_id']
+        assert nurse.post(f'/api/trial/crf/subjects/{sid}/entries',headers=h,
+            json={'section':'E_followup','occurred_on':'2026-11-02',
+                  'payload':raw['payload']}).status_code==409
+        assert nurse.post(f'/api/trial/crf/entries/{entry_id}/review',
+          headers=h,json={'expected_revision':1,'decision':'verified',
+                          'reason':'Source document checked'}).status_code==403
+    with TestClient(app) as pi:
+        h=auth(pi,'formpi','SyntheticFormPassword123!')
+        r=pi.post(f'/api/trial/crf/entries/{entry_id}/review',headers=h,
+            json={'expected_revision':1,'decision':'verified',
+                  'reason':'Signed nurse visit note verified'})
+        assert r.status_code==200,r.text
+        complete=pi.get('/api/trial/crf/completeness').json()['visit_completion']
+        assert complete['1']['submitted']==1
+        assert complete['1']['verified']==1
+    with TestClient(app) as monitor:
+        h=auth(monitor,'formmonitor','SyntheticFormPassword123!')
+        forms=monitor.get(f'/api/trial/crf/subjects/{sid}/entries').json()['entries']
+        assert forms==[]
+        assert monitor.get('/api/trial/crf/schema').json()['forms'].get('C_baseline') is None
+
+
+def test_crf_pcr_month_link_rejects_wrong_subject_and_unapproved_results():
+    with TestClient(app) as admin:
+        h=auth(admin)
+        _,sid=setup_synthetic_trial(admin,h)
+        for username,role in [('linkpi','pi'),('linkscience','scientist')]:
+            r=admin.post('/api/users',headers=h,json={'username':username,
+                'display_name':'Synthetic '+role,'role':role,
+                'password':'LinkPCRPassword123456!'})
+            assert r.status_code==200
+    with TestClient(app) as pi:
+        h=auth(pi,'linkpi','LinkPCRPassword123456!')
+        r=pi.post(f'/api/trial/subjects/{sid}/enroll',headers=h,json={
+            'enrolled_on':'2026-10-03','pcr_anchor_on':'2026-10-01',
+            'pcr_anchor_basis':'transplant_date','protocol_reference':'protocol-v5',
+            'reviewed_eligibility_and_consent':True,'approved_visit_anchor':True})
+        assert r.status_code==200
+        pcrs=pi.get(f'/api/trial/subjects/{sid}/pcr').json()['pcr_records']
+        m2=next(x for x in pcrs if x['scheduled_month']==2)
+    with TestClient(app) as scientist:
+        h=auth(scientist,'linkscience','LinkPCRPassword123456!')
+        bad=scientist.post(f'/api/trial/crf/subjects/{sid}/entries',
+          headers=h,json={'section':'E_followup','occurred_on':'2026-11-01',
+            'payload':{'scheduled_month':'1','actual_visit_on':'2026-11-01',
+                       'pcr_specimen_code':m2['specimen_code']}})
+        assert bad.status_code==422,bad.text
+        good=scientist.post(f'/api/trial/crf/subjects/{sid}/entries',
+          headers=h,json={'section':'E_followup','occurred_on':'2026-11-01',
+            'payload':{'scheduled_month':'1','actual_visit_on':'2026-11-01'}})
+        assert good.status_code==200,good.text
