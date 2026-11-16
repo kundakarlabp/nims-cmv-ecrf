@@ -530,3 +530,6 @@ def due(u:AuthContext=Depends(current),s:Session=Depends(db)):
 # Trial-specific closed-loop endpoints, registered after the shared auth helpers.
 from .trial_api import router as trial_router
 app.include_router(trial_router)
+
+from .trial_crf import router as crf_router
+app.include_router(crf_router)
