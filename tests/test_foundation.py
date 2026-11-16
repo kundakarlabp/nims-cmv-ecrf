@@ -965,3 +965,106 @@ def test_pi_cannot_impersonate_independent_sequence_custodian():
             'username':'forbiddenbatchcustodian','display_name':'Synthetic invalid custodian',
             'role':'randomization_custodian'}]})
         assert batch.status_code==403
+
+
+def test_capitalized_staff_username_normalized_and_duplicate_returns_conflict():
+    with TestClient(app) as admin:
+        h=auth(admin)
+        first=admin.post('/api/trial/staff/invite',headers=h,json={
+            'username':'  SaiSree  ','display_name':'  Sai Sree  ','role':'scientist'})
+        assert first.status_code==200,first.text
+        assert first.json()['username']=='saisree'
+        again=admin.post('/api/trial/staff/invite',headers=h,json={
+            'username':'SAISREE','display_name':'Sai Sree','role':'scientist'})
+        assert again.status_code==409,again.text
+        assert 'reissue' in again.json()['detail']
+        users=admin.get('/api/trial/staff/accounts').json()
+        matching=[u for u in users if u['username']=='saisree']
+        assert len(matching)==1
+        assert matching[0]['status']=='awaiting_activation'
+        assert matching[0]['requires_activation'] is True
+
+
+def test_reissue_unactivated_staff_token_cancels_previous_and_90_day_activation():
+    with TestClient(app) as admin:
+        h=auth(admin)
+        first=admin.post('/api/trial/staff/invite',headers=h,json={
+            'username':'  NewNurse  ','display_name':'New Nurse',
+            'role':'nurse'})
+        assert first.status_code==200,first.text
+        previous_token=first.json()['activation_token']
+        account=next(u for u in admin.get('/api/trial/staff/accounts').json()
+                     if u['username']=='newnurse')
+        wrong=admin.post(f"/api/trial/staff/accounts/{account['id']}/reissue",headers=h,
+            json={'reason':'Fresh named invitation after loss','restore_revoked':True})
+        assert wrong.status_code==422,wrong.text
+        new=admin.post(f"/api/trial/staff/accounts/{account['id']}/reissue",headers=h,
+            json={'reason':'Original invitation lost; reissue'})
+        assert new.status_code==200,new.text
+        assert new.json()['username']=='newnurse'
+        fresh_token=new.json()['activation_token']
+        assert fresh_token!=previous_token
+        assert admin.post('/api/trial/staff/activate',json={
+           'token':previous_token,'password':'NewNurseSecurePassword123!'}).status_code==400
+        activated=admin.post('/api/trial/staff/activate',json={
+           'token':fresh_token,'password':'NewNurseSecurePassword123!'})
+        assert activated.status_code==200,activated.text
+        current=next(u for u in admin.get('/api/trial/staff/accounts').json()
+                     if u['username']=='newnurse')
+        assert current['status']=='active'
+        assert current['access_expires_at'] is not None
+        assert admin.post(f"/api/trial/staff/accounts/{account['id']}/reissue",headers=h,
+            json={'reason':'Cannot reissue active account'}).status_code==409
+
+
+def test_reinstatement_of_revoked_account_requires_reason_and_explicit_approval():
+    with TestClient(app) as admin:
+        h=auth(admin)
+        inv=admin.post('/api/trial/staff/invite',headers=h,json={
+            'username':'RevokeRestore','display_name':'Revoked Staff Person',
+            'role':'scientist'})
+        assert inv.status_code==200,inv.text
+        activation=admin.post('/api/trial/staff/activate',json={
+            'token':inv.json()['activation_token'],
+            'password':'BeforeRevocationPassword123!'})
+        assert activation.status_code==200,activation.text
+        account=next(u for u in admin.get('/api/trial/staff/accounts').json()
+                     if u['username']=='revokerestore')
+        assert admin.post(f"/api/trial/staff/accounts/{account['id']}/revoke",headers=h,
+            json={'reason':'Test revocation for staff change'}).status_code==200
+        state=next(u for u in admin.get('/api/trial/staff/accounts').json()
+                   if u['username']=='revokerestore')
+        assert state['status']=='revoked' and state['is_revoked']
+        assert admin.post(f"/api/trial/staff/accounts/{account['id']}/reissue",headers=h,
+            json={'reason':'Explicit reinstatement not yet approved'}).status_code==409
+        reissued=admin.post(f"/api/trial/staff/accounts/{account['id']}/reissue",headers=h,
+            json={'reason':'PI approved renewed staff delegation','restore_revoked':True})
+        assert reissued.status_code==200,reissued.text
+        assert reissued.json()['restored_previous_account'] is True
+        assert admin.post('/api/login',json={
+            'username':'revokerestore','password':'BeforeRevocationPassword123!'}).status_code==401
+        activated=admin.post('/api/trial/staff/activate',json={
+            'token':reissued.json()['activation_token'],
+            'password':'AfterReinstatementPassword123!'})
+        assert activated.status_code==200,activated.text
+        assert admin.post('/api/login',json={
+            'username':'revokerestore','password':'AfterReinstatementPassword123!'}).status_code==200
+        state=next(u for u in admin.get('/api/trial/staff/accounts').json()
+                   if u['username']=='revokerestore')
+        assert state['active'] and state['status']=='active'
+        assert state['access_expires_at'] is not None
+
+
+def test_bulk_staff_accepts_capitalized_names_and_checks_collisions():
+    with TestClient(app) as admin:
+        h=auth(admin)
+        invite=admin.post('/api/trial/staff/invite-batch',headers=h,json={'staff':[
+            {'username':'NurseAlpha','display_name':'Nurse Alpha','role':'nurse'},
+            {'username':'TechBeta','display_name':'Tech Beta','role':'technician'}]})
+        assert invite.status_code==200,invite.text
+        assert [x['username'] for x in invite.json()['invitations']]==[
+            'nursealpha','techbeta']
+        dupe=admin.post('/api/trial/staff/invite-batch',headers=h,json={'staff':[
+            {'username':'NurseAlpha','display_name':'Nurse Alpha','role':'nurse'},
+            {'username':'nursealpha','display_name':'Nurse Alpha','role':'nurse'}]})
+        assert dupe.status_code==422
