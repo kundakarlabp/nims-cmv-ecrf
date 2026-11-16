@@ -193,3 +193,17 @@ class TrialCRFReview(Base):
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     reviewer_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, nullable=False)
+
+class TrialScreeningMeta(Base):
+    """Restricted CRF A metadata; never exposed to blinded monitors or lab/pharmacy."""
+    __tablename__ = "trial_screening_meta"
+    subject_id: Mapped[int] = mapped_column(ForeignKey("trial_subjects.id"),primary_key=True)
+    participant_initials: Mapped[str | None] = mapped_column(String(20))
+    age_at_transplant: Mapped[int | None] = mapped_column(Integer)
+    sex_at_birth: Mapped[str | None] = mapped_column(String(30))
+    donor_relationship: Mapped[str | None] = mapped_column(String(30))
+    pis_version: Mapped[str | None] = mapped_column(String(80))
+    icf_version: Mapped[str | None] = mapped_column(String(80))
+    consent_language: Mapped[str | None] = mapped_column(String(20))
+    consent_obtained_by: Mapped[str | None] = mapped_column(String(150))
+    signed_consent_source_ref: Mapped[str | None] = mapped_column(String(120))
