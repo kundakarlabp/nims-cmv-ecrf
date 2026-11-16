@@ -12,15 +12,15 @@ import secrets
 import pyotp
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, model_validator
-from sqlalchemy import select, func, update
+from sqlalchemy import select, func, update, delete
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from .main import (
-    Patient, User, AuthContext, current, db, audit, as_dict, now, sha, PH, ROLES
+    Patient, User, LoginSession, AuthContext, current, db, audit, as_dict, now, sha, PH, ROLES
 )
 from .trial_models import (
     TrialSubject, PCRRecord, DrugLot, DrugAuthorization, DrugDispense,
-    DrugReturn, UserInvitation, LoginThrottle, UserTotp
+    DrugReturn, UserInvitation, LoginThrottle, UserTotp, StaffAccess, TrialEligibility, TrialScreeningMeta
 )
 
 router=APIRouter(prefix="/api/trial",tags=["trial-workflows"])
@@ -102,6 +102,14 @@ class ScreeningIn(BaseModel):
     consent_version:str|None=Field(default=None,max_length=60)
     eligibility_attested:bool=False
     screening_note:str|None=Field(default=None,max_length=1000)
+    participant_initials:str|None=Field(default=None,max_length=20)
+    age_at_transplant:int|None=Field(default=None,ge=0,le=120)
+    sex_at_birth:Literal["female","male","other","not_recorded"]|None=None
+    donor_relationship:Literal["living_related","living_unrelated","deceased"]|None=None
+    pis_version:str|None=Field(default=None,max_length=80)
+    consent_language:Literal["English","Telugu","Hindi"]|None=None
+    consent_obtained_by:str|None=Field(default=None,max_length=150)
+    signed_consent_source_ref:str|None=Field(default=None,max_length=120)
 
 @router.post("/screening")
 def screen(data:ScreeningIn,u:AuthContext=Depends(current),s:Session=Depends(db)):
@@ -111,6 +119,15 @@ def screen(data:ScreeningIn,u:AuthContext=Depends(current),s:Session=Depends(db)
         raise HTTPException(422,"Consent date cannot be in the future")
     if bool(data.consent_on)!=bool(data.consent_version):
         raise HTTPException(422,"Document signed consent date and version together")
+    if data.donor_relationship:
+        if (data.donor_relationship=="deceased")!=(data.donor_type=="deceased"):
+            raise HTTPException(422,"Donor relationship conflicts with living/deceased stratum")
+    if os.getenv("CLINICAL_DATA_ENABLED","false").lower()=="true":
+        must=(data.participant_initials,data.age_at_transplant,data.sex_at_birth,
+              data.donor_relationship,data.pis_version,data.consent_language,
+              data.consent_obtained_by,data.signed_consent_source_ref)
+        if any(x is None or x=="" for x in must):
+            raise HTTPException(422,"Complete CRF A source and consent metadata before clinical screening")
     t=TrialSubject(patient_id=p.id,screening_on=data.screening_on,
         donor_cmv_igg=data.donor_cmv_igg,recipient_cmv_igg=data.recipient_cmv_igg,
         donor_type=data.donor_type,ratg_induction=data.ratg_induction,
@@ -120,12 +137,29 @@ def screen(data:ScreeningIn,u:AuthContext=Depends(current),s:Session=Depends(db)
     try:
         s.add(t);s.flush()
         t.screening_code=f"NCMV-S-{t.id:05d}"
+        s.add(TrialScreeningMeta(
+            subject_id=t.id,participant_initials=data.participant_initials,
+            age_at_transplant=data.age_at_transplant,sex_at_birth=data.sex_at_birth,
+            donor_relationship=data.donor_relationship,pis_version=data.pis_version,
+            icf_version=data.consent_version,consent_language=data.consent_language,
+            consent_obtained_by=data.consent_obtained_by,
+            signed_consent_source_ref=data.signed_consent_source_ref))
         audit(s,u,"screen","trial_subject",str(t.id),p.id,None,
              subject_view(t),"Recorded screening; not enrollment or randomization")
         s.commit()
     except IntegrityError:
         s.rollback();raise HTTPException(409,"Subject already screened")
     return subject_view(t)
+
+
+@router.get("/subjects/{subject_id}/restricted-screening")
+def restricted_screening(subject_id:int,u:AuthContext=Depends(current),s:Session=Depends(db)):
+    role(u,{"pi","consultant","scientist"})
+    t=find_subject(s,subject_id)
+    meta=s.get(TrialScreeningMeta,t.id)
+    return {"screening_code":t.screening_code,
+        "restricted":as_dict(meta) if meta else None,
+        "scope":"Restricted source-link metadata; never show in monitoring or lab pharmacy views"}
 
 @router.get("/subjects")
 def subjects(q:str="",limit:int=50,u:AuthContext=Depends(current),s:Session=Depends(db)):
@@ -144,10 +178,120 @@ def subject(subject_id:int,u:AuthContext=Depends(current),s:Session=Depends(db))
     t=find_subject(s,subject_id)
     return subject_view(t)
 
+
+# Exact inclusion/exclusion concepts transcribed from signed CRF v3.0
+# (14 Aug 2026), checked against protocol v5.0.
+INCLUSION_ITEMS={
+ "age_ge_18":"Age >=18 years",
+ "solitary_kidney":"Solitary kidney transplant at NIMS",
+ "donor_cmv_positive":"Donor CMV IgG positive",
+ "recipient_cmv_positive":"Recipient CMV IgG positive",
+ "vgcv_within_10_days":"Valganciclovir can start <=10 days after transplant",
+ "written_consent":"Written NIEC-approved informed consent",
+ "anc_ge_1500":"ANC >=1500 per microlitre",
+ "platelets_ge_50000":"Platelets >=50000 per microlitre",
+ "hemoglobin_ge_7":"Hemoglobin >=7 g/dL",
+ "clinically_stable":"Clinically stable for prophylaxis and 12-month follow-up"
+}
+EXCLUSION_ITEMS={
+ "pre_randomization_cmv_treatment":"Pre-randomization CMV requiring treatment",
+ "multi_organ_transplant":"Multi-organ transplant",
+ "ongoing_dialysis":"Ongoing dialysis at randomization",
+ "crcl_below_10":"Cockcroft-Gault CrCl <10 mL/min",
+ "vgcv_hypersensitivity":"Valganciclovir/ganciclovir hypersensitivity",
+ "blood_counts_below_threshold":"Blood counts below inclusion thresholds",
+ "pregnancy_or_breastfeeding":"Pregnancy or breastfeeding",
+ "severe_infection_or_instability":"Severe infection, instability or unsafe randomization",
+ "conflicting_interventional_trial":"Conflicting interventional trial",
+ "unable_to_complete_followup":"Unable/unwilling to complete follow-up"
+}
+class EligibilityReviewIn(BaseModel):
+    inclusion:dict[str,bool]
+    exclusion:dict[str,bool]
+    age_years:int=Field(ge=0,le=120)
+    anc_per_ul:float=Field(ge=0)
+    platelets_per_ul:float=Field(ge=0)
+    hemoglobin_g_dl:float=Field(ge=0,le=25)
+    crcl_cg_ml_min:float=Field(ge=0)
+    baseline_cbc_on:date
+    reviewed_on:date
+    signed_source_reference:str=Field(min_length=3,max_length=100)
+
+@router.get("/eligibility-schema")
+def eligibility_schema(u:AuthContext=Depends(current)):
+    return {"version":"CRF 3.0 / Protocol 5.0, 14 August 2026",
+        "inclusion":INCLUSION_ITEMS,"exclusion":EXCLUSION_ITEMS}
+
+@router.get("/subjects/{subject_id}/eligibility")
+def eligibility_detail(subject_id:int,u:AuthContext=Depends(current),s:Session=Depends(db)):
+    role(u,{"pi","consultant","scientist","monitor"})
+    t=find_subject(s,subject_id)
+    row=s.get(TrialEligibility,t.id)
+    return {"eligibility":as_dict(row) if row else None}
+
+@router.put("/subjects/{subject_id}/eligibility")
+def eligibility_review(subject_id:int,data:EligibilityReviewIn,
+    u:AuthContext=Depends(current),s:Session=Depends(db)):
+    role(u,{"pi","consultant"})
+    t=find_subject(s,subject_id)
+    if t.status!="screened":
+        raise HTTPException(409,"Eligibility cannot be rewritten after enrollment")
+    if set(data.inclusion)!=set(INCLUSION_ITEMS) or set(data.exclusion)!=set(EXCLUSION_ITEMS):
+        raise HTTPException(422,"Complete every protocol inclusion and exclusion item")
+    if any(type(v) is not bool for v in list(data.inclusion.values())+list(data.exclusion.values())):
+        raise HTTPException(422,"Eligibility answers must be explicit yes/no")
+    if data.reviewed_on<t.screening_on or data.reviewed_on>date.today():
+        raise HTTPException(422,"Invalid eligibility review date")
+    if data.baseline_cbc_on>data.reviewed_on:
+        raise HTTPException(422,"CBC source date after eligibility review")
+    p=eligible_patient(s,t.patient_id)
+    if not p.transplant_date:raise HTTPException(422,"Transplant date must be verified in registry")
+    incl=data.inclusion;excl=data.exclusion
+    if incl["age_ge_18"]!=(data.age_years>=18):
+        raise HTTPException(422,"Age answer conflicts with age at randomization")
+    if incl["anc_ge_1500"]!=(data.anc_per_ul>=1500) or \
+       incl["platelets_ge_50000"]!=(data.platelets_per_ul>=50000) or \
+       incl["hemoglobin_ge_7"]!=(data.hemoglobin_g_dl>=7):
+        raise HTTPException(422,"Blood-count eligibility answers conflict with measured source results")
+    if excl["blood_counts_below_threshold"]!=(
+        data.anc_per_ul<1500 or data.platelets_per_ul<50000 or data.hemoglobin_g_dl<7):
+        raise HTTPException(422,"Blood-count exclusion conflicts with source results")
+    if excl["crcl_below_10"]!=(data.crcl_cg_ml_min<10):
+        raise HTTPException(422,"CrCl exclusion conflicts with Cockcroft-Gault result")
+    if incl["donor_cmv_positive"]!=(t.donor_cmv_igg=="positive") or \
+       incl["recipient_cmv_positive"]!=(t.recipient_cmv_igg=="positive"):
+        raise HTTPException(422,"Serostatus checklist conflicts with laboratory serostatus")
+    if incl["written_consent"]!=bool(t.consent_on and t.consent_version):
+        raise HTTPException(422,"Consent checklist does not match recorded signed consent")
+    eligible=all(incl.values()) and not any(excl.values())
+    baseline={"age_years":data.age_years,"anc_per_ul":data.anc_per_ul,
+       "platelets_per_ul":data.platelets_per_ul,"hemoglobin_g_dl":data.hemoglobin_g_dl,
+       "crcl_cg_ml_min":data.crcl_cg_ml_min,"baseline_cbc_on":data.baseline_cbc_on.isoformat(),
+       "signed_source_reference":data.signed_source_reference,
+       "is_eligible":eligible}
+    prior=s.get(TrialEligibility,t.id)
+    if prior:
+        old=as_dict(prior)
+        prior.inclusion=incl;prior.exclusion=excl;prior.baseline=baseline
+        prior.reviewed_by=u.user_id;prior.reviewed_on=data.reviewed_on;prior.updated_at=now()
+    else:
+        old=None
+        prior=TrialEligibility(subject_id=t.id,inclusion=incl,exclusion=excl,
+            baseline=baseline,reviewed_by=u.user_id,reviewed_on=data.reviewed_on)
+        s.add(prior)
+    audit(s,u,"eligibility_review","trial_eligibility",str(t.id),t.patient_id,
+        old,{"inclusion":incl,"exclusion":excl,"baseline":baseline,
+             "reviewed_by":u.user_id,"reviewed_on":data.reviewed_on},
+        "Verified against "+data.signed_source_reference)
+    s.commit()
+    return {"subject_id":t.id,"eligible":eligible,
+        "reviewed_by":u.user_id,"reviewed_on":data.reviewed_on,
+        "note":"A complete checklist is mandatory; no auto-randomization."}
+
 class EnrollmentIn(BaseModel):
     enrolled_on:date
     pcr_anchor_on:date
-    pcr_anchor_basis:Literal["transplant_date","enrollment_date","randomization_date","prophylaxis_start_date"]
+    pcr_anchor_basis:Literal["transplant_date"]
     protocol_reference:str=Field(min_length=3,max_length=80)
     reviewed_eligibility_and_consent:bool
     approved_visit_anchor:bool
@@ -157,6 +301,11 @@ def enroll(subject_id:int,data:EnrollmentIn,u:AuthContext=Depends(current),s:Ses
     role(u,ENROLLERS)
     t=find_subject(s,subject_id)
     if t.status!="screened": raise HTTPException(409,"Enrollment already decided")
+    signed_check=s.get(TrialEligibility,t.id)
+    if not signed_check or not signed_check.baseline.get("is_eligible") or \
+       signed_check.reviewed_on>data.enrolled_on or \
+       not all(signed_check.inclusion.values()) or any(signed_check.exclusion.values()):
+        raise HTTPException(422,"Complete an eligible, signed protocol checklist before enrollment")
     if not (t.eligibility_attested and t.consent_on and t.consent_version and
             t.donor_cmv_igg=="positive" and t.recipient_cmv_igg=="positive" and
             t.ratg_induction is not None and data.reviewed_eligibility_and_consent and
@@ -165,10 +314,10 @@ def enroll(subject_id:int,data:EnrollmentIn,u:AuthContext=Depends(current),s:Ses
     if data.enrolled_on<t.consent_on:
         raise HTTPException(422,"Enrollment cannot precede informed consent")
     p=eligible_patient(s,t.patient_id)
-    if p.transplant_date and data.pcr_anchor_basis=="transplant_date" and data.pcr_anchor_on!=p.transplant_date:
-        raise HTTPException(422,"Transplant-date anchor conflicts with registry record")
-    if data.pcr_anchor_basis=="enrollment_date" and data.pcr_anchor_on!=data.enrolled_on:
-        raise HTTPException(422,"Enrollment-date anchor must match enrollment date")
+    if not p.transplant_date or data.pcr_anchor_on!=p.transplant_date:
+        raise HTTPException(422,"Per protocol v5.0, all seven CMV PCR targets are anchored to verified transplantation date")
+    if data.enrolled_on<p.transplant_date or (data.enrolled_on-p.transplant_date).days>10:
+        raise HTTPException(422,"Enrollment must support valganciclovir start within 10 days of transplantation")
     if data.enrolled_on>date.today() or data.pcr_anchor_on>date.today():
         raise HTTPException(422,"Study milestone dates cannot be in the future")
     new_code=f"NCMV-{t.id:05d}"
@@ -468,7 +617,7 @@ def return_drug(dispense_id:int,data:ReturnIn,u:AuthContext=Depends(current),s:S
 
 @router.get("/subjects/{subject_id}/pharmacy")
 def subject_pharmacy(subject_id:int,u:AuthContext=Depends(current),s:Session=Depends(db)):
-    role(u,PHARMACISTS|{"pi","consultant","scientist","monitor"})
+    role(u,PHARMACISTS|{"pi","consultant","scientist","nurse","monitor"})
     t=find_subject(s,subject_id)
     authorizations=s.scalars(select(DrugAuthorization).where(
         DrugAuthorization.subject_id==t.id)).all()
@@ -502,7 +651,7 @@ def invite_user(data:InviteIn,u:AuthContext=Depends(current),s:Session=Depends(d
     s.add(user)
     s.flush()  # Generate the DB identity before binding the one-time invitation.
     invitation=UserInvitation(user_id=user.id,token_sha256=sha(token),
-        created_by=u.user_id,expires_at=now()+timedelta(hours=48))
+        created_by=u.user_id,expires_at=now()+timedelta(days=7))
     s.add(invitation)
     try:
         s.commit()
@@ -510,7 +659,7 @@ def invite_user(data:InviteIn,u:AuthContext=Depends(current),s:Session=Depends(d
         s.rollback();raise HTTPException(409,"Username already exists")
     # Secret only returned once over TLS to authenticated inviter, never persisted as plaintext.
     return {"username":user.username,"role":user.role,"activation_token":token,
-        "expires_in_hours":48,
+        "expires_in_days":7,
         "instruction":"Give this one-time token privately to the named staff member. They set their own password. No shared accounts."}
 
 class ActivateIn(BaseModel):
@@ -525,9 +674,12 @@ def activate(data:ActivateIn,s:Session=Depends(db)):
     user=s.get(User,invite.user_id)
     if not user or user.active:raise HTTPException(400,"Account already active")
     user.password_hash=PH.hash(data.password);user.active=True;invite.redeemed_at=now()
+    access=StaffAccess(user_id=user.id,activated_at=now(),
+        expires_at=now()+timedelta(days=90))
+    s.add(access)
     s.commit()
-    return {"ok":True,"username":user.username,
-            "notice":"Separate MFA enrollment and NIMS account approval are required before clinical production"}
+    return {"ok":True,"username":user.username,"access_expires_at":access.expires_at,
+            "notice":"90-day named account activated. Authenticator enrollment required before clinical use."}
 
 @router.get("/staff/roles")
 def roles(u:AuthContext=Depends(current)):
@@ -550,9 +702,23 @@ def overview(u:AuthContext=Depends(current),s:Session=Depends(db)):
         .group_by(TrialSubject.status)).all())
     pcr_counts=dict(s.execute(select(PCRRecord.status,func.count())
         .group_by(PCRRecord.status)).all())
+    scheduled=s.scalar(select(func.count(PCRRecord.id)).where(PCRRecord.attempt==1)) or 0
+    verified=s.scalar(select(func.count(PCRRecord.id)).where(
+        PCRRecord.attempt==1,PCRRecord.status=="verified")) or 0
+    total_enrolled=s.scalar(select(func.count(TrialSubject.id)).where(
+        TrialSubject.enrolled_on.is_not(None))) or 0
+    lot_balance=s.scalar(select(func.coalesce(func.sum(DrugLot.quantity_on_hand),0))) or 0
+    issued=s.scalar(select(func.coalesce(func.sum(DrugDispense.quantity_issued),0))) or 0
+    returned=s.scalar(select(func.coalesce(func.sum(DrugReturn.quantity_returned),0))) or 0
     return {"screened":s.scalar(select(func.count(TrialSubject.id))),
-        "enrolled":subject_counts.get("enrolled",0),"subject_status":subject_counts,
+        "enrolled":subject_counts.get("enrolled",0),
+        "ever_enrolled":total_enrolled,"subject_status":subject_counts,
         "pcr":pcr_counts,"protocol_pcr_per_subject":len(MONTHS),
+        "scheduled_pcr_slots":scheduled,"verified_protocol_pcr_slots":verified,
+        "pcr_completion_percent":round(verified*100/scheduled,1) if scheduled else 0,
+        "drug_accountability":{"tablets_in_stock":lot_balance,
+                               "tablets_issued":issued,"tablets_returned":returned,
+                               "tablets_not_yet_reconciled":issued-returned},
         "randomization":"external authorized system required",
         "data_mode":"synthetic_staging" if os.getenv("CLINICAL_DATA_ENABLED","false").lower()!="true"
             else "clinical_requested_not_validated"}
@@ -593,3 +759,99 @@ def mfa_confirm(data:MfaConfirmIn,u:AuthContext=Depends(current),s:Session=Depen
         "Account owner confirmed authenticator enrollment")
     s.commit()
     return {"mfa_enabled":True,"notice":"Authenticator code is required at subsequent logins"}
+
+
+# Named credentials remain valid for 90 days after activation. The seven-day
+# onboarding token is single-use and NOT a temporary account/password.
+@router.get("/staff/accounts")
+def staff_accounts(u:AuthContext=Depends(current),s:Session=Depends(db)):
+    role(u,MANAGERS)
+    rows=s.execute(select(User,StaffAccess,UserTotp)
+        .outerjoin(StaffAccess,StaffAccess.user_id==User.id)
+        .outerjoin(UserTotp,UserTotp.user_id==User.id)
+        .order_by(User.created_at.desc())).all()
+    return [{"id":usr.id,"username":usr.username,"display_name":usr.display_name,
+        "role":usr.role,"active":usr.active,
+        "access_expires_at":access.expires_at if access else None,
+        "mfa_enabled":bool(totp and totp.enabled),
+        "requires_activation":not usr.active} for usr,access,totp in rows]
+
+class RenewAccessIn(BaseModel):
+    reason:str=Field(min_length=8,max_length=500)
+    days:Literal[90]=90
+
+@router.post("/staff/accounts/{user_id}/renew")
+def renew_staff(user_id:str,data:RenewAccessIn,u:AuthContext=Depends(current),
+                s:Session=Depends(db)):
+    role(u,MANAGERS)
+    user=s.get(User,user_id)
+    if not user:raise HTTPException(404,"Staff account not found")
+    if user.role in {"admin","pi"} and u.role!="admin":
+        raise HTTPException(403,"Only IT administrator can renew privileged users")
+    if not user.active:raise HTTPException(409,"Revoked/inactive account cannot be renewed")
+    current_access=s.get(StaffAccess,user_id)
+    before=as_dict(current_access) if current_access else None
+    if not current_access:
+        current_access=StaffAccess(user_id=user.id,activated_at=now(),
+            expires_at=now()+timedelta(days=90),renewed_by=u.user_id,
+            renewed_at=now())
+        s.add(current_access)
+    else:
+        current_access.expires_at=now()+timedelta(days=90)
+        current_access.renewed_at=now()
+        current_access.renewed_by=u.user_id
+    # Revocation of all existing devices forces reauthentication under new grant.
+    s.execute(delete(LoginSession).where(LoginSession.user_id==user.id))
+    s.flush()
+    audit(s,u,"access_renew","user",user.id,None,before,
+          as_dict(current_access),data.reason)
+    s.commit()
+    return {"username":user.username,"expires_at":current_access.expires_at,
+            "next_action":"Staff member signs in again with their existing personal password and authenticator."}
+
+class RevokeIn(BaseModel):
+    reason:str=Field(min_length=8,max_length=500)
+
+@router.post("/staff/accounts/{user_id}/revoke")
+def revoke_staff(user_id:str,data:RevokeIn,u:AuthContext=Depends(current),
+                 s:Session=Depends(db)):
+    role(u,MANAGERS)
+    user=s.get(User,user_id)
+    if not user:raise HTTPException(404)
+    if user.id==u.user_id:raise HTTPException(409,"Cannot revoke own active account")
+    if user.role in {"admin","pi"} and u.role!="admin":
+        raise HTTPException(403,"Only IT administrator can revoke privileged users")
+    before={"active":user.active,"role":user.role}
+    user.active=False
+    s.execute(delete(LoginSession).where(LoginSession.user_id==user.id))
+    s.execute(delete(UserInvitation).where(UserInvitation.user_id==user.id))
+    audit(s,u,"access_revoke","user",user.id,None,before,
+          {"active":False,"role":user.role},data.reason)
+    s.commit()
+    return {"username":user.username,"active":False,"sessions_revoked":True}
+
+class PasswordChangeIn(BaseModel):
+    old_password:str=Field(min_length=1,max_length=200)
+    new_password:str=Field(min_length=14,max_length=200)
+    otp:str|None=Field(default=None,min_length=6,max_length=6,pattern=r"^[0-9]{6}$")
+
+@router.post("/staff/change-password")
+def change_password(data:PasswordChangeIn,u:AuthContext=Depends(current),
+                    s:Session=Depends(db)):
+    from argon2.exceptions import VerifyMismatchError, VerificationError
+    usr=s.get(User,u.user_id)
+    try: valid=PH.verify(usr.password_hash,data.old_password)
+    except (VerifyMismatchError,VerificationError):valid=False
+    if not valid:raise HTTPException(403,"Current password incorrect")
+    if data.new_password==data.old_password:
+        raise HTTPException(422,"New password must differ")
+    totp=s.get(UserTotp,usr.id)
+    if totp and totp.enabled and not (data.otp and pyotp.TOTP(totp.secret).verify(data.otp,valid_window=1)):
+        raise HTTPException(403,"Authenticator confirmation required")
+    usr.password_hash=PH.hash(data.new_password)
+    s.execute(delete(LoginSession).where(LoginSession.user_id==usr.id))
+    audit(s,u,"password_change","user",usr.id,None,None,
+          {"password_changed":True},"Self-service password rotation; all existing sessions revoked")
+    s.commit()
+    return {"password_changed":True,"sessions_revoked":True,
+            "notice":"Log in again with your new private password"}

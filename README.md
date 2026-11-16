@@ -2,6 +2,31 @@
 
 Private source repository: `kundakarlabp/nims-cmv-ecrf`.
 
+## CMV clinical-workflow development — 16 November 2026
+
+**Synthetic-only staging; real clinical-data entry NOT activated.** The newest branch
+implements:
+
+- Signed CRF v3.0 sections A/B through screening and a full protocol exclusion
+  checklist; sections C–L through typed, reviewer-controlled forms with server drafts.
+- Seven CMV PCR milestones dated from the **transplantation date** (Protocol v5.0),
+  unique laboratory specimen codes, quantitative IU/mL, repeats and independent review.
+- MSS signed prescription references, lot/expiry, tablet issue, returns and accountability.
+- Individual named staff accounts with a **seven-day one-time invitation**,
+  a **90-day access grant**, PI/admin renewal/revocation, password change and TOTP.
+- Real dashboard counts for enrollment, verified PCR results, seven CRF visits and stock.
+
+System-level clinical go-live gates are maintained; see
+`ops/CRF_V3_IMPLEMENTATION_MATRIX.md`, `ops/CLINICAL_WORKFLOW_READINESS.md`
+and `ops/GO_LIVE_GATES.md`. An independently controlled randomization
+sequence, approved data governance, production DB migrations/audit, and an
+encrypted OCI-to-approved-Drive **tested restore** remain essential.
+
+A private personal Drive folder exists for **synthetic encrypted staging
+backup tests only**. The Oracle VM's rclone OAuth, backup timer and actual
+restore have not been verified by this repository change; no patient data
+is authorized for personal Drive.
+
 ## Simple working arrangement
 
 Describe a correction in ChatGPT and identify this repository. ChatGPT can inspect the
@@ -13,8 +38,9 @@ records. Never paste patient records into GitHub issues or chat for software fix
 Current status (16 November 2026): **synthetic-only staging is live** at
 <https://152-70-77-77.sslip.io/> on the OCI Hyderabad E2.1.Micro VM.
 PostgreSQL/API health, HTTPS and an authenticated admin dashboard request were verified.
-The VM currently runs a transferred source bundle, so GitHub changes do not yet deploy
-automatically. The public IP hostname should be replaced with an owned domain before
+A read-only deploy-key Git checkout and five-minute pull-release timer were
+subsequently installed and previously checked. Release-intent tags still require
+current CI and an independent VM health/version check to confirm each new deployment. The public IP hostname should be replaced with an owned domain before
 clinical go-live.
 `app/ui.html` is the real connected staging interface. `reference/synthetic_prototype.html`
 is a richer design mockup, not a fully connected application.

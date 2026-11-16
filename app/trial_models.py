@@ -5,7 +5,7 @@ versioned migrations, or clinical go-live approval.
 """
 from datetime import date, datetime
 from sqlalchemy import (String, Integer, Date, DateTime, ForeignKey, UniqueConstraint,
-                        Float, Text, CheckConstraint)
+                        Float, Text, CheckConstraint, JSON)
 from sqlalchemy.orm import Mapped, mapped_column
 from .main import Base, now
 
@@ -134,3 +134,76 @@ class LoginThrottle(Base):
     username: Mapped[str] = mapped_column(String(100), primary_key=True)
     failures: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+class StaffAccess(Base):
+    """A named staff member's access validity; no plaintext password ever stored."""
+    __tablename__ = "trial_staff_access"
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    activated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=now)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    renewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    renewed_by: Mapped[str | None] = mapped_column(ForeignKey("users.id"))
+
+class TrialEligibility(Base):
+    """Signed, attributed pre-randomization checklist from protocol v5/CRF v3."""
+    __tablename__ = "trial_eligibility"
+    subject_id: Mapped[int] = mapped_column(ForeignKey("trial_subjects.id"), primary_key=True)
+    inclusion: Mapped[dict] = mapped_column(JSON, nullable=False)
+    exclusion: Mapped[dict] = mapped_column(JSON, nullable=False)
+    baseline: Mapped[dict] = mapped_column(JSON, nullable=False)
+    reviewed_by: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
+    reviewed_on: Mapped[date] = mapped_column(Date, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, nullable=False)
+
+class TrialCRFEntry(Base):
+    __tablename__ = "trial_crf_entries"
+    __table_args__ = (UniqueConstraint("subject_id","section","occurrence_key"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    subject_id: Mapped[int] = mapped_column(ForeignKey("trial_subjects.id"), index=True, nullable=False)
+    section: Mapped[str] = mapped_column(String(40), nullable=False)
+    occurrence_key: Mapped[str] = mapped_column(String(60), nullable=False)
+    occurred_on: Mapped[date] = mapped_column(Date, nullable=False)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
+    updated_by: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, nullable=False)
+
+class TrialCRFDraft(Base):
+    __tablename__ = "trial_crf_drafts"
+    __table_args__ = (UniqueConstraint("user_id","subject_id","section","occurrence_key"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
+    subject_id: Mapped[int] = mapped_column(ForeignKey("trial_subjects.id"), index=True, nullable=False)
+    section: Mapped[str] = mapped_column(String(40), nullable=False)
+    occurrence_key: Mapped[str] = mapped_column(String(60), nullable=False)
+    occurred_on: Mapped[date] = mapped_column(Date, nullable=False)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, nullable=False)
+
+class TrialCRFReview(Base):
+    __tablename__ = "trial_crf_reviews"
+    __table_args__ = (UniqueConstraint("entry_id","entry_revision"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    entry_id: Mapped[int] = mapped_column(ForeignKey("trial_crf_entries.id"), index=True, nullable=False)
+    entry_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    decision: Mapped[str] = mapped_column(String(30), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    reviewer_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, nullable=False)
+
+class TrialScreeningMeta(Base):
+    """Restricted CRF A metadata; never exposed to blinded monitors or lab/pharmacy."""
+    __tablename__ = "trial_screening_meta"
+    subject_id: Mapped[int] = mapped_column(ForeignKey("trial_subjects.id"),primary_key=True)
+    participant_initials: Mapped[str | None] = mapped_column(String(20))
+    age_at_transplant: Mapped[int | None] = mapped_column(Integer)
+    sex_at_birth: Mapped[str | None] = mapped_column(String(30))
+    donor_relationship: Mapped[str | None] = mapped_column(String(30))
+    pis_version: Mapped[str | None] = mapped_column(String(80))
+    icf_version: Mapped[str | None] = mapped_column(String(80))
+    consent_language: Mapped[str | None] = mapped_column(String(20))
+    consent_obtained_by: Mapped[str | None] = mapped_column(String(150))
+    signed_consent_source_ref: Mapped[str | None] = mapped_column(String(120))

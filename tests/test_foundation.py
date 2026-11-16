@@ -224,6 +224,23 @@ def setup_synthetic_trial(client,headers):
         'consent_on':'2026-10-02','consent_version':'ICF-v1',
         'eligibility_attested':True})
     assert screening.status_code==200,screening.text
+    assert client.post('/api/users',headers=headers,json={
+        'username':'testeligibilityconsultant','display_name':'Synthetic eligibility consultant',
+        'role':'consultant','password':'EligibilityTestPassword123!'}).status_code==200
+    from app.trial_api import INCLUSION_ITEMS,EXCLUSION_ITEMS
+    with TestClient(app) as consultant:
+        consultant_headers=auth(consultant,'testeligibilityconsultant','EligibilityTestPassword123!')
+        eligibility=consultant.put(
+            f"/api/trial/subjects/{screening.json()['id']}/eligibility",
+            headers=consultant_headers,json={
+              'inclusion':{k:True for k in INCLUSION_ITEMS},
+              'exclusion':{k:False for k in EXCLUSION_ITEMS},
+              'age_years':50,'anc_per_ul':3000,'platelets_per_ul':180000,
+              'hemoglobin_g_dl':11,'crcl_cg_ml_min':68,
+              'baseline_cbc_on':'2026-10-02','reviewed_on':'2026-10-02',
+              'signed_source_reference':'TEST-Baseline-Source'})
+        assert eligibility.status_code==200,eligibility.text
+        assert eligibility.json()['eligible'] is True
     return pid,screening.json()['id']
 
 
@@ -428,3 +445,285 @@ def test_blinded_monitor_audit_does_not_include_identity_or_raw_payload():
         p=monitor.get(f'/api/patients/{pid}').json()['patient']
         assert 'name' not in p and 'cr_number' not in p
         assert monitor.get('/api/patients?q=TEST-MON-001').json()==[]
+
+
+def test_90_day_activation_renewal_and_revocation():
+    from datetime import datetime, timezone
+    with TestClient(app) as admin:
+        h=auth(admin)
+        issued=admin.post('/api/trial/staff/invite',headers=h,json={
+          'username':'cmvnurse90','display_name':'Synthetic Research Nurse','role':'nurse'})
+        assert issued.status_code==200,issued.text
+        token=issued.json()['activation_token']
+        assert issued.json()['expires_in_days']==7
+        activated=admin.post('/api/trial/staff/activate',json={
+          'token':token,'password':'NurseTestPasswordLong123!'})
+        assert activated.status_code==200,activated.text
+        access=activated.json()['access_expires_at']
+        assert 89 < (datetime.fromisoformat(access.replace('Z','+00:00'))-
+                     datetime.now(timezone.utc)).total_seconds()/86400 <= 91
+        accounts=admin.get('/api/trial/staff/accounts').json()
+        nurse=next(a for a in accounts if a['username']=='cmvnurse90')
+        assert nurse['role']=='nurse' and nurse['active']
+        user_id=nurse['id']
+    with TestClient(app) as nurse:
+        h=auth(nurse,'cmvnurse90','NurseTestPasswordLong123!')
+        assert nurse.get('/api/me').status_code==200
+    with TestClient(app) as admin:
+        h=auth(admin)
+        renewed=admin.post(f'/api/trial/staff/accounts/{user_id}/renew',headers=h,
+            json={'reason':'Approved next 90 day data entry assignment'})
+        assert renewed.status_code==200,renewed.text
+        revoked=admin.post(f'/api/trial/staff/accounts/{user_id}/revoke',headers=h,
+            json={'reason':'Research task completed; revoke access'})
+        assert revoked.status_code==200,revoked.text
+    with TestClient(app) as nurse:
+        assert nurse.post('/api/login',json={'username':'cmvnurse90',
+            'password':'NurseTestPasswordLong123!'}).status_code==401
+
+
+def test_pcr_anchor_and_eligibility_exclusion_review():
+    from app.trial_api import INCLUSION_ITEMS,EXCLUSION_ITEMS
+    with TestClient(app) as admin:
+        h=auth(admin)
+        pid,sid=setup_synthetic_trial(admin,h)
+        assert admin.post('/api/users',headers=h,json={'username':'pialign',
+            'display_name':'Synthetic protocol PI','role':'pi',
+            'password':'ProtocolPiPasswordLong123!'}).status_code==200
+    with TestClient(app) as clinician:
+        h=auth(clinician,'testeligibilityconsultant','EligibilityTestPassword123!')
+        inc={k:True for k in INCLUSION_ITEMS}
+        exc={k:False for k in EXCLUSION_ITEMS}
+        exc['ongoing_dialysis']=True
+        response=clinician.put(f'/api/trial/subjects/{sid}/eligibility',headers=h,
+          json={'inclusion':inc,'exclusion':exc,
+            'age_years':50,'anc_per_ul':3000,'platelets_per_ul':180000,
+            'hemoglobin_g_dl':11,'crcl_cg_ml_min':68,
+            'baseline_cbc_on':'2026-10-02','reviewed_on':'2026-10-02',
+            'signed_source_reference':'TEST-DIALYSIS-EXCLUSION'})
+        assert response.status_code==200
+        assert response.json()['eligible'] is False
+    with TestClient(app) as pi:
+        h=auth(pi,'pialign','ProtocolPiPasswordLong123!')
+        base={'enrolled_on':'2026-10-03','pcr_anchor_on':'2026-10-01',
+              'pcr_anchor_basis':'transplant_date','protocol_reference':'signed-protocol-v5',
+              'reviewed_eligibility_and_consent':True,'approved_visit_anchor':True}
+        assert pi.post(f'/api/trial/subjects/{sid}/enroll',headers=h,json=base).status_code==422
+    with TestClient(app) as clinician:
+        h=auth(clinician,'testeligibilityconsultant','EligibilityTestPassword123!')
+        exc['ongoing_dialysis']=False
+        response=clinician.put(f'/api/trial/subjects/{sid}/eligibility',headers=h,
+          json={'inclusion':inc,'exclusion':exc,
+            'age_years':50,'anc_per_ul':3000,'platelets_per_ul':180000,
+            'hemoglobin_g_dl':11,'crcl_cg_ml_min':68,
+            'baseline_cbc_on':'2026-10-02','reviewed_on':'2026-10-02',
+            'signed_source_reference':'TEST-FINAL-SIGNED-CHECKLIST'})
+        assert response.status_code==200
+        assert response.json()['eligible'] is True
+    with TestClient(app) as pi:
+        h=auth(pi,'pialign','ProtocolPiPasswordLong123!')
+        bad=dict(base,pcr_anchor_basis='enrollment_date',pcr_anchor_on='2026-10-03')
+        assert pi.post(f'/api/trial/subjects/{sid}/enroll',headers=h,json=bad).status_code==422
+        assert pi.post(f'/api/trial/subjects/{sid}/enroll',headers=h,json=base).status_code==200
+
+
+def test_crf_v3_schema_contains_all_remaining_signed_sections():
+    from app.crf_schema import CRF_FORMS, validate_payload
+    assert list(CRF_FORMS)==[
+        'C_baseline','D_adherence','E_followup','F_unscheduled_pcr',
+        'G_cmv_event','H_adverse_event','I_clinical_outcome',
+        'J_deviation','K_resource_cost','L_final_status']
+    assert len(CRF_FORMS['E_followup']['fields']) >= 17
+    assert validate_payload('E_followup',{
+        'scheduled_month':'3','actual_visit_on':'2026-10-30',
+        'hemoglobin_g_dl':12.5})['hemoglobin_g_dl']==12.5
+    import pytest
+    with pytest.raises(ValueError,match='threshold'):
+        validate_payload('G_cmv_event',{'event_on':'2026-10-30',
+            'qualifying_pcr_iu_ml':1300,'pcr_at_least_1000':'no'})
+    with pytest.raises(ValueError,match='Required'):
+        validate_payload('F_unscheduled_pcr',{'pcr_iu_ml':700})
+    with pytest.raises(ValueError,match='IEC'):
+        validate_payload('H_adverse_event',{'ae_term':'neutropenia',
+            'onset_on':'2026-10-30','serious':'yes'})
+
+
+def test_structured_crf_autosave_submission_and_independent_review():
+    with TestClient(app) as admin:
+        h=auth(admin)
+        _,sid=setup_synthetic_trial(admin,h)
+        for username,role in [('formpi','pi'),('formnurse','nurse'),
+                              ('formmonitor','monitor')]:
+            r=admin.post('/api/users',headers=h,json={'username':username,
+                'display_name':'Synthetic '+role,'role':role,
+                'password':'SyntheticFormPassword123!'})
+            assert r.status_code==200,r.text
+    with TestClient(app) as pi:
+        h=auth(pi,'formpi','SyntheticFormPassword123!')
+        r=pi.post(f'/api/trial/subjects/{sid}/enroll',headers=h,json={
+            'enrolled_on':'2026-10-03','pcr_anchor_on':'2026-10-01',
+            'pcr_anchor_basis':'transplant_date','protocol_reference':'protocol-v5',
+            'reviewed_eligibility_and_consent':True,'approved_visit_anchor':True})
+        assert r.status_code==200,r.text
+        assert 'C_baseline' in pi.get('/api/trial/crf/schema').json()['forms']
+    with TestClient(app) as nurse:
+        h=auth(nurse,'formnurse','SyntheticFormPassword123!')
+        schema=nurse.get('/api/trial/crf/schema').json()['forms']
+        assert 'E_followup' in schema
+        assert 'C_baseline' not in schema
+        path=f'/api/trial/crf/subjects/{sid}/drafts/E_followup'
+        raw={'occurred_on':'2026-11-02','occurrence_key':'M01',
+             'payload':{'scheduled_month':'1','actual_visit_on':'2026-11-02',
+                        'hemoglobin_g_dl':11.2,'hospitalization':'no'}}
+        created=nurse.put(path,headers=h,json=raw)
+        assert created.status_code==200,created.text
+        assert created.json()['is_draft']
+        assert nurse.get(path+'?occurrence_key=M01').json()['draft']['payload']==raw['payload']
+        assert nurse.put(path,headers=h,json=raw).status_code==409
+        revise=nurse.put(path,headers=h,json=dict(raw,expected_revision=1))
+        assert revise.status_code==200
+        submitted=nurse.post(f'/api/trial/crf/subjects/{sid}/entries',headers=h,
+            json={'section':'E_followup','occurred_on':'2026-11-02',
+                  'payload':raw['payload']})
+        assert submitted.status_code==200,submitted.text
+        entry_id=submitted.json()['entry_id']
+        assert nurse.post(f'/api/trial/crf/subjects/{sid}/entries',headers=h,
+            json={'section':'E_followup','occurred_on':'2026-11-02',
+                  'payload':raw['payload']}).status_code==409
+        assert nurse.post(f'/api/trial/crf/entries/{entry_id}/review',
+          headers=h,json={'expected_revision':1,'decision':'verified',
+                          'reason':'Source document checked'}).status_code==403
+    with TestClient(app) as pi:
+        h=auth(pi,'formpi','SyntheticFormPassword123!')
+        r=pi.post(f'/api/trial/crf/entries/{entry_id}/review',headers=h,
+            json={'expected_revision':1,'decision':'verified',
+                  'reason':'Signed nurse visit note verified'})
+        assert r.status_code==200,r.text
+        complete=pi.get('/api/trial/crf/completeness').json()['visit_completion']
+        assert complete['1']['submitted']==1
+        assert complete['1']['verified']==1
+    with TestClient(app) as monitor:
+        h=auth(monitor,'formmonitor','SyntheticFormPassword123!')
+        forms=monitor.get(f'/api/trial/crf/subjects/{sid}/entries').json()['entries']
+        assert forms==[]
+        assert monitor.get('/api/trial/crf/schema').json()['forms'].get('C_baseline') is None
+
+
+def test_crf_pcr_month_link_rejects_wrong_subject_and_unapproved_results():
+    with TestClient(app) as admin:
+        h=auth(admin)
+        _,sid=setup_synthetic_trial(admin,h)
+        for username,role in [('linkpi','pi'),('linkscience','scientist')]:
+            r=admin.post('/api/users',headers=h,json={'username':username,
+                'display_name':'Synthetic '+role,'role':role,
+                'password':'LinkPCRPassword123456!'})
+            assert r.status_code==200
+    with TestClient(app) as pi:
+        h=auth(pi,'linkpi','LinkPCRPassword123456!')
+        r=pi.post(f'/api/trial/subjects/{sid}/enroll',headers=h,json={
+            'enrolled_on':'2026-10-03','pcr_anchor_on':'2026-10-01',
+            'pcr_anchor_basis':'transplant_date','protocol_reference':'protocol-v5',
+            'reviewed_eligibility_and_consent':True,'approved_visit_anchor':True})
+        assert r.status_code==200
+        pcrs=pi.get(f'/api/trial/subjects/{sid}/pcr').json()['pcr_records']
+        m2=next(x for x in pcrs if x['scheduled_month']==2)
+    with TestClient(app) as scientist:
+        h=auth(scientist,'linkscience','LinkPCRPassword123456!')
+        bad=scientist.post(f'/api/trial/crf/subjects/{sid}/entries',
+          headers=h,json={'section':'E_followup','occurred_on':'2026-11-01',
+            'payload':{'scheduled_month':'1','actual_visit_on':'2026-11-01',
+                       'pcr_specimen_code':m2['specimen_code']}})
+        assert bad.status_code==422,bad.text
+        good=scientist.post(f'/api/trial/crf/subjects/{sid}/entries',
+          headers=h,json={'section':'E_followup','occurred_on':'2026-11-01',
+            'payload':{'scheduled_month':'1','actual_visit_on':'2026-11-01'}})
+        assert good.status_code==200,good.text
+
+
+def test_staff_expiration_enforced_on_active_sessions_and_login():
+    from app.main import SessionLocal, User
+    from app.trial_models import StaffAccess
+    from app.main import now
+    from datetime import timedelta
+    from sqlalchemy import select
+    with TestClient(app) as admin:
+        h=auth(admin)
+        invitation=admin.post('/api/trial/staff/invite',headers=h,json={
+            'username':'expiringcmvstaff','display_name':'Synthetic expiring staff',
+            'role':'nurse'})
+        assert invitation.status_code==200,invitation.text
+        activation=admin.post('/api/trial/staff/activate',json={
+            'token':invitation.json()['activation_token'],
+            'password':'LongStaffPasswordFor90Days123!'})
+        assert activation.status_code==200,activation.text
+    with TestClient(app) as nurse:
+        h=auth(nurse,'expiringcmvstaff','LongStaffPasswordFor90Days123!')
+        assert nurse.get('/api/me').status_code==200
+        with SessionLocal() as s:
+            user=s.scalar(select(User).where(User.username=='expiringcmvstaff'))
+            record=s.get(StaffAccess,user.id)
+            record.expires_at=now()-timedelta(hours=1)
+            s.commit()
+        assert nurse.get('/api/me').status_code==403
+    with TestClient(app) as nurse2:
+        assert nurse2.post('/api/login',json={'username':'expiringcmvstaff',
+            'password':'LongStaffPasswordFor90Days123!'}).status_code==403
+
+
+def test_user_self_service_password_change_revokes_session():
+    with TestClient(app) as admin:
+        h=auth(admin)
+        invite=admin.post('/api/trial/staff/invite',headers=h,json={
+            'username':'cmvpasswordchange','display_name':'Synthetic password changer',
+            'role':'scientist'})
+        assert invite.status_code==200,invite.text
+        assert admin.post('/api/trial/staff/activate',json={
+            'token':invite.json()['activation_token'],
+            'password':'OldUniquePasswordLong123!'}).status_code==200
+    with TestClient(app) as scientist:
+        h=auth(scientist,'cmvpasswordchange','OldUniquePasswordLong123!')
+        result=scientist.post('/api/trial/staff/change-password',headers=h,json={
+            'old_password':'OldUniquePasswordLong123!',
+            'new_password':'NewUniquePasswordLong123!'})
+        assert result.status_code==200,result.text
+        assert scientist.get('/api/me').status_code==401
+        assert scientist.post('/api/login',json={
+            'username':'cmvpasswordchange','password':'OldUniquePasswordLong123!'}).status_code==401
+        assert scientist.post('/api/login',json={
+            'username':'cmvpasswordchange','password':'NewUniquePasswordLong123!'}).status_code==200
+
+
+def test_screening_source_metadata_restricted_and_donor_relationship_checked():
+    with TestClient(app) as admin:
+        h=auth(admin)
+        p=admin.post('/api/patients',headers=h,json={
+            'name':'Synthetic source-check patient','cr_number':'TEST-SOURCE-CHECK',
+            'transplant_date':'2026-10-01'})
+        assert p.status_code==200
+        pid=p.json()['id']
+        for username,role in [('sourcescientist','scientist'),('sourcemonitor','monitor')]:
+            assert admin.post('/api/users',headers=h,json={
+                'username':username,'display_name':'Synthetic '+role,
+                'role':role,'password':'SyntheticSourcePassword123!'}).status_code==200
+    with TestClient(app) as scientist:
+        h=auth(scientist,'sourcescientist','SyntheticSourcePassword123!')
+        base={'patient_id':pid,'screening_on':'2026-10-02',
+              'donor_cmv_igg':'positive','recipient_cmv_igg':'positive',
+              'donor_type':'living','ratg_induction':False}
+        assert scientist.post('/api/trial/screening',headers=h,
+            json=dict(base,donor_relationship='deceased')).status_code==422
+        r=scientist.post('/api/trial/screening',headers=h,
+            json=dict(base,donor_relationship='living_related',
+                age_at_transplant=52,sex_at_birth='female',
+                participant_initials='TT',pis_version='PIS-v3',
+                consent_on='2026-10-02',consent_version='ICF-v3',
+                consent_language='Telugu',consent_obtained_by='delegated scientist',
+                signed_consent_source_ref='TEST-CONSENT-SOURCE'))
+        assert r.status_code==200,r.text
+        sid=r.json()['id']
+        details=scientist.get(f'/api/trial/subjects/{sid}/restricted-screening')
+        assert details.status_code==200
+        assert details.json()['restricted']['pis_version']=='PIS-v3'
+    with TestClient(app) as monitor:
+        h=auth(monitor,'sourcemonitor','SyntheticSourcePassword123!')
+        assert monitor.get(f'/api/trial/subjects/{sid}/restricted-screening').status_code==403

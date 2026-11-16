@@ -8,7 +8,7 @@ Grant IIRPIG(NAG)-I-2026-01-0634-F2; provisional repo protocol v5.0 / draft CRF 
 - Enrollment: PI-only confirmation of eligibility and consent, unique subject ID, signed PCR anchor attestation, seven coded CMV PCR worklist entries at months 1,2,3,4,6,9 and 12.
 - PCR: collection with accession ID, structured detection category and IU/mL, assay QC, revision conflict controls, independently verified results and justified repeat specimens.
 - Pharmacy: lot receipt and stock, signed paper prescription reference, renal assessment and external allocation reference, unique MSS dispensing code, atomic decrement, returned-tablet log and nonautomatic restock.
-- Users: individual invitations with 48-hour one-time tokens; users select their own passwords, optional TOTP authenticator setup, repeated-password failure lockout, role-specific views.
+- Users: individual invitations with seven-day one-time activation tokens and 90-day named access renewal/revocation; users select their own passwords, optional TOTP authenticator setup, repeated-password failure lockout, role-specific views.
 - Backup: six-hour timer template, encrypted rclone Drive uploads with SHA-256 roundtrip, isolated restore-test script, success receipt and freshness monitor.
 
 ## Clinical go-live blockers: MUST be cleared before identifiable records
@@ -39,3 +39,8 @@ Never issue shared role passwords. Each named staff member receives a separately
 ## Synthetic-only technical gate
 
 CLINICAL_DATA_ENABLED defaults false: TEST- CR numbers and Synthetic-prefixed names are required. If it is enabled the app requires MFA_REQUIRED true and a protected clinical signoff file at CLINICAL_GOLIVE_ATTESTATION_PATH, and disables automatic table creation. A file alone does not establish institutional approval. Do not reuse synthetic data as clinical records.
+
+
+## CRF v3.0 account and form upgrade (16 November 2026)
+
+Source-aligned CRF A/B eligibility and source-link metadata, typed sections C–L, autosave/review and staff expiry controls are described in `ops/CRF_V3_IMPLEMENTATION_MATRIX.md`. This does not eliminate the independent randomization, institutional authorization, server backup and signed UAT gates. Account access validity defaults to 90 days after activation; initial invite tokens last seven days.
