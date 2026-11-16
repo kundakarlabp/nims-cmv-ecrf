@@ -130,6 +130,11 @@ if CLINICAL_MODE:
         if absent:
             raise RuntimeError('Clinical schema incomplete: reviewed migrations required')
         with ENGINE.connect() as check_conn:
+            database_identity=check_conn.execute(sql_text(
+                "SELECT current_database(), current_user"
+            )).one()
+            if tuple(database_identity)!=("nims_cmv_clinical","nims_clinical_app"):
+                raise RuntimeError('Clinical database identity is not the approved restricted target')
             if check_conn.execute(sql_text(
                 "SELECT has_schema_privilege(current_user, 'public', 'CREATE')"
             )).scalar():
