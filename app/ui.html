@@ -276,7 +276,7 @@ async function kindChanged(){
 }
 newEntry=async function(){
  if(!selected){show('msg','Select a patient first.',true);return;}
- await saveDraftNow();
+ try{await saveDraftNow();}catch(err){show('msg','Draft save failed; retry before final submission: '+err.message,true);return;}
  let snapshot;
  try{snapshot=getDraftData()}catch(err){show('msg',err.message,true);return;}
  if(!Object.keys(snapshot.payload).length){show('msg','Enter at least one field before submitting.',true);return;}
@@ -297,6 +297,7 @@ newEntry=async function(){
  }catch(err){show('msg','Entry not submitted: '+err.message,true);}
 };
 tab=async function(name){
+ if(name===activeTab){if(name==='dashboard')await loadDashboard();return;}
  if(activeTab==='entry'&&name!=='entry'){try{await saveDraftNow();}catch(err){show('msg','Cannot leave unsaved entry: '+err.message,true);return;}}
  activeTab=name;
  ['dashboard','registry','review','entry','dose','due'].forEach(function(n){
@@ -359,6 +360,9 @@ function initializeStudyUI(){
  $('quickForm').addEventListener('input',scheduleDraft);
  $('quickForm').addEventListener('change',scheduleDraft);
  setDraftStatus('Select a patient to start a draft.');
+ window.addEventListener('beforeunload',function(e){
+  if(activeTab==='entry'&&(/Unsaved changes|Saving draft|Draft could not be saved|Draft not saved/.test($('draftStatus').textContent))){e.preventDefault();e.returnValue='';}
+ });
 }
 initializeStudyUI();
 </script></body></html>
