@@ -219,7 +219,7 @@ def eligibility_review(subject_id:int,data:EligibilityReviewIn,
        incl["platelets_ge_50000"]!=(data.platelets_per_ul>=50000) or \
        incl["hemoglobin_ge_7"]!=(data.hemoglobin_g_dl>=7):
         raise HTTPException(422,"Blood-count eligibility answers conflict with measured source results")
-    if ex["blood_counts_below_threshold"]!=(
+    if excl["blood_counts_below_threshold"]!=(
         data.anc_per_ul<1500 or data.platelets_per_ul<50000 or data.hemoglobin_g_dl<7):
         raise HTTPException(422,"Blood-count exclusion conflicts with source results")
     if excl["crcl_below_10"]!=(data.crcl_cg_ml_min<10):
