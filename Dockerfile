@@ -4,7 +4,7 @@ WORKDIR /srv
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt && useradd --system --uid 10001 appuser
 COPY app/ ./app/
-COPY ops/bootstrap_admin.py ./bootstrap_admin.py
+COPY ops/bootstrap_admin.py ops/clinical_schema_bootstrap.py ops/clinical_admin_mfa.py ./
 # Git may be cloned with a restrictive umask; appuser still needs to read the source.
 RUN chmod -R a+rX /srv/app && chmod a+r /srv/bootstrap_admin.py
 USER appuser
