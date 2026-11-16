@@ -132,3 +132,66 @@ def test_independent_review_requires_role_and_current_revision():
         auth(pg,'testpg','AnotherLongTestingPassword456!')
         assert pg.get('/api/review-queue').status_code==403
 
+
+
+def test_server_side_drafts_are_private_versioned_and_not_submitted():
+    with TestClient(app) as c:
+        h=auth(c)
+        pid=c.post('/api/patients',headers=h,json={'name':'Synthetic draft','cr_number':'TEST-DRAFT',
+            'study_id':'NCMV-TEST-1'}).json()['id']
+        endpoint=f'/api/patients/{pid}/drafts/visit'
+        assert c.get(endpoint).json()=={'draft':None}
+        record={'occurred_on':'2026-11-16','payload':{'scheduled_month':1,'visit_complete':False}}
+        saved=c.put(endpoint,headers=h,json=record)
+        assert saved.status_code==200,saved.text
+        assert saved.json()['revision']==1
+        loaded=c.get(endpoint)
+        assert loaded.json()['draft']['payload']==record['payload']
+        assert c.get('/api/dashboard').json()['entries']==0
+        assert c.get('/api/dashboard').json()['study_ids_assigned']==1
+        stale=c.put(endpoint,headers=h,json=record)
+        assert stale.status_code==409
+        updated=c.put(endpoint,headers=h,json={**record,'expected_revision':1,
+            'payload':{'scheduled_month':1,'visit_complete':True}})
+        assert updated.status_code==200
+        assert updated.json()['revision']==2
+        assert c.delete(endpoint+'?expected_revision=1',headers=h).status_code==409
+        assert c.delete(endpoint+'?expected_revision=2',headers=h).status_code==200
+        assert c.get(endpoint).json()=={'draft':None}
+        assert c.get('/api/dashboard').json()['entries']==0
+
+
+def test_draft_role_auth_csrf_and_study_modules():
+    with TestClient(app) as admin:
+        h=auth(admin)
+        pid=admin.post('/api/patients',headers=h,json={
+            'name':'Synthetic access','cr_number':'TEST-ACCESS'}).json()['id']
+    with TestClient(app) as pg:
+        h=auth(pg,'testpg','AnotherLongTestingPassword456!')
+        endpoint=f'/api/patients/{pid}/drafts/pharmacy'
+        assert pg.get(endpoint).status_code==403
+        assert pg.put(endpoint,headers=h,json={'occurred_on':'2026-11-16','payload':{}}).status_code==403
+        endpoint=f'/api/patients/{pid}/drafts/visit'
+        assert pg.put(endpoint,json={'occurred_on':'2026-11-16','payload':{}}).status_code==403
+        r=pg.put(endpoint,headers=h,json={'occurred_on':'2026-11-16','payload':{'synthetic':True}})
+        assert r.status_code==200
+        assert pg.get(endpoint).json()['draft']['payload']=={'synthetic':True}
+    with TestClient(app) as admin:
+        auth(admin)
+        assert admin.get(f'/api/patients/{pid}/drafts/visit').json()['draft'] is None
+
+
+def test_dashboard_counts_only_latest_review_revision():
+    with TestClient(app) as c:
+        h=auth(c)
+        pid=c.post('/api/patients',headers=h,json={
+            'name':'Synthetic stats','cr_number':'TEST-STATS'}).json()['id']
+        for kind in ('visit','lab','visit'):
+            r=c.post(f'/api/patients/{pid}/entries',headers=h,json={
+                'kind':kind,'occurred_on':'2026-11-16','payload':{'test':True}})
+            assert r.status_code==200
+        d=c.get('/api/dashboard').json()
+        assert d['entries']==3
+        assert d['review']['pending']==3
+        assert d['by_kind']=={'visit':2,'lab':1}
+        assert d['monthly_entries'][-1]=={'month':'2026-11','count':3}
