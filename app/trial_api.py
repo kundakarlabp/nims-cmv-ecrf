@@ -11,7 +11,7 @@ import os
 import secrets
 import pyotp
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, model_validator, field_validator
 from sqlalchemy import select, func, update, delete
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
@@ -654,6 +654,18 @@ class InviteIn(BaseModel):
     role:Literal["consultant","pg","scientist","nurse","technician","microbiology",
                  "pharmacy","monitor","pi","admin","randomization_custodian"]
 
+    @field_validator("username",mode="before")
+    @classmethod
+    def normalize_username(cls,v):
+        # Names such as "Sai" should be accepted and stored consistently with
+        # the already case-insensitive login flow.
+        return v.strip().lower() if isinstance(v,str) else v
+
+    @field_validator("display_name",mode="before")
+    @classmethod
+    def trim_staff_name(cls,v):
+        return v.strip() if isinstance(v,str) else v
+
 @router.post("/staff/invite")
 def invite_user(data:InviteIn,u:AuthContext=Depends(current),s:Session=Depends(db)):
     role(u,MANAGERS)
@@ -662,15 +674,18 @@ def invite_user(data:InviteIn,u:AuthContext=Depends(current),s:Session=Depends(d
     user=User(username=data.username,display_name=data.display_name,role=data.role,
         password_hash=PH.hash(secrets.token_urlsafe(48)),active=False)
     token=secrets.token_urlsafe(36)
-    s.add(user)
-    s.flush()  # Generate the DB identity before binding the one-time invitation.
-    invitation=UserInvitation(user_id=user.id,token_sha256=sha(token),
-        created_by=u.user_id,expires_at=now()+timedelta(days=7))
-    s.add(invitation)
     try:
+        s.add(user)
+        s.flush()  # Must be inside try: duplicate usernames are 409, not a server crash.
+        invitation=UserInvitation(user_id=user.id,token_sha256=sha(token),
+            created_by=u.user_id,expires_at=now()+timedelta(days=7))
+        s.add(invitation)
+        audit(s,u,"staff_invite","user_invitation",user.id,None,None,
+              {"username":user.username,"role":user.role,"expires_at":invitation.expires_at},
+              "Named staff activation issued; password and token excluded from audit")
         s.commit()
     except IntegrityError:
-        s.rollback();raise HTTPException(409,"Username already exists")
+        s.rollback();raise HTTPException(409,"Username already exists; use reissue for an inactive account")
     # Secret only returned once over TLS to authenticated inviter, never persisted as plaintext.
     return {"username":user.username,"role":user.role,"activation_token":token,
         "expires_in_days":7,
@@ -731,9 +746,18 @@ def activate(data:ActivateIn,s:Session=Depends(db)):
     user=s.get(User,invite.user_id)
     if not user or user.active:raise HTTPException(400,"Account already active")
     user.password_hash=PH.hash(data.password);user.active=True;invite.redeemed_at=now()
-    access=StaffAccess(user_id=user.id,activated_at=now(),
-        expires_at=now()+timedelta(days=90))
-    s.add(access)
+    access=s.get(StaffAccess,user.id)
+    if access is None:
+        access=StaffAccess(user_id=user.id,activated_at=now(),
+            expires_at=now()+timedelta(days=90))
+        s.add(access)
+    else:
+        # A previously revoked account may be reinstated only by a separately
+        # audited reissue; its former grant is not reused.
+        access.activated_at=now()
+        access.expires_at=now()+timedelta(days=90)
+        access.renewed_at=now()
+        access.renewed_by=invite.created_by
     s.commit()
     return {"ok":True,"username":user.username,"access_expires_at":access.expires_at,
             "notice":"90-day named account activated. Authenticator enrollment required before clinical use."}
@@ -834,7 +858,49 @@ def staff_accounts(u:AuthContext=Depends(current),s:Session=Depends(db)):
         "role":usr.role,"active":usr.active,
         "access_expires_at":access.expires_at if access else None,
         "mfa_enabled":bool(totp and totp.enabled),
-        "requires_activation":not usr.active} for usr,access,totp in rows]
+        "status":("active" if not access or access.expires_at.replace(tzinfo=now().tzinfo)>now() else "expired")
+                 if usr.active else ("revoked" if access else "awaiting_activation"),
+        "requires_activation":not usr.active and access is None,
+        "is_revoked":not usr.active and access is not None} for usr,access,totp in rows]
+
+class ReissueStaffIn(BaseModel):
+    reason:str=Field(min_length=8,max_length=500)
+    restore_revoked:bool=False
+
+@router.post("/staff/accounts/{user_id}/reissue")
+def reissue_staff_access(user_id:str,data:ReissueStaffIn,
+                         u:AuthContext=Depends(current),s:Session=Depends(db)):
+    role(u,MANAGERS)
+    user=s.get(User,user_id)
+    if not user:raise HTTPException(404,"Staff account not found")
+    if user.id==u.user_id:raise HTTPException(409,"Cannot reissue own account")
+    if user.role in {"pi","admin","randomization_custodian"} and u.role!="admin":
+        raise HTTPException(403,"Only administrator may reissue privileged users")
+    if user.active:
+        raise HTTPException(409,"Account is active; use renewal or revoke first")
+    previous=s.get(StaffAccess,user.id)
+    if previous and not data.restore_revoked:
+        raise HTTPException(409,"Previously revoked account: explicit reinstatement approval required")
+    if not previous and data.restore_revoked:
+        raise HTTPException(422,"Account has never been activated; reissue invitation instead")
+    token=secrets.token_urlsafe(36)
+    # Invalidate every older invitation and session, including those already used.
+    s.execute(delete(UserInvitation).where(UserInvitation.user_id==user.id))
+    s.execute(delete(LoginSession).where(LoginSession.user_id==user.id))
+    user.password_hash=PH.hash(secrets.token_urlsafe(48))
+    invitation=UserInvitation(user_id=user.id,token_sha256=sha(token),
+        created_by=u.user_id,expires_at=now()+timedelta(days=7))
+    s.add(invitation)
+    audit(s,u,"staff_reissue","user_invitation",user.id,None,
+          {"username":user.username,"previously_activated":bool(previous)},
+          {"username":user.username,"invitation_expires_at":invitation.expires_at,
+           "previously_revoked":bool(previous)},data.reason)
+    s.commit()
+    return {"username":user.username,"role":user.role,
+            "activation_token":token,"expires_in_days":7,
+            "access_validity_days_after_activation":90,
+            "restored_previous_account":bool(previous),
+            "instruction":"Give this one-time activation code privately to the verified staff member; they choose their own password."}
 
 class RenewAccessIn(BaseModel):
     reason:str=Field(min_length=8,max_length=500)
