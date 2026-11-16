@@ -104,6 +104,20 @@ panel('drug','MSS drug accountability',
  '<div class="study-card"><h3>MSS issue slip</h3><div id="tw-slip">Generate a confirmed issue to print and sign.</div></div>'+
  '<div id="tw-drug-status" class="status hide"></div>'
 );
+panel('crf','Structured eCRF · Sections C–L',
+ choose('Study participant','tw-crf-subject',[])+
+ choose('CRF section','tw-crf-section',[])+
+ '<p class="hint" id="tw-crf-descriptor">Choose a form. Only signed protocol fields are displayed; optional fields may remain blank, but never invent values.</p>'+
+ '<label>Event/assessment date<input type="date" id="tw-crf-date"></label>'+
+ '<div id="tw-crf-fields" class="study-columns"></div>'+
+ '<div id="tw-crf-draft-status" class="status">No draft loaded.</div>'+
+ '<label>Correction reason (required only when revising submitted form)<input id="tw-crf-reason"></label>'+
+ btn('Save private working draft','tw-crf-save')+' '+
+ btn('Submit form for independent review','tw-crf-submit')+
+ '<div class="study-card"><h3>Submitted forms and review states</h3>'+
+ '<div id="tw-crf-entries"></div></div>'+
+ '<div id="tw-crf-status" class="status hide"></div>'
+);
 panel('security','Account security',
  '<div class="study-card"><h3>Register two-factor authenticator</h3>'+
  '<p class="hint">Use a trusted authenticator application. Treat the setup secret as a password; never share it or post it into chat.</p>'+
@@ -136,7 +150,7 @@ login.insertAdjacentHTML('beforeend','<hr><h3>Activate individual staff account<
  '<label>Choose a private password<input type="password" id="tw-password" autocomplete="new-password"></label>'+
  btn('Activate account','tw-activate-save')+'<div id="tw-activate-status" class="status hide"></div>');
 for(const id of ['tw-screen-date','tw-consent-date','tw-enroll-date','tw-anchor-date','tw-collected','tw-reported','tw-receipt-date','tw-rx-date','tw-issue-date','tw-return-date'])$(id).value=today();
-var perms={study:['pi','consultant','scientist'],pcr:['pi','consultant','scientist','nurse','technician','microbiology','monitor'],drug:['pi','consultant','scientist','pharmacy','monitor'],staff:['pi','admin'],security:['pi','admin','consultant','pg','scientist','nurse','technician','microbiology','pharmacy','monitor']};
+var perms={crf:['pi','consultant','scientist','nurse','pg','technician','microbiology','pharmacy','monitor'],study:['pi','consultant','scientist'],pcr:['pi','consultant','scientist','nurse','technician','microbiology','monitor'],drug:['pi','consultant','scientist','pharmacy','monitor'],staff:['pi','admin'],security:['pi','admin','consultant','pg','scientist','nurse','technician','microbiology','pharmacy','monitor']};
 function setRole(){
  var r=$('currentRole').textContent.trim();
  for(const k of Object.keys(perms))$('btn'+k).classList.toggle('hide',!perms[k].includes(r));
@@ -155,10 +169,10 @@ var originalApply=applyRoleUI;
 applyRoleUI=function(role){originalApply(role);setRole();};
 var oldTab=tab;
 tab=async function(name){
- if(['study','pcr','drug','staff','security'].includes(name)){
+ if(['study','pcr','drug','staff','security','crf'].includes(name)){
   if(activeTab==='entry'){try{await saveDraftNow();}catch(e){show('msg','Draft not saved: '+e.message,true);return;}}
   activeTab=name;
-  for(const section of ['dashboard','registry','review','entry','dose','due','study','pcr','drug','staff','security']){
+  for(const section of ['dashboard','registry','review','entry','dose','due','study','pcr','drug','staff','security','crf']){
    $(section).classList.toggle('hide',section!==name);
    $('btn'+section).classList.toggle('selected',section===name);
   }
@@ -168,6 +182,7 @@ tab=async function(name){
    if(name==='pcr'){await loadSubjects();await loadPCR();}
    if(name==='drug'){await loadSubjects();await loadDrug();}
    if(name==='staff'){await loadAccounts();}
+   if(name==='crf'){await loadSubjects();await loadCrfSchema();await loadCrfEntries();}
   });
  }else{
   await oldTab(name);
@@ -183,7 +198,7 @@ async function loadSubjects(){
  fill('tw-screened',studySubjects.filter(x=>x.status==='screened'),'id',x=>x.screening_code);
  fill('tw-checklist-subject',studySubjects.filter(x=>x.status==='screened'),'id',x=>x.screening_code);
  var active=studySubjects.filter(x=>x.status==='enrolled');
- for(const id of ['tw-pcr-subject','tw-drug-subject'])fill(id,active,'id',x=>x.study_code);
+ for(const id of ['tw-pcr-subject','tw-drug-subject','tw-crf-subject'])fill(id,active,'id',x=>x.study_code);
  $('tw-register').innerHTML='<table><thead><tr><th>Study code</th><th>Status</th><th>D+/R+</th><th>Signed consent</th></tr></thead><tbody>'+
  studySubjects.map(x=>'<tr><td>'+txt(x.study_code||x.screening_code)+'</td><td>'+txt(x.status)+'</td><td>'+String(x.d_plus_r_plus)+'</td><td>'+String(x.consent_recorded)+'</td></tr>').join('')+'</tbody></table>';
 }
@@ -380,5 +395,231 @@ $('tw-change-password').onclick=()=>{void task('tw-mfa-status',async()=>{
  $('tw-oldpassword').value='';$('tw-newpassword').value='';$('tw-password-otp').value='';
  notify('tw-mfa-status','Password changed; all sessions revoked. Please sign in with your new password.');
 });};
+
+
+/* Source-aligned CRF forms with private, revision-checked server drafts. */
+let currentCrfSchema=null,currentCrfSpec=null,currentCrfEntry=null;
+let crfDraftRevision=null,crfDraftKey=null,crfDraftLast=null,crfDraftTimer=null,crfDraftQueue=Promise.resolve();
+const crfEditable={
+ C_baseline:['pi','consultant','scientist'],
+ D_adherence:['pi','consultant','scientist','nurse','pharmacy'],
+ E_followup:['pi','consultant','scientist','nurse','pg'],
+ F_unscheduled_pcr:['pi','consultant','scientist','microbiology','technician'],
+ G_cmv_event:['pi','consultant','scientist'],
+ H_adverse_event:['pi','consultant','scientist','nurse'],
+ I_clinical_outcome:['pi','consultant','scientist','nurse','pg'],
+ J_deviation:['pi','consultant','scientist'],
+ K_resource_cost:['pi','scientist','pharmacy'],
+ L_final_status:['pi','consultant','scientist']
+};
+const crfCanEdit=()=>crfEditable[value('tw-crf-section')]?.includes($('currentRole').textContent.trim());
+const crfKey=()=>{
+ if(!currentCrfSpec)return 'NEW';
+ if(currentCrfSpec.repeat==='single')return 'MAIN';
+ if(currentCrfSpec.repeat==='month'){
+  const month=document.querySelector('#tw-crf-fields [data-crf-field="scheduled_month"]')?.value;
+  return month?'M'+month.padStart(2,'0'):'NEW';
+ }
+ return 'NEW';
+};
+function crfValues(){
+ const payload={};
+ if(!currentCrfSpec)throw Error('Choose a CRF section first');
+ for(const [key,spec] of Object.entries(currentCrfSpec.fields)){
+  const control=Array.from($('tw-crf-fields').querySelectorAll('[data-crf-field]'))
+   .find(el=>el.dataset.crfField===key);
+  if(!control)continue;
+  const val=control.value.trim();
+  if(val==='')continue;
+  if(spec.type==='integer'){
+   if(!Number.isInteger(Number(val)))throw Error('Whole number expected for '+spec.label);
+   payload[key]=Number(val);
+  }else if(spec.type==='number'){
+   if(!Number.isFinite(Number(val)))throw Error('Numeric entry expected for '+spec.label);
+   payload[key]=Number(val);
+  }else payload[key]=val;
+ }
+ return payload;
+}
+function crfSetValues(payload){
+ for(const el of $('tw-crf-fields').querySelectorAll('[data-crf-field]')){
+  const v=payload?.[el.dataset.crfField];
+  el.value=v===undefined||v===null?'':String(v);
+ }
+}
+function crfCurrentData(){
+ if(!n('tw-crf-subject')||!value('tw-crf-section'))throw Error('Select subject and CRF section');
+ if(!value('tw-crf-date'))throw Error('Event date required');
+ return {occurred_on:value('tw-crf-date'),payload:crfValues(),occurrence_key:crfKey()};
+}
+async function crfSaveDraft(){
+ clearTimeout(crfDraftTimer);
+ if(!crfCanEdit())return;
+ const snapshot=crfCurrentData();
+ const body=JSON.stringify(snapshot);
+ if(body===crfDraftLast)return;
+ const subjectId=n('tw-crf-subject'),section=value('tw-crf-section'),key=snapshot.occurrence_key;
+ const endpoint='/api/trial/crf/subjects/'+subjectId+'/drafts/'+encodeURIComponent(section);
+ crfDraftQueue=crfDraftQueue.catch(()=>{}).then(async()=>{
+  const r=await api(endpoint,{method:'PUT',
+    body:JSON.stringify({...snapshot,expected_revision:crfDraftKey===key?crfDraftRevision:null})});
+  if(n('tw-crf-subject')===subjectId&&value('tw-crf-section')===section&&crfKey()===key){
+   crfDraftKey=key;crfDraftRevision=r.revision;crfDraftLast=body;
+   $('tw-crf-draft-status').textContent='Saved on server · private revision '+r.revision+
+      ' · not yet part of submitted CRF';
+  }
+ });
+ try{await crfDraftQueue;}
+ catch(e){$('tw-crf-draft-status').textContent='DRAFT UNSAVED: '+e.message;throw e;}
+}
+async function crfRestoreDraft(){
+ clearTimeout(crfDraftTimer);
+ crfDraftRevision=null;crfDraftKey=null;crfDraftLast=null;
+ crfSetValues({});
+ $('tw-crf-date').value=today();
+ if(!crfCanEdit()){$('tw-crf-draft-status').textContent='Read-only review access';return;}
+ if(!n('tw-crf-subject')||!value('tw-crf-section'))return;
+ const key=crfKey();
+ const r=await api('/api/trial/crf/subjects/'+n('tw-crf-subject')+
+  '/drafts/'+encodeURIComponent(value('tw-crf-section'))+
+  '?occurrence_key='+encodeURIComponent(key));
+ crfDraftKey=key;
+ if(r.draft){
+  crfSetValues(r.draft.payload);
+  $('tw-crf-date').value=r.draft.occurred_on;
+  crfDraftRevision=r.draft.revision;
+  crfDraftLast=JSON.stringify({occurred_on:r.draft.occurred_on,
+   payload:r.draft.payload,occurrence_key:key});
+  $('tw-crf-draft-status').textContent='Private saved draft restored · revision '+r.draft.revision;
+ }else $('tw-crf-draft-status').textContent='New private draft · autosaves after changes';
+}
+function crfScheduleSave(){
+ clearTimeout(crfDraftTimer);
+ if(!crfCanEdit())return;
+ $('tw-crf-draft-status').textContent='Unsaved changes · server autosave pending';
+ crfDraftTimer=setTimeout(()=>{void crfSaveDraft().catch(()=>{});},1300);
+}
+function crfRender(){
+ currentCrfSpec=currentCrfSchema?.[value('tw-crf-section')]||null;
+ currentCrfEntry=null;
+ $('tw-crf-descriptor').textContent=currentCrfSpec?
+  currentCrfSpec.title+' · '+currentCrfSpec.repeat+' · CRF v3.0 (14 August 2026)':
+  'Select one signed CRF section';
+ $('tw-crf-fields').innerHTML=currentCrfSpec?
+  Object.entries(currentCrfSpec.fields).map(([key,item])=>{
+   const id='twcrf-'+key;
+   let control;
+   if(item.type==='select'){
+    control='<select data-crf-field="'+txt(key)+'" id="'+txt(id)+'"><option value="">Not documented</option>'+
+     (item.choices||[]).map(o=>'<option value="'+txt(o)+'">'+txt(o.replaceAll('_',' '))+'</option>').join('')+'</select>';
+   }else if(item.type==='textarea'){
+    control='<textarea id="'+txt(id)+'" data-crf-field="'+txt(key)+'" rows="2"></textarea>';
+   }else{
+    const type=['date','number','integer'].includes(item.type)?
+     (item.type==='integer'?'number':item.type):'text';
+    const step=item.type==='integer'?'1':item.type==='number'?'any':null;
+    control='<input id="'+txt(id)+'" data-crf-field="'+txt(key)+'" type="'+type+'"'+
+      (step?' step="'+step+'"':'')+
+      (item.min!==undefined?' min="'+item.min+'"':'')+
+      (item.max!==undefined?' max="'+item.max+'"':'')+'>';
+   }
+   return '<label class="study-card">'+txt(item.label)+(item.required?' *':'')+control+'</label>';
+  }).join(''):'';
+ $('tw-crf-save').classList.toggle('hide',!crfCanEdit());
+ $('tw-crf-submit').classList.toggle('hide',!crfCanEdit());
+}
+async function loadCrfSchema(){
+ const r=await api('/api/trial/crf/schema');
+ currentCrfSchema=r.forms;
+ fill('tw-crf-section',Object.entries(r.forms).map(([id,s])=>({id,title:s.title})),
+     'id',x=>x.title);
+ crfRender();await crfRestoreDraft();
+}
+async function loadCrfEntries(){
+ const subject=n('tw-crf-subject');
+ if(!subject){$('tw-crf-entries').textContent='Select a study participant';return;}
+ const records=(await api('/api/trial/crf/subjects/'+subject+'/entries')).entries;
+ $('tw-crf-entries').innerHTML='<div style="overflow-x:auto"><table><thead><tr>'+
+  '<th>Section</th><th>Event</th><th>Occurrence</th><th>Status</th><th>Revision</th><th>Action</th>'+
+  '</tr></thead><tbody>'+
+  records.map(x=>'<tr><td>'+txt(x.section)+'</td><td>'+txt(x.occurred_on)+
+   '</td><td>'+txt(x.occurrence_key)+'</td><td>'+txt(x.review_status)+
+   '</td><td>'+x.revision+'</td><td>'+
+   (crfEditable[x.section]?.includes($('currentRole').textContent.trim())?
+    '<button class="secondary" data-crf-edit="'+x.id+'">Edit</button> ':'')+
+   (x.review_status==='pending'&&x.updated_by!==undefined?
+    '<button data-crf-review="'+x.id+'">Review</button>':'')+'</td></tr>').join('')+
+  '</tbody></table></div>';
+ $('tw-crf-entries')._records=records;
+}
+$('tw-crf-section').onchange=()=>{void task('tw-crf-status',async()=>{
+ try{await crfSaveDraft();}catch(e){throw Error('Cannot change form with unsaved data: '+e.message);}
+ crfRender();await crfRestoreDraft();await loadCrfEntries();
+});};
+$('tw-crf-subject').onchange=()=>{void task('tw-crf-status',async()=>{
+ try{await crfSaveDraft();}catch(e){throw Error('Cannot change participant with unsaved data: '+e.message);}
+ crfRender();await crfRestoreDraft();await loadCrfEntries();
+});};
+$('tw-crf-fields').addEventListener('input',crfScheduleSave);
+$('tw-crf-fields').addEventListener('change',crfScheduleSave);
+$('tw-crf-date').addEventListener('change',crfScheduleSave);
+$('tw-crf-save').onclick=()=>{void task('tw-crf-status',async()=>{
+ await crfSaveDraft();notify('tw-crf-status','Private server draft saved.');
+});};
+$('tw-crf-submit').onclick=()=>{void task('tw-crf-status',async()=>{
+ await crfSaveDraft();
+ const snapshot=crfCurrentData();
+ if(!currentCrfEntry&&!confirm('Submit this CRF form for independent verification?'))return;
+ const isCorrection=!!currentCrfEntry;
+ const body=isCorrection?{
+    occurred_on:snapshot.occurred_on,payload:snapshot.payload,
+    expected_revision:currentCrfEntry.revision,reason:value('tw-crf-reason')
+  }:{section:value('tw-crf-section'),occurred_on:snapshot.occurred_on,
+       payload:snapshot.payload};
+ const url=isCorrection?'/api/trial/crf/entries/'+currentCrfEntry.id:
+    '/api/trial/crf/subjects/'+n('tw-crf-subject')+'/entries';
+ const result=await api(url,{method:isCorrection?'PUT':'POST',body:JSON.stringify(body)});
+ notify('tw-crf-status',(isCorrection?'CRF correction':'CRF entry')+
+  ' submitted, revision '+result.revision+' · independent review pending');
+ if(crfDraftRevision!==null){
+  try{await api('/api/trial/crf/subjects/'+n('tw-crf-subject')+
+     '/drafts/'+encodeURIComponent(value('tw-crf-section'))+
+     '?occurrence_key='+encodeURIComponent(crfDraftKey)+
+     '&expected_revision='+crfDraftRevision,{method:'DELETE'});}
+  catch(e){notify('tw-crf-status','Submitted, but private draft cleanup needs attention: '+e.message);}
+ }
+ currentCrfEntry=null;crfDraftRevision=null;crfDraftKey=null;crfDraftLast=null;
+ crfSetValues({});$('tw-crf-reason').value='';
+ await loadCrfEntries();await crfRestoreDraft();
+});};
+$('tw-crf-entries').addEventListener('click',e=>{
+ const edit=e.target.closest('button[data-crf-edit]');
+ const review=e.target.closest('button[data-crf-review]');
+ if(!edit&&!review)return;
+ const id=Number((edit||review).dataset.crfEdit||(edit||review).dataset.crfReview);
+ const row=($('tw-crf-entries')._records||[]).find(x=>x.id===id);
+ if(!row)return;
+ void task('tw-crf-status',async()=>{
+  if(edit){
+   if(value('tw-crf-section')!==row.section){
+    $('tw-crf-section').value=row.section;crfRender();
+   }
+   currentCrfEntry=row;crfSetValues(row.payload);
+   $('tw-crf-date').value=row.occurred_on;
+   $('tw-crf-draft-status').textContent='Editing submitted entry '+id+
+    ' · correction reason required · no change until explicit submission';
+  }else{
+   if(row.review_status!=='pending')throw Error('This revision has already been reviewed');
+   const reason=prompt('Reason for independent CRF review (minimum 8 characters):');
+   if(!reason||reason.trim().length<8)return;
+   const decision=confirm('Verify this record? Select Cancel to request correction.')?
+     'verified':'needs_correction';
+   const result=await api('/api/trial/crf/entries/'+id+'/review',{
+     method:'POST',body:JSON.stringify({expected_revision:row.revision,decision,reason})});
+   notify('tw-crf-status','Review recorded: '+result.review_status);
+   await loadCrfEntries();
+  }
+ });
+});
 
 })();
