@@ -9,6 +9,7 @@ from datetime import date, datetime, timedelta
 from typing import Literal
 import os
 import secrets
+import pyotp
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import select, func, update
@@ -19,7 +20,7 @@ from .main import (
 )
 from .trial_models import (
     TrialSubject, PCRRecord, DrugLot, DrugAuthorization, DrugDispense,
-    DrugReturn, UserInvitation, LoginThrottle
+    DrugReturn, UserInvitation, LoginThrottle, UserTotp
 )
 
 router=APIRouter(prefix="/api/trial",tags=["trial-workflows"])
@@ -555,3 +556,40 @@ def overview(u:AuthContext=Depends(current),s:Session=Depends(db)):
         "randomization":"external authorized system required",
         "data_mode":"synthetic_staging" if os.getenv("CLINICAL_DATA_ENABLED","false").lower()!="true"
             else "clinical_requested_not_validated"}
+
+
+@router.post("/staff/mfa-setup")
+def mfa_setup(u:AuthContext=Depends(current),s:Session=Depends(db)):
+    record=s.get(UserTotp,u.user_id)
+    if record and record.enabled:
+        raise HTTPException(409,"MFA already active; administrator-assisted recovery required")
+    secret=pyotp.random_base32()
+    if not record:
+        record=UserTotp(user_id=u.user_id,secret=secret,enabled=False)
+        s.add(record)
+    else:
+        record.secret=secret
+    s.commit()
+    # This secret is shown to the account owner once via the authenticated session.
+    # Never persist it in browser storage or attach it to routine error logs.
+    return {"secret":secret,
+        "otpauth_uri":pyotp.TOTP(secret).provisioning_uri(name=u.user_id,
+            issuer_name="NIMS CMV Trial"),
+        "instruction":"Save in your authenticator, then confirm one current 6-digit code."}
+
+class MfaConfirmIn(BaseModel):
+    otp:str=Field(min_length=6,max_length=6,pattern=r"^\d{6}$")
+
+@router.post("/staff/mfa-confirm")
+def mfa_confirm(data:MfaConfirmIn,u:AuthContext=Depends(current),s:Session=Depends(db)):
+    record=s.get(UserTotp,u.user_id)
+    if not record or record.enabled:
+        raise HTTPException(409,"MFA setup missing or already enabled")
+    if not pyotp.TOTP(record.secret).verify(data.otp,valid_window=1):
+        raise HTTPException(422,"Authenticator code incorrect")
+    record.enabled=True;record.confirmed_at=now()
+    audit(s,u,"mfa_enabled","user",u.user_id,None,None,
+        {"enabled":True,"confirmed_at":record.confirmed_at},
+        "Account owner confirmed authenticator enrollment")
+    s.commit()
+    return {"mfa_enabled":True,"notice":"Authenticator code is required at subsequent logins"}
