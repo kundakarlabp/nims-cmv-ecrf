@@ -168,7 +168,7 @@ panel('security','Account security',
 panel('staff','Staff access',
  '<div class="study-card"><h3>Individual account invitation</h3>'+
  field('Unique username','tw-username')+field('Staff name','tw-fullname')+
- choose('Delegated role','tw-role',[['scientist','Project scientist'],['nurse','Research nurse'],['technician','Lab technician'],['microbiology','Microbiology'],['pharmacy','MSS pharmacist'],['consultant','Consultant'],['pg','PG resident'],['monitor','CRA / monitor']])+
+ choose('Delegated role','tw-role',[['scientist','Project scientist'],['nurse','Research nurse'],['technician','Lab technician'],['microbiology','Microbiology'],['pharmacy','MSS pharmacist'],['consultant','Consultant'],['pg','PG resident'],['monitor','CRA / monitor'],['randomization_custodian','Independent allocation custodian (admin invitation only)']])+
  btn('Generate one-time staff activation','tw-invite-save')+
  '<div id="tw-invitation" class="status hide" style="white-space:pre-wrap"></div></div>'+
  '<div class="study-card"><h3>Bulk provision 1–15 staff</h3>'+
@@ -193,6 +193,17 @@ var perms={randomization:['pi','consultant','pharmacy','scientist','monitor','ra
 function setRole(){
  var r=$('currentRole').textContent.trim();
  for(const k of Object.keys(perms))$('btn'+k).classList.toggle('hide',!perms[k].includes(r));
+ if($('tw-role')){
+   const option=Array.from($('tw-role').options).find(o=>o.value==='randomization_custodian');
+   if(option)option.disabled=r!=='admin';
+ }
+ if(r==='randomization_custodian'){
+   for(const btn of menu.querySelectorAll('button')){
+     if(!['btnrandomization','btnsecurity'].includes(btn.id) && btn!==logoutBtn){
+       btn.classList.add('hide');
+     }
+   }
+ }
  for(const [id,roles] of [
   ['tw-screen-save',['pi','consultant','scientist']],['tw-checklist-save',['pi','consultant']],['tw-enroll-save',['pi']],
   ['tw-collect-save',['pi','consultant','scientist','nurse','technician','microbiology']],
@@ -720,6 +731,14 @@ $('tw-crf-entries').addEventListener('click',e=>{
 
 
 /* The study overview is grounded in persisted counts, never demo values. */
+const savedStudyLogin=login;
+login=async function(){
+ await savedStudyLogin();
+ if(!$('workspace').classList.contains('hide') &&
+    $('currentRole').textContent.trim()==='randomization_custodian'){
+    await tab('randomization');
+ }
+};
 const originalStudyDashboard=loadDashboard;
 loadDashboard=async function(){
  await originalStudyDashboard();
