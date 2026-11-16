@@ -788,12 +788,62 @@ $('tw-crf-entries').addEventListener('click',e=>{
 
 
 /* The study overview is grounded in persisted counts, never demo values. */
+let activeServerMode=null;
+async function refreshServerMode(){
+ const mode=await api('/api/system/mode');
+ activeServerMode=mode;
+ const live=mode.mode==='clinical'&&mode.clinical_registration_enabled===true;
+ const title=$('environmentStatus');
+ if(title)title.textContent=live?
+  'NIMS CMV Clinical EDC · authenticated research access':
+  mode.mode==='clinical'?'Clinical database · writes paused pending backup verification':
+  'SYNTHETIC STAGING · real clinical data not permitted';
+ if($('registrationHint'))$('registrationHint').textContent=live?
+  'Approved clinical database. Use the NIMS CR record and actual verified transplant details; consent and eligibility are recorded separately in Enrollment.':
+  mode.mode==='clinical'?
+    'Real registration is paused until encrypted backup and restore evidence are current. Do not submit entries.':
+    'Synthetic staging only. Do not type real patient names, hospital CRs or clinical identifiers. Use TEST- and Synthetic test records.';
+ if($('dashEnvironmentWarning'))$('dashEnvironmentWarning').textContent=live?
+  'Clinical database mode · verified live records. Source verification, randomization and independent CRF reviews remain mandatory.':
+  mode.mode==='clinical'?'Clinical write access temporarily paused: recovery verification overdue.':
+  'SYNTHETIC STAGING ONLY · figures below are test entries, not real trial recruitment.';
+ if($('saveRegistrationBtn'))$('saveRegistrationBtn').textContent=live?
+  'Save clinical registration':'Save synthetic test record';
+ if(!live){
+  if($('cr'))$('cr').placeholder='TEST-0001 only';
+  if($('patientName'))$('patientName').placeholder='Synthetic Example only';
+ }
+ document.title=live?'NIMS CMV Clinical EDC':'NIMS CMV Registry · Staging';
+ return mode;
+}
+const originalRegisterClinicalGuard=register;
+register=async function(){
+ // Client-side caution only; the server is the authoritative safety gate.
+ if(!activeServerMode){
+  show('msg','Confirm the server data-entry mode before submitting a patient.',true);
+  return;
+ }
+ if(!activeServerMode.clinical_registration_enabled&&
+    (!value('cr').toUpperCase().startsWith('TEST-')||
+     !value('patientName').toLowerCase().startsWith('synthetic'))){
+  show('msg','This is synthetic staging. Do not submit real patient identifiers; use the approved clinical database.',true);
+  return;
+ }
+ await originalRegisterClinicalGuard();
+};
 const savedStudyLogin=login;
 login=async function(){
  await savedStudyLogin();
- if(!$('workspace').classList.contains('hide') &&
-    $('currentRole').textContent.trim()==='randomization_custodian'){
-    await tab('randomization');
+ if(!$('workspace').classList.contains('hide')){
+  try{await refreshServerMode();}
+  catch(err){
+   activeServerMode=null;
+   show('msg','Unable to verify clinical database mode: registration is paused. '+err.message,true);
+   if($('saveRegistrationBtn'))$('saveRegistrationBtn').disabled=true;
+  }
+  if($('currentRole').textContent.trim()==='randomization_custodian'){
+   await tab('randomization');
+  }
  }
 };
 const originalStudyDashboard=loadDashboard;
