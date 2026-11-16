@@ -84,3 +84,17 @@ def startup_deficiencies(env=None,at=None):
 def release_enabled(env=None,at=None):
     env=os.environ if env is None else env
     return env.get("CLINICAL_DATA_ENABLED","false").lower()=="true" and not startup_deficiencies(env,at)
+
+
+def metadata_fingerprint(metadata):
+    """Stable structural fingerprint for the reviewed, one-time clinical baseline."""
+    import json
+    structure=[]
+    for table in sorted(metadata.tables.values(),key=lambda x:x.name):
+        structure.append({"table":table.name,"columns":[
+            {"name":column.name,"type":str(column.type),"nullable":column.nullable,
+             "primary_key":column.primary_key}
+            for column in table.columns
+        ]})
+    return hashlib.sha256(json.dumps(structure,sort_keys=True,
+                    separators=(",",":")).encode("utf-8")).hexdigest()
