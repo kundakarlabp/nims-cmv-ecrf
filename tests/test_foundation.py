@@ -379,3 +379,33 @@ def test_invitation_tokens_are_one_use_and_staff_choose_passwords():
         auth(technician,'researchtech','StrongTechnicianPassword123!')
         r=technician.get('/api/trial/staff/roles')
         assert r.status_code==200
+
+
+def test_totp_required_after_individual_enrollment():
+    import pyotp
+    with TestClient(app) as admin:
+        h=auth(admin)
+        setup=admin.post('/api/trial/staff/mfa-setup',headers=h)
+        assert setup.status_code==200,setup.text
+        secret=setup.json()['secret']
+        otp=pyotp.TOTP(secret).now()
+        confirm=admin.post('/api/trial/staff/mfa-confirm',headers=h,json={'otp':otp})
+        assert confirm.status_code==200,confirm.text
+    with TestClient(app) as new_session:
+        assert new_session.post('/api/login',json={
+            'username':'testadmin','password':'ThisIsALongTestingPassword123!'}).status_code==401
+        correct=new_session.post('/api/login',json={
+            'username':'testadmin','password':'ThisIsALongTestingPassword123!',
+            'otp':pyotp.TOTP(secret).now()})
+        assert correct.status_code==200,correct.text
+        assert correct.json()['mfa_enabled'] is True
+
+
+def test_user_lockout_after_five_failed_passwords():
+    with TestClient(app) as client:
+        for attempt in range(5):
+            assert client.post('/api/login',json={
+                'username':'testadmin','password':'definitely-incorrect'}).status_code==401
+        response=client.post('/api/login',json={
+            'username':'testadmin','password':'ThisIsALongTestingPassword123!'})
+        assert response.status_code==429,response.text
