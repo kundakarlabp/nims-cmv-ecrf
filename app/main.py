@@ -109,7 +109,7 @@ class EntryReview(Base):
     created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=now,nullable=False)
 
 # Register structured study models before the staging metadata is built.
-from .trial_models import TrialSubject, PCRRecord, DrugLot, DrugAuthorization, DrugDispense, DrugReturn, UserInvitation, LoginThrottle, UserTotp
+from .trial_models import TrialSubject, PCRRecord, DrugLot, DrugAuthorization, DrugDispense, DrugReturn, UserInvitation, LoginThrottle, UserTotp, StaffAccess
 
 app=FastAPI(title='NIMS Transplant Registry — staging foundation',docs_url=None,redoc_url=None)
 # Fail closed if someone enables real-patient mode without the independent go-live
@@ -156,6 +156,11 @@ def current(request:Request,s:Session=Depends(db)) -> AuthContext:
     if not active or active.expires_at.replace(tzinfo=UTC)<now(): raise HTTPException(401,'Session expired')
     user=s.get(User,active.user_id)
     if not user or not user.active: raise HTTPException(401,'Account disabled')
+    access=s.get(StaffAccess,user.id)
+    if access and access.expires_at.replace(tzinfo=UTC)<=now():
+        raise HTTPException(403,'Account access expired; contact the study administrator')
+    if CLINICAL_MODE and user.role not in {'admin','pi'} and not access:
+        raise HTTPException(403,'Named staff authorization required')
     if request.method not in ('GET','HEAD','OPTIONS'):
         supplied=request.headers.get('x-csrf-token','')
         if not supplied or not secrets.compare_digest(sha(supplied),active.csrf_hash):
@@ -208,6 +213,12 @@ def login(data:LoginInput,response:Response,s:Session=Depends(db)):
         password_ok=bool(u and u.active and PH.verify(u.password_hash,data.password))
     except (VerifyMismatchError,VerificationError):
         password_ok=False
+    if password_ok:
+        access=s.get(StaffAccess,u.id)
+        if access and access.expires_at.replace(tzinfo=UTC)<=now():
+            raise HTTPException(403,'90-day staff access expired; request renewal')
+        if CLINICAL_MODE and u.role not in {'admin','pi'} and not access:
+            raise HTTPException(403,'Staff access authorization required')
     mfa=s.get(UserTotp,u.id) if password_ok else None
     otp_ok=bool(password_ok and (not mfa or not mfa.enabled or
         (data.otp and pyotp.TOTP(mfa.secret).verify(data.otp,valid_window=1))))
