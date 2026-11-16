@@ -668,9 +668,23 @@ def overview(u:AuthContext=Depends(current),s:Session=Depends(db)):
         .group_by(TrialSubject.status)).all())
     pcr_counts=dict(s.execute(select(PCRRecord.status,func.count())
         .group_by(PCRRecord.status)).all())
+    scheduled=s.scalar(select(func.count(PCRRecord.id)).where(PCRRecord.attempt==1)) or 0
+    verified=s.scalar(select(func.count(PCRRecord.id)).where(
+        PCRRecord.attempt==1,PCRRecord.status=="verified")) or 0
+    total_enrolled=s.scalar(select(func.count(TrialSubject.id)).where(
+        TrialSubject.enrolled_on.is_not(None))) or 0
+    lot_balance=s.scalar(select(func.coalesce(func.sum(DrugLot.quantity_on_hand),0))) or 0
+    issued=s.scalar(select(func.coalesce(func.sum(DrugDispense.quantity_issued),0))) or 0
+    returned=s.scalar(select(func.coalesce(func.sum(DrugReturn.quantity_returned),0))) or 0
     return {"screened":s.scalar(select(func.count(TrialSubject.id))),
-        "enrolled":subject_counts.get("enrolled",0),"subject_status":subject_counts,
+        "enrolled":subject_counts.get("enrolled",0),
+        "ever_enrolled":total_enrolled,"subject_status":subject_counts,
         "pcr":pcr_counts,"protocol_pcr_per_subject":len(MONTHS),
+        "scheduled_pcr_slots":scheduled,"verified_protocol_pcr_slots":verified,
+        "pcr_completion_percent":round(verified*100/scheduled,1) if scheduled else 0,
+        "drug_accountability":{"tablets_in_stock":lot_balance,
+                               "tablets_issued":issued,"tablets_returned":returned,
+                               "tablets_not_yet_reconciled":issued-returned},
         "randomization":"external authorized system required",
         "data_mode":"synthetic_staging" if os.getenv("CLINICAL_DATA_ENABLED","false").lower()!="true"
             else "clinical_requested_not_validated"}
