@@ -561,7 +561,7 @@ async function loadCrfSchema(){
  currentCrfSchema=r.forms;
  fill('tw-crf-section',Object.entries(r.forms).map(([id,s])=>({id,title:s.title})),
      'id',x=>x.title);
- crfRender();await crfRestoreDraft();
+ crfRender();await populateCrfLinkedIdentifiers();await crfRestoreDraft();
 }
 async function loadCrfEntries(){
  const subject=n('tw-crf-subject');
@@ -584,11 +584,11 @@ async function loadCrfEntries(){
 }
 $('tw-crf-section').onchange=()=>{void task('tw-crf-status',async()=>{
  try{await crfSaveDraft();}catch(e){throw Error('Cannot change form with unsaved data: '+e.message);}
- crfRender();await crfRestoreDraft();await loadCrfEntries();
+ crfRender();await populateCrfLinkedIdentifiers();await crfRestoreDraft();await loadCrfEntries();
 });};
 $('tw-crf-subject').onchange=()=>{void task('tw-crf-status',async()=>{
  try{await crfSaveDraft();}catch(e){throw Error('Cannot change participant with unsaved data: '+e.message);}
- crfRender();await crfRestoreDraft();await loadCrfEntries();
+ crfRender();await populateCrfLinkedIdentifiers();await crfRestoreDraft();await loadCrfEntries();
 });};
 $('tw-crf-fields').addEventListener('input',crfScheduleSave);
 $('tw-crf-fields').addEventListener('change',crfScheduleSave);
@@ -700,5 +700,32 @@ loadDashboard=async function(){
   target.insertAdjacentHTML('afterbegin','<p class="dash-note">Clinical trial metrics unavailable: '+txt(err.message)+'</p>');
  }
 };
+
+
+async function populateCrfLinkedIdentifiers(){
+ if(!currentCrfSpec||!crfLoadedSubject)return;
+ let fieldName,values=[],render;
+ if(crfLoadedSection==='E_followup'){
+  fieldName='pcr_specimen_code';
+  const r=await api('/api/trial/subjects/'+crfLoadedSubject+'/pcr');
+  values=r.pcr_records||[];
+  render=x=>x.specimen_code+' · month '+x.scheduled_month+' · '+x.status;
+ }else if(crfLoadedSection==='D_adherence'){
+  fieldName='dispensing_slip_code';
+  const r=await api('/api/trial/subjects/'+crfLoadedSubject+'/pharmacy');
+  values=r.dispenses||[];
+  render=x=>x.slip_code+' · '+x.quantity_issued+' tablets issued';
+ }else return;
+ const previous=document.querySelector('#tw-crf-fields [data-crf-field="'+fieldName+'"]');
+ if(!previous)return;
+ const parent=previous.parentElement,initial=previous.value;
+ const select=document.createElement('select');
+ select.id=previous.id;select.setAttribute('data-crf-field',fieldName);
+ select.innerHTML='<option value="">No linked record / not yet collected</option>'+
+  values.map(x=>'<option value="'+txt(fieldName==='pcr_specimen_code'?x.specimen_code:x.slip_code)+'">'+
+      txt(render(x))+'</option>').join('');
+ parent.replaceChild(select,previous);
+ if(initial)select.value=initial;
+}
 
 })();
