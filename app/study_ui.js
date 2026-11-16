@@ -751,6 +751,7 @@ loadDashboard=async function(){
   const cards=[
    ['Screened',trial.screened,'Coded screening records'],
    ['Enrolled',trial.ever_enrolled,'Includes withdrawn/closed participants'],
+   ['Randomized',trial.randomized,'Irreversible sealed 1:1 allocations'],
    ['PCR scheduled',trial.scheduled_pcr_slots,'Seven protocol slots per enrolled subject'],
    ['PCR verified',trial.verified_protocol_pcr_slots,'Independent review completed'],
    ['Stock remaining',drug.tablets_in_stock,'450-mg tablets in study inventory'],
@@ -758,7 +759,7 @@ loadDashboard=async function(){
   ];
   const kpi='<div class="dash-kpis">'+cards.map((x,i)=>
     '<div class="dash-card dash-kpi"><span class="accent" style="background:'+
-    ['#405fe4','#27ba9c','#6e87bc','#2495aa','#ac8a37','#d77b42'][i]+'"></span>'+
+    ['#405fe4','#27ba9c','#7460d9','#6e87bc','#2495aa','#ac8a37','#d77b42'][i]+'"></span>'+
     '<span class="num">'+Number(x[1]||0).toLocaleString('en-IN')+'</span>'+
     '<div class="label">'+txt(x[0])+'</div><div class="explain">'+txt(x[2])+'</div></div>'
   ).join('')+'</div>';
