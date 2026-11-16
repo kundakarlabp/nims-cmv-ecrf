@@ -20,7 +20,7 @@ from .main import (
 )
 from .trial_models import (
     TrialSubject, PCRRecord, DrugLot, DrugAuthorization, DrugDispense,
-    DrugReturn, UserInvitation, LoginThrottle, UserTotp, StaffAccess, TrialEligibility
+    DrugReturn, UserInvitation, LoginThrottle, UserTotp, StaffAccess, TrialEligibility, TrialScreeningMeta
 )
 
 router=APIRouter(prefix="/api/trial",tags=["trial-workflows"])
@@ -102,6 +102,14 @@ class ScreeningIn(BaseModel):
     consent_version:str|None=Field(default=None,max_length=60)
     eligibility_attested:bool=False
     screening_note:str|None=Field(default=None,max_length=1000)
+    participant_initials:str|None=Field(default=None,max_length=20)
+    age_at_transplant:int|None=Field(default=None,ge=0,le=120)
+    sex_at_birth:Literal["female","male","other","not_recorded"]|None=None
+    donor_relationship:Literal["living_related","living_unrelated","deceased"]|None=None
+    pis_version:str|None=Field(default=None,max_length=80)
+    consent_language:Literal["English","Telugu","Hindi"]|None=None
+    consent_obtained_by:str|None=Field(default=None,max_length=150)
+    signed_consent_source_ref:str|None=Field(default=None,max_length=120)
 
 @router.post("/screening")
 def screen(data:ScreeningIn,u:AuthContext=Depends(current),s:Session=Depends(db)):
@@ -111,6 +119,15 @@ def screen(data:ScreeningIn,u:AuthContext=Depends(current),s:Session=Depends(db)
         raise HTTPException(422,"Consent date cannot be in the future")
     if bool(data.consent_on)!=bool(data.consent_version):
         raise HTTPException(422,"Document signed consent date and version together")
+    if data.donor_relationship:
+        if (data.donor_relationship=="deceased")!=(data.donor_type=="deceased"):
+            raise HTTPException(422,"Donor relationship conflicts with living/deceased stratum")
+    if os.getenv("CLINICAL_DATA_ENABLED","false").lower()=="true":
+        must=(data.participant_initials,data.age_at_transplant,data.sex_at_birth,
+              data.donor_relationship,data.pis_version,data.consent_language,
+              data.consent_obtained_by,data.signed_consent_source_ref)
+        if any(x is None or x=="" for x in must):
+            raise HTTPException(422,"Complete CRF A source and consent metadata before clinical screening")
     t=TrialSubject(patient_id=p.id,screening_on=data.screening_on,
         donor_cmv_igg=data.donor_cmv_igg,recipient_cmv_igg=data.recipient_cmv_igg,
         donor_type=data.donor_type,ratg_induction=data.ratg_induction,
@@ -120,12 +137,29 @@ def screen(data:ScreeningIn,u:AuthContext=Depends(current),s:Session=Depends(db)
     try:
         s.add(t);s.flush()
         t.screening_code=f"NCMV-S-{t.id:05d}"
+        s.add(TrialScreeningMeta(
+            subject_id=t.id,participant_initials=data.participant_initials,
+            age_at_transplant=data.age_at_transplant,sex_at_birth=data.sex_at_birth,
+            donor_relationship=data.donor_relationship,pis_version=data.pis_version,
+            icf_version=data.consent_version,consent_language=data.consent_language,
+            consent_obtained_by=data.consent_obtained_by,
+            signed_consent_source_ref=data.signed_consent_source_ref))
         audit(s,u,"screen","trial_subject",str(t.id),p.id,None,
              subject_view(t),"Recorded screening; not enrollment or randomization")
         s.commit()
     except IntegrityError:
         s.rollback();raise HTTPException(409,"Subject already screened")
     return subject_view(t)
+
+
+@router.get("/subjects/{subject_id}/restricted-screening")
+def restricted_screening(subject_id:int,u:AuthContext=Depends(current),s:Session=Depends(db)):
+    role(u,{"pi","consultant","scientist"})
+    t=find_subject(s,subject_id)
+    meta=s.get(TrialScreeningMeta,t.id)
+    return {"screening_code":t.screening_code,
+        "restricted":as_dict(meta) if meta else None,
+        "scope":"Restricted source-link metadata; never show in monitoring or lab pharmacy views"}
 
 @router.get("/subjects")
 def subjects(q:str="",limit:int=50,u:AuthContext=Depends(current),s:Session=Depends(db)):
