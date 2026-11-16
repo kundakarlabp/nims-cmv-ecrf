@@ -943,3 +943,25 @@ def test_sequence_import_rejects_tampering_and_invalid_block(monkeypatch):
             headers=h,json=noattest).status_code==422
         ready=custodian.get('/api/trial/randomization/readiness').json()
         assert ready['sequence_locked'] is False and ready['planned_randomizations']==0
+
+
+def test_pi_cannot_impersonate_independent_sequence_custodian():
+    with TestClient(app) as admin:
+        h=auth(admin)
+        assert admin.post('/api/users',headers=h,json={
+            'username':'custodianboundarypi','display_name':'Synthetic PI for role boundary',
+            'role':'pi','password':'CustodianRoleBoundaryPI123!'}).status_code==200
+    with TestClient(app) as pi:
+        h=auth(pi,'custodianboundarypi','CustodianRoleBoundaryPI123!')
+        user=pi.post('/api/users',headers=h,json={
+            'username':'forbiddenlegacycustodian','display_name':'Synthetic invalid custodian',
+            'role':'randomization_custodian','password':'LongCustodianInvalid123!'})
+        assert user.status_code==403
+        invited=pi.post('/api/trial/staff/invite',headers=h,json={
+            'username':'forbiddencustodian','display_name':'Synthetic invalid custodian',
+            'role':'randomization_custodian'})
+        assert invited.status_code==403
+        batch=pi.post('/api/trial/staff/invite-batch',headers=h,json={'staff':[{
+            'username':'forbiddenbatchcustodian','display_name':'Synthetic invalid custodian',
+            'role':'randomization_custodian'}]})
+        assert batch.status_code==403
