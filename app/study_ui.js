@@ -399,6 +399,7 @@ $('tw-change-password').onclick=()=>{void task('tw-mfa-status',async()=>{
 
 /* Source-aligned CRF forms with private, revision-checked server drafts. */
 let currentCrfSchema=null,currentCrfSpec=null,currentCrfEntry=null;
+let crfLoadedSection=null,crfLoadedSubject=null;
 let crfDraftRevision=null,crfDraftKey=null,crfDraftLast=null,crfDraftTimer=null,crfDraftQueue=Promise.resolve();
 const crfEditable={
  C_baseline:['pi','consultant','scientist'],
@@ -412,7 +413,7 @@ const crfEditable={
  K_resource_cost:['pi','scientist','pharmacy'],
  L_final_status:['pi','consultant','scientist']
 };
-const crfCanEdit=()=>crfEditable[value('tw-crf-section')]?.includes($('currentRole').textContent.trim());
+const crfCanEdit=()=>crfEditable[crfLoadedSection||value('tw-crf-section')]?.includes($('currentRole').textContent.trim());
 const crfKey=()=>{
  if(!currentCrfSpec)return 'NEW';
  if(currentCrfSpec.repeat==='single')return 'MAIN';
@@ -448,7 +449,7 @@ function crfSetValues(payload){
  }
 }
 function crfCurrentData(){
- if(!n('tw-crf-subject')||!value('tw-crf-section'))throw Error('Select subject and CRF section');
+ if(!(crfLoadedSubject||n('tw-crf-subject'))||!(crfLoadedSection||value('tw-crf-section')))throw Error('Select subject and CRF section');
  if(!value('tw-crf-date'))throw Error('Event date required');
  return {occurred_on:value('tw-crf-date'),payload:crfValues(),occurrence_key:crfKey()};
 }
@@ -457,8 +458,9 @@ async function crfSaveDraft(){
  if(!crfCanEdit())return;
  const snapshot=crfCurrentData();
  const body=JSON.stringify(snapshot);
- if(body===crfDraftLast)return;
- const subjectId=n('tw-crf-subject'),section=value('tw-crf-section'),key=snapshot.occurrence_key;
+ if(body===crfDraftLast||(!Object.keys(snapshot.payload).length&&crfDraftRevision===null))return;
+ const subjectId=crfLoadedSubject||n('tw-crf-subject');
+ const section=crfLoadedSection||value('tw-crf-section'),key=snapshot.occurrence_key;
  const endpoint='/api/trial/crf/subjects/'+subjectId+'/drafts/'+encodeURIComponent(section);
  crfDraftQueue=crfDraftQueue.catch(()=>{}).then(async()=>{
   const r=await api(endpoint,{method:'PUT',
@@ -475,7 +477,10 @@ async function crfSaveDraft(){
 async function crfRestoreDraft(){
  clearTimeout(crfDraftTimer);
  crfDraftRevision=null;crfDraftKey=null;crfDraftLast=null;
+ const savedMonth=currentCrfSpec?.repeat==='month' ?
+    document.querySelector('#tw-crf-fields [data-crf-field="scheduled_month"]')?.value:null;
  crfSetValues({});
+ if(savedMonth){const control=document.querySelector('#tw-crf-fields [data-crf-field="scheduled_month"]');if(control)control.value=savedMonth;}
  $('tw-crf-date').value=today();
  if(!crfCanEdit()){$('tw-crf-draft-status').textContent='Read-only review access';return;}
  if(!n('tw-crf-subject')||!value('tw-crf-section'))return;
@@ -501,6 +506,7 @@ function crfScheduleSave(){
 }
 function crfRender(){
  currentCrfSpec=currentCrfSchema?.[value('tw-crf-section')]||null;
+ crfLoadedSection=value('tw-crf-section');crfLoadedSubject=n('tw-crf-subject');
  currentCrfEntry=null;
  $('tw-crf-descriptor').textContent=currentCrfSpec?
   currentCrfSpec.title+' · '+currentCrfSpec.repeat+' · CRF v3.0 (14 August 2026)':
@@ -547,7 +553,9 @@ async function loadCrfEntries(){
    '</td><td>'+x.revision+'</td><td>'+
    (crfEditable[x.section]?.includes($('currentRole').textContent.trim())?
     '<button class="secondary" data-crf-edit="'+x.id+'">Edit</button> ':'')+
-   (x.review_status==='pending'&&x.updated_by!==undefined?
+   (x.review_status==='pending'&&x.updated_by!==undefined&&
+    ['pi','consultant','scientist','monitor'].includes($('currentRole').textContent.trim())&&
+    x.updated_by!==$('currentUserId')?.value?
     '<button data-crf-review="'+x.id+'">Review</button>':'')+'</td></tr>').join('')+
   '</tbody></table></div>';
  $('tw-crf-entries')._records=records;
