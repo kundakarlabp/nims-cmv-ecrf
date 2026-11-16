@@ -180,7 +180,9 @@ def review_state(s:Session,e:Entry):
 class LoginInput(BaseModel):
     username:str=Field(min_length=2,max_length=100)
     password:str=Field(min_length=1,max_length=200)
-    otp:str|None=Field(default=None,min_length=6,max_length=6,pattern=r'^\d{6}
+    otp:str|None=Field(default=None,min_length=6,max_length=6,pattern=r'^[0-9]{6}$')
+
+@app.get('/')
 def home(): return FileResponse(Path(__file__).parent/'ui.html')
 @app.get('/study_ui.js')
 def study_script(): return FileResponse(Path(__file__).parent/'study_ui.js',media_type='application/javascript')
