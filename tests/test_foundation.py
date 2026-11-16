@@ -638,3 +638,92 @@ def test_crf_pcr_month_link_rejects_wrong_subject_and_unapproved_results():
           headers=h,json={'section':'E_followup','occurred_on':'2026-11-01',
             'payload':{'scheduled_month':'1','actual_visit_on':'2026-11-01'}})
         assert good.status_code==200,good.text
+
+
+def test_staff_expiration_enforced_on_active_sessions_and_login():
+    from app.main import SessionLocal, User
+    from app.trial_models import StaffAccess
+    from app.main import now
+    from datetime import timedelta
+    from sqlalchemy import select
+    with TestClient(app) as admin:
+        h=auth(admin)
+        invitation=admin.post('/api/trial/staff/invite',headers=h,json={
+            'username':'expiringcmvstaff','display_name':'Synthetic expiring staff',
+            'role':'nurse'})
+        assert invitation.status_code==200,invitation.text
+        activation=admin.post('/api/trial/staff/activate',json={
+            'token':invitation.json()['activation_token'],
+            'password':'LongStaffPasswordFor90Days123!'})
+        assert activation.status_code==200,activation.text
+    with TestClient(app) as nurse:
+        h=auth(nurse,'expiringcmvstaff','LongStaffPasswordFor90Days123!')
+        assert nurse.get('/api/me').status_code==200
+        with SessionLocal() as s:
+            user=s.scalar(select(User).where(User.username=='expiringcmvstaff'))
+            record=s.get(StaffAccess,user.id)
+            record.expires_at=now()-timedelta(hours=1)
+            s.commit()
+        assert nurse.get('/api/me').status_code==403
+    with TestClient(app) as nurse2:
+        assert nurse2.post('/api/login',json={'username':'expiringcmvstaff',
+            'password':'LongStaffPasswordFor90Days123!'}).status_code==403
+
+
+def test_user_self_service_password_change_revokes_session():
+    with TestClient(app) as admin:
+        h=auth(admin)
+        invite=admin.post('/api/trial/staff/invite',headers=h,json={
+            'username':'cmvpasswordchange','display_name':'Synthetic password changer',
+            'role':'scientist'})
+        assert invite.status_code==200,invite.text
+        assert admin.post('/api/trial/staff/activate',json={
+            'token':invite.json()['activation_token'],
+            'password':'OldUniquePasswordLong123!'}).status_code==200
+    with TestClient(app) as scientist:
+        h=auth(scientist,'cmvpasswordchange','OldUniquePasswordLong123!')
+        result=scientist.post('/api/trial/staff/change-password',headers=h,json={
+            'old_password':'OldUniquePasswordLong123!',
+            'new_password':'NewUniquePasswordLong123!'})
+        assert result.status_code==200,result.text
+        assert scientist.get('/api/me').status_code==401
+        assert scientist.post('/api/login',json={
+            'username':'cmvpasswordchange','password':'OldUniquePasswordLong123!'}).status_code==401
+        assert scientist.post('/api/login',json={
+            'username':'cmvpasswordchange','password':'NewUniquePasswordLong123!'}).status_code==200
+
+
+def test_screening_source_metadata_restricted_and_donor_relationship_checked():
+    with TestClient(app) as admin:
+        h=auth(admin)
+        p=admin.post('/api/patients',headers=h,json={
+            'name':'Synthetic source-check patient','cr_number':'TEST-SOURCE-CHECK',
+            'transplant_date':'2026-10-01'})
+        assert p.status_code==200
+        pid=p.json()['id']
+        for username,role in [('sourcescientist','scientist'),('sourcemonitor','monitor')]:
+            assert admin.post('/api/users',headers=h,json={
+                'username':username,'display_name':'Synthetic '+role,
+                'role':role,'password':'SyntheticSourcePassword123!'}).status_code==200
+    with TestClient(app) as scientist:
+        h=auth(scientist,'sourcescientist','SyntheticSourcePassword123!')
+        base={'patient_id':pid,'screening_on':'2026-10-02',
+              'donor_cmv_igg':'positive','recipient_cmv_igg':'positive',
+              'donor_type':'living','ratg_induction':False}
+        assert scientist.post('/api/trial/screening',headers=h,
+            json=dict(base,donor_relationship='deceased')).status_code==422
+        r=scientist.post('/api/trial/screening',headers=h,
+            json=dict(base,donor_relationship='living_related',
+                age_at_transplant=52,sex_at_birth='female',
+                participant_initials='TT',pis_version='PIS-v3',
+                consent_on='2026-10-02',consent_version='ICF-v3',
+                consent_language='Telugu',consent_obtained_by='delegated scientist',
+                signed_consent_source_ref='TEST-CONSENT-SOURCE'))
+        assert r.status_code==200,r.text
+        sid=r.json()['id']
+        details=scientist.get(f'/api/trial/subjects/{sid}/restricted-screening')
+        assert details.status_code==200
+        assert details.json()['restricted']['pis_version']=='PIS-v3'
+    with TestClient(app) as monitor:
+        h=auth(monitor,'sourcemonitor','SyntheticSourcePassword123!')
+        assert monitor.get(f'/api/trial/subjects/{sid}/restricted-screening').status_code==403
