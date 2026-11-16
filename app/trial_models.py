@@ -5,7 +5,7 @@ versioned migrations, or clinical go-live approval.
 """
 from datetime import date, datetime
 from sqlalchemy import (String, Integer, Date, DateTime, ForeignKey, UniqueConstraint,
-                        Float, Text, CheckConstraint)
+                        Float, Text, CheckConstraint, JSON)
 from sqlalchemy.orm import Mapped, mapped_column
 from .main import Base, now
 
@@ -143,3 +143,14 @@ class StaffAccess(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     renewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     renewed_by: Mapped[str | None] = mapped_column(ForeignKey("users.id"))
+
+class TrialEligibility(Base):
+    """Signed, attributed pre-randomization checklist from protocol v5/CRF v3."""
+    __tablename__ = "trial_eligibility"
+    subject_id: Mapped[int] = mapped_column(ForeignKey("trial_subjects.id"), primary_key=True)
+    inclusion: Mapped[dict] = mapped_column(JSON, nullable=False)
+    exclusion: Mapped[dict] = mapped_column(JSON, nullable=False)
+    baseline: Mapped[dict] = mapped_column(JSON, nullable=False)
+    reviewed_by: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
+    reviewed_on: Mapped[date] = mapped_column(Date, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, nullable=False)
