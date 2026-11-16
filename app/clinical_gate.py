@@ -77,7 +77,11 @@ def startup_deficiencies(env=None,at=None):
     if not backup_fresh(env,at):issues.append("encrypted_offsite_backup_not_verified")
     if not restore_verified(env,at):issues.append("recent_isolated_restore_not_verified")
     keyfile=env.get("RANDOMIZATION_FERNET_KEY_FILE","")
-    if not keyfile or not Path(keyfile).is_file():
+    try:
+        from cryptography.fernet import Fernet
+        key=Path(keyfile).read_bytes().strip() if keyfile else b""
+        Fernet(key)  # Validates usable sealed-allocation encryption key.
+    except (OSError,TypeError,ValueError):
         issues.append("independent_allocation_key_not_configured")
     return issues
 
