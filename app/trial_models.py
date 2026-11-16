@@ -212,6 +212,7 @@ class RandomizationPlan(Base):
     """Externally prepared, permanently locked sequence metadata."""
     __tablename__="trial_randomization_plans"
     id: Mapped[int] = mapped_column(Integer,primary_key=True,autoincrement=True)
+    singleton: Mapped[int] = mapped_column(Integer,nullable=False,unique=True,default=1)
     protocol_version: Mapped[str] = mapped_column(String(40),nullable=False)
     statistician_reference: Mapped[str] = mapped_column(String(160),nullable=False)
     signed_specification_reference: Mapped[str] = mapped_column(String(160),nullable=False)
