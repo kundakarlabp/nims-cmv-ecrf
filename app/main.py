@@ -272,6 +272,8 @@ class NewUser(BaseModel):
 def create_user(data:NewUser,u:AuthContext=Depends(current),s:Session=Depends(db)):
     if u.role not in ('admin','pi'): raise HTTPException(403)
     if data.role not in ROLES: raise HTTPException(422,'Unknown role')
+    if data.role in {'pi','admin','randomization_custodian'} and u.role!='admin':
+        raise HTTPException(403,'Only administrator can delegate privileged access')
     if CLINICAL_MODE:
         raise HTTPException(403,'Use named invitations rather than administrator-selected credentials')
     obj=User(username=data.username,display_name=data.display_name,role=data.role,password_hash=PH.hash(data.password))
