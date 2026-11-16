@@ -1073,3 +1073,18 @@ def test_bulk_staff_accepts_capitalized_names_and_checks_collisions():
             {'username':'NurseAlpha','display_name':'Nurse Alpha','role':'nurse'},
             {'username':'nursealpha','display_name':'Nurse Alpha','role':'nurse'}]})
         assert dupe.status_code==422
+
+
+def test_server_reports_synthetic_mode_and_blocks_real_patient_data():
+    with TestClient(app) as c:
+        h=auth(c)
+        mode=c.get('/api/system/mode')
+        assert mode.status_code==200
+        status=mode.json()
+        assert status['mode']=='synthetic'
+        assert status['clinical_registration_enabled'] is False
+        assert status['institutional_release_required'] is True
+        real=c.post('/api/patients',headers=h,json={
+            'cr_number':'REAL-CR-NOT-ALLOWED',
+            'name':'Not A Synthetic Test Subject'})
+        assert real.status_code==403
