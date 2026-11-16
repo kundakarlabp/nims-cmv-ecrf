@@ -282,7 +282,13 @@ def create_patient(data:PatientIn,u:AuthContext=Depends(current),s:Session=Depen
 def patients(q:str='',limit:int=50,u:AuthContext=Depends(current),s:Session=Depends(db)):
     limit=min(max(limit,1),100)
     st=select(Patient)
-    if q.strip(): st=st.where(Patient.name.ilike('%'+q.strip()+'%')|Patient.cr_number.ilike('%'+q.strip()+'%')|Patient.study_id.ilike('%'+q.strip()+'%'))
+    if q.strip():
+        if u.role in {'microbiology','pharmacy','technician','monitor'}:
+            st=st.where(Patient.study_id.ilike('%'+q.strip()+'%'))
+        else:
+            st=st.where(Patient.name.ilike('%'+q.strip()+'%') |
+                Patient.cr_number.ilike('%'+q.strip()+'%') |
+                Patient.study_id.ilike('%'+q.strip()+'%'))
     ps=s.scalars(st.order_by(Patient.created_at.desc()).limit(limit)).all()
     restricted=u.role in {'microbiology','pharmacy','technician','monitor'}
     return [{'id':p.id,'cr_number':None if restricted else p.cr_number,
@@ -297,7 +303,7 @@ def patient(patient_id:str,u:AuthContext=Depends(current),s:Session=Depends(db))
     if u.role in {'microbiology','pharmacy','technician','monitor'}:
         data.pop('name',None);data.pop('cr_number',None)
         # Lab, pharmacy and external monitors never receive unrelated clinical entry payloads.
-        permitted={'lab','pharmacy'} if u.role in {'microbiology','pharmacy','technician'} else set()
+        permitted={'lab'} if u.role in {'microbiology','technician'} else ({'pharmacy'} if u.role=='pharmacy' else set())
         es=[e for e in es if e.kind in permitted]
     return {'patient':data,'entries':[dict(as_dict(e),review_status=review_state(s,e)) for e in es]}
 class EntryIn(BaseModel):
@@ -397,6 +403,11 @@ def delete_draft(patient_id:str,kind:DRAFT_KINDS,expected_revision:int,
 def audit_history(patient_id:str,u:AuthContext=Depends(current),s:Session=Depends(db)):
     if u.role not in {'admin','pi','consultant','monitor','scientist'}: raise HTTPException(403)
     rows=s.scalars(select(Audit).where(Audit.patient_id==patient_id).order_by(Audit.created_at.desc()).limit(500)).all()
+    if u.role=='monitor':
+        # No identity-bearing old/new JSON snapshots in the blinded monitor view.
+        return [{'id':x.id,'actor_id':x.actor_id,'action':x.action,
+                 'entity_type':x.entity_type,'created_at':x.created_at}
+                for x in rows]
     return [as_dict(x) for x in rows]
 
 @app.get('/api/dashboard')
