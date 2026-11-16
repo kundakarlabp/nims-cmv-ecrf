@@ -10,7 +10,7 @@ TEST_DB="${2:-nims_restorecheck}"
 [[ "$BACKUP_REMOTE" == ecrfcrypt:* ]] || { echo 'Encrypted remote required' >&2; exit 3; }
 [[ "$1" =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || { echo 'Invalid backup timestamp' >&2; exit 3; }
 [[ "$TEST_DB" =~ ^[a-z][a-z0-9_]{4,49}$ ]] || { echo 'Invalid test database name' >&2; exit 3; }
-[[ "$TEST_DB" != nims_ecrf ]] || { echo 'Refusing production DB overwrite' >&2; exit 3; }
+[[ "$TEST_DB" != nims_ecrf && "$TEST_DB" != nims_cmv_clinical ]] || { echo 'Refusing staging or clinical DB overwrite' >&2; exit 3; }
 umask 077
 TMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TMP_DIR"' EXIT
@@ -38,4 +38,14 @@ docker compose exec -T -e TARGET_DB="$TEST_DB" db sh -ec '
     pg_restore -U "$POSTGRES_USER" -d "$TARGET_DB" --no-owner --no-acl "$TEMP_DUMP"
     psql -U "$POSTGRES_USER" -d "$TARGET_DB" -tAc "SELECT count(*) FROM audit_events;"
 '
-echo "Restore verification completed; disposable DB $TEST_DB removed."
+# Record proof only after pg_restore, audit-table check, and isolated DB cleanup.
+# Evidence is cryptographically tied to the decrypted archive digest; it is
+# NOT a substitute for independent review of restored patient/CRF records.
+digest=$(sha256sum "$TMP_DIR/$ARCHIVE" | awk '{print $1}')
+state_dir="${BACKUP_STATUS_DIR:-$PWD/.backup-state}"
+install -d -m 700 "$state_dir"
+pending=$(mktemp "$state_dir/.restore.XXXXXXXX")
+printf '%s %s %s\n' "$(date -u +%Y%m%dT%H%M%SZ)" "$digest" "$BACKUP_REMOTE/$ARCHIVE" > "$pending"
+chmod 600 "$pending"
+mv -f "$pending" "$state_dir/last_restore"
+echo "Isolated restore verification completed and recorded; disposable DB $TEST_DB removed."
