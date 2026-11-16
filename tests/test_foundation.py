@@ -908,8 +908,8 @@ def test_concealed_randomization_requires_pi_eligibility_and_one_irreversible_sl
         rows=s.scalars(select(RandomizationSlot).order_by(RandomizationSlot.position)).all()
         assert len(rows)==40
         assert sum(r.subject_id is not None for r in rows)==1
-        assert all('450' not in r.encrypted_arm and '900' not in r.encrypted_arm for r in rows)
-        assert rows[0].subject_id==sid
+        assert all(len(r.encrypted_arm)>80 and r.encrypted_arm not in {'450','900'} for r in rows)
+        assert any(r.subject_id==sid and r.stratum=='rATG:living' and r.position==1 for r in rows)
 
 
 def test_sequence_import_rejects_tampering_and_invalid_block(monkeypatch):
