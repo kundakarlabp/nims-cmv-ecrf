@@ -421,8 +421,17 @@ def dose_preview(data:DoseInput,u:AuthContext=Depends(current)):
     except ValueError: raise HTTPException(422,'Invalid calculation inputs')
 @app.get('/api/due')
 def due(u:AuthContext=Depends(current),s:Session=Depends(db)):
-    today=date.today(); records=[]
-    for p in s.scalars(select(Patient).where(Patient.transplant_date!=None)).all():
+    # Current staging schedule uses the transplant date ONLY as a placeholder.
+    # Final protocol worklists must anchor to verified enrollment/randomization date.
+    from zoneinfo import ZoneInfo
+    today=datetime.now(ZoneInfo('Asia/Kolkata')).date()
+    records=[]
+    completed=set()
+    for visit in s.scalars(select(Entry).where(Entry.kind=='visit')).all():
+        if visit.payload.get('visit_complete') is True:
+            try: completed.add((visit.patient_id,int(visit.payload.get('scheduled_month'))))
+            except (ValueError,TypeError): continue
+    for p in s.scalars(select(Patient).where(Patient.transplant_date.is_not(None))).all():
         # Calendar month target dates; windows require investigator approval.
         from calendar import monthrange
         for month in (1,2,3,4,6,9,12):
@@ -430,8 +439,10 @@ def due(u:AuthContext=Depends(current),s:Session=Depends(db)):
             m=(p.transplant_date.month-1+month)%12+1
             day=min(p.transplant_date.day,monthrange(y,m)[1]); target=date(y,m,day)
             if (target-today).days in range(-30,15):
-                visits=s.scalars(select(Entry).where(Entry.patient_id==p.id,Entry.kind=='visit')).all()
-                if not any(v.payload.get('scheduled_month')==month and v.payload.get('visit_complete') for v in visits):
-                    records.append({'patient_id':p.id,'cr_number':p.cr_number,'scheduled_month':month,'target_date':target.isoformat(),'days_until':(target-today).days})
+                if (p.id,month) not in completed:
+                    records.append({'patient_id':p.id,'cr_number':p.cr_number,
+                        'scheduled_month':month,'target_date':target.isoformat(),
+                        'days_until':(target-today).days,'date_basis':'transplant_date_placeholder',
+                        'warning':'Do not use for clinical visit scheduling; verify enrolled-date anchor and approved windows.'})
     return sorted(records,key=lambda x:x['days_until'])
 
