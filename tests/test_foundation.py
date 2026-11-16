@@ -264,7 +264,7 @@ def test_screening_pi_enrollment_seven_pcr_codes_and_eligibility():
         assert enrollment.json()['pcr_orders']==7
         subject=enrollment.json()['subject']
         assert subject['study_code'].startswith('NCMV-')
-        assert subject['randomization_status']=='EXTERNAL_VERIFICATION_REQUIRED'
+        assert subject['randomization_status']=='SEE_RESTRICTED_ALLOCATION_MODULE'
         samples=pi.get(f'/api/trial/subjects/{subject_id}/pcr')
         assert samples.status_code==200
         rows=samples.json()['pcr_records']
