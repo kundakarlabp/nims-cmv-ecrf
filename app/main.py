@@ -109,7 +109,7 @@ class EntryReview(Base):
     created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=now,nullable=False)
 
 # Register structured study models before the staging metadata is built.
-from .trial_models import TrialSubject, PCRRecord, DrugLot, DrugAuthorization, DrugDispense, DrugReturn, UserInvitation, LoginThrottle, UserTotp, StaffAccess, TrialEligibility, TrialCRFEntry, TrialCRFDraft, TrialCRFReview, TrialScreeningMeta
+from .trial_models import TrialSubject, PCRRecord, DrugLot, DrugAuthorization, DrugDispense, DrugReturn, UserInvitation, LoginThrottle, UserTotp, StaffAccess, TrialEligibility, TrialCRFEntry, TrialCRFDraft, TrialCRFReview, TrialScreeningMeta, RandomizationPlan, RandomizationSlot
 
 app=FastAPI(title='NIMS Transplant Registry — staging foundation',docs_url=None,redoc_url=None)
 # Fail closed if someone enables real-patient mode without the independent go-live
@@ -123,7 +123,7 @@ if CLINICAL_MODE:
 else:
     Base.metadata.create_all(bind=ENGINE)  # Synthetic staging only
 
-ROLES={'pi','admin','consultant','pg','scientist','nurse','technician','microbiology','pharmacy','monitor'}
+ROLES={'pi','admin','consultant','pg','scientist','nurse','technician','microbiology','pharmacy','monitor','randomization_custodian'}
 WRITE_ROLES={
  'admission':{'pi','consultant','pg','scientist','nurse'},
  'visit':{'pi','consultant','pg','scientist','nurse'},
