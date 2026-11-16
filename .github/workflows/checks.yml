@@ -62,6 +62,7 @@ jobs:
           Path('/tmp/nims-cmv-inline.js').write_text(parser.scripts[0])
           PY
           node --check /tmp/nims-cmv-inline.js
+          node --check app/study_ui.js
       - run: bash -n ops/*.sh
   containers:
     runs-on: ubuntu-latest
