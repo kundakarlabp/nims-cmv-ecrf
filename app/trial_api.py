@@ -12,15 +12,15 @@ import secrets
 import pyotp
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, model_validator
-from sqlalchemy import select, func, update
+from sqlalchemy import select, func, update, delete
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from .main import (
-    Patient, User, AuthContext, current, db, audit, as_dict, now, sha, PH, ROLES
+    Patient, User, LoginSession, AuthContext, current, db, audit, as_dict, now, sha, PH, ROLES
 )
 from .trial_models import (
     TrialSubject, PCRRecord, DrugLot, DrugAuthorization, DrugDispense,
-    DrugReturn, UserInvitation, LoginThrottle, UserTotp
+    DrugReturn, UserInvitation, LoginThrottle, UserTotp, StaffAccess
 )
 
 router=APIRouter(prefix="/api/trial",tags=["trial-workflows"])
@@ -502,7 +502,7 @@ def invite_user(data:InviteIn,u:AuthContext=Depends(current),s:Session=Depends(d
     s.add(user)
     s.flush()  # Generate the DB identity before binding the one-time invitation.
     invitation=UserInvitation(user_id=user.id,token_sha256=sha(token),
-        created_by=u.user_id,expires_at=now()+timedelta(hours=48))
+        created_by=u.user_id,expires_at=now()+timedelta(days=7))
     s.add(invitation)
     try:
         s.commit()
@@ -510,7 +510,7 @@ def invite_user(data:InviteIn,u:AuthContext=Depends(current),s:Session=Depends(d
         s.rollback();raise HTTPException(409,"Username already exists")
     # Secret only returned once over TLS to authenticated inviter, never persisted as plaintext.
     return {"username":user.username,"role":user.role,"activation_token":token,
-        "expires_in_hours":48,
+        "expires_in_days":7,
         "instruction":"Give this one-time token privately to the named staff member. They set their own password. No shared accounts."}
 
 class ActivateIn(BaseModel):
@@ -525,9 +525,12 @@ def activate(data:ActivateIn,s:Session=Depends(db)):
     user=s.get(User,invite.user_id)
     if not user or user.active:raise HTTPException(400,"Account already active")
     user.password_hash=PH.hash(data.password);user.active=True;invite.redeemed_at=now()
+    access=StaffAccess(user_id=user.id,activated_at=now(),
+        expires_at=now()+timedelta(days=90))
+    s.add(access)
     s.commit()
-    return {"ok":True,"username":user.username,
-            "notice":"Separate MFA enrollment and NIMS account approval are required before clinical production"}
+    return {"ok":True,"username":user.username,"access_expires_at":access.expires_at,
+            "notice":"90-day named account activated. Authenticator enrollment required before clinical use."}
 
 @router.get("/staff/roles")
 def roles(u:AuthContext=Depends(current)):
@@ -593,3 +596,99 @@ def mfa_confirm(data:MfaConfirmIn,u:AuthContext=Depends(current),s:Session=Depen
         "Account owner confirmed authenticator enrollment")
     s.commit()
     return {"mfa_enabled":True,"notice":"Authenticator code is required at subsequent logins"}
+
+
+# Named credentials remain valid for 90 days after activation. The seven-day
+# onboarding token is single-use and NOT a temporary account/password.
+@router.get("/staff/accounts")
+def staff_accounts(u:AuthContext=Depends(current),s:Session=Depends(db)):
+    role(u,MANAGERS)
+    rows=s.execute(select(User,StaffAccess,UserTotp)
+        .outerjoin(StaffAccess,StaffAccess.user_id==User.id)
+        .outerjoin(UserTotp,UserTotp.user_id==User.id)
+        .order_by(User.created_at.desc())).all()
+    return [{"id":usr.id,"username":usr.username,"display_name":usr.display_name,
+        "role":usr.role,"active":usr.active,
+        "access_expires_at":access.expires_at if access else None,
+        "mfa_enabled":bool(totp and totp.enabled),
+        "requires_activation":not usr.active} for usr,access,totp in rows]
+
+class RenewAccessIn(BaseModel):
+    reason:str=Field(min_length=8,max_length=500)
+    days:Literal[90]=90
+
+@router.post("/staff/accounts/{user_id}/renew")
+def renew_staff(user_id:str,data:RenewAccessIn,u:AuthContext=Depends(current),
+                s:Session=Depends(db)):
+    role(u,MANAGERS)
+    user=s.get(User,user_id)
+    if not user:raise HTTPException(404,"Staff account not found")
+    if user.role in {"admin","pi"} and u.role!="admin":
+        raise HTTPException(403,"Only IT administrator can renew privileged users")
+    if not user.active:raise HTTPException(409,"Revoked/inactive account cannot be renewed")
+    current_access=s.get(StaffAccess,user_id)
+    before=as_dict(current_access) if current_access else None
+    if not current_access:
+        current_access=StaffAccess(user_id=user.id,activated_at=now(),
+            expires_at=now()+timedelta(days=90),renewed_by=u.user_id,
+            renewed_at=now())
+        s.add(current_access)
+    else:
+        current_access.expires_at=now()+timedelta(days=90)
+        current_access.renewed_at=now()
+        current_access.renewed_by=u.user_id
+    # Revocation of all existing devices forces reauthentication under new grant.
+    s.execute(delete(LoginSession).where(LoginSession.user_id==user.id))
+    s.flush()
+    audit(s,u,"access_renew","user",user.id,None,before,
+          as_dict(current_access),data.reason)
+    s.commit()
+    return {"username":user.username,"expires_at":current_access.expires_at,
+            "next_action":"Staff member signs in again with their existing personal password and authenticator."}
+
+class RevokeIn(BaseModel):
+    reason:str=Field(min_length=8,max_length=500)
+
+@router.post("/staff/accounts/{user_id}/revoke")
+def revoke_staff(user_id:str,data:RevokeIn,u:AuthContext=Depends(current),
+                 s:Session=Depends(db)):
+    role(u,MANAGERS)
+    user=s.get(User,user_id)
+    if not user:raise HTTPException(404)
+    if user.id==u.user_id:raise HTTPException(409,"Cannot revoke own active account")
+    if user.role in {"admin","pi"} and u.role!="admin":
+        raise HTTPException(403,"Only IT administrator can revoke privileged users")
+    before={"active":user.active,"role":user.role}
+    user.active=False
+    s.execute(delete(LoginSession).where(LoginSession.user_id==user.id))
+    s.execute(delete(UserInvitation).where(UserInvitation.user_id==user.id))
+    audit(s,u,"access_revoke","user",user.id,None,before,
+          {"active":False,"role":user.role},data.reason)
+    s.commit()
+    return {"username":user.username,"active":False,"sessions_revoked":True}
+
+class PasswordChangeIn(BaseModel):
+    old_password:str=Field(min_length=1,max_length=200)
+    new_password:str=Field(min_length=14,max_length=200)
+    otp:str|None=Field(default=None,min_length=6,max_length=6,pattern=r"^[0-9]{6}$")
+
+@router.post("/staff/change-password")
+def change_password(data:PasswordChangeIn,u:AuthContext=Depends(current),
+                    s:Session=Depends(db)):
+    from argon2.exceptions import VerifyMismatchError, VerificationError
+    usr=s.get(User,u.user_id)
+    try: valid=PH.verify(usr.password_hash,data.old_password)
+    except (VerifyMismatchError,VerificationError):valid=False
+    if not valid:raise HTTPException(403,"Current password incorrect")
+    if data.new_password==data.old_password:
+        raise HTTPException(422,"New password must differ")
+    totp=s.get(UserTotp,usr.id)
+    if totp and totp.enabled and not (data.otp and pyotp.TOTP(totp.secret).verify(data.otp,valid_window=1)):
+        raise HTTPException(403,"Authenticator confirmation required")
+    usr.password_hash=PH.hash(data.new_password)
+    s.execute(delete(LoginSession).where(LoginSession.user_id==usr.id))
+    audit(s,u,"password_change","user",usr.id,None,None,
+          {"password_changed":True},"Self-service password rotation; all existing sessions revoked")
+    s.commit()
+    return {"password_changed":True,"sessions_revoked":True,
+            "notice":"Log in again with your new private password"}
