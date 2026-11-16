@@ -15,13 +15,19 @@ umask 077
 TMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TMP_DIR"' EXIT
 rclone copyto "$BACKUP_REMOTE/$ARCHIVE" "$TMP_DIR/$ARCHIVE"
-# Archive is parsed before any database is created.
-docker compose exec -T db sh -ec 'cat >/tmp/restoretest.dump; pg_restore --list /tmp/restoretest.dump >/dev/null' <"$TMP_DIR/$ARCHIVE"
-# Target DB name is safely validated and passed as a shell environment value.
+# Temporary plaintext in the DB container is removed even if parsing/restoring fails.
+# The target is always a separate database and is never the live nims_ecrf database.
 docker compose exec -T -e TARGET_DB="$TEST_DB" db sh -ec '
-    if psql -U "$POSTGRES_USER" -d postgres -tAc "SELECT datname FROM pg_database" | grep -Fxq "$TARGET_DB"; then echo "Test database already exists; refusing to overwrite" >&2; exit 4; fi
+    TEMP_DUMP=$(mktemp /tmp/nims-restorecheck.XXXXXXXX)
+    trap '\''rm -f "$TEMP_DUMP"'\'' EXIT
+    cat > "$TEMP_DUMP"
+    pg_restore --list "$TEMP_DUMP" >/dev/null
+    if psql -U "$POSTGRES_USER" -d postgres -tAc "SELECT datname FROM pg_database" | grep -Fxq "$TARGET_DB"; then
+        echo "Test database already exists; refusing to overwrite" >&2
+        exit 4
+    fi
     createdb -U "$POSTGRES_USER" "$TARGET_DB"
-    pg_restore -U "$POSTGRES_USER" -d "$TARGET_DB" --no-owner --no-acl /tmp/restoretest.dump
+    pg_restore -U "$POSTGRES_USER" -d "$TARGET_DB" --no-owner --no-acl "$TEMP_DUMP"
     psql -U "$POSTGRES_USER" -d "$TARGET_DB" -tAc "SELECT count(*) FROM audit_events;"
-'
+' <"$TMP_DIR/$ARCHIVE"
 echo "Restore test succeeded in database $TEST_DB; remove it after reviewing its result."

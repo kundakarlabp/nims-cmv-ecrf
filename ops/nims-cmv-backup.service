@@ -1,0 +1,19 @@
+[Unit]
+Description=NIMS CMV encrypted off-site staging backup to approved Drive
+Wants=network-online.target
+After=network-online.target docker.service
+ConditionPathExists=/home/ubuntu/nims-cmv/.env
+ConditionPathExists=/home/ubuntu/.config/rclone/rclone.conf
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/nims-cmv
+Environment=RCLONE_CONFIG=/home/ubuntu/.config/rclone/rclone.conf
+UMask=0077
+ExecStart=/usr/bin/bash /home/ubuntu/nims-cmv/ops/backup_to_drive.sh
+TimeoutStartSec=45min
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

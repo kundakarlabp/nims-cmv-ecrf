@@ -82,6 +82,19 @@ class Audit(Base):
     reason: Mapped[str]=mapped_column(Text,nullable=False)
     created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=now,nullable=False)
 
+class EntryDraft(Base):
+    """Autosaved working copy. Not a submitted or verified study record."""
+    __tablename__='entry_drafts'
+    __table_args__=(UniqueConstraint('user_id','patient_id','kind'),)
+    id: Mapped[str]=mapped_column(String(36),primary_key=True,default=uid)
+    user_id: Mapped[str]=mapped_column(ForeignKey('users.id'),index=True,nullable=False)
+    patient_id: Mapped[str]=mapped_column(ForeignKey('patients.id'),index=True,nullable=False)
+    kind: Mapped[str]=mapped_column(String(30),nullable=False)
+    occurred_on: Mapped[date]=mapped_column(Date,nullable=False)
+    payload: Mapped[dict[str,Any]]=mapped_column(JSON,nullable=False)
+    revision: Mapped[int]=mapped_column(Integer,default=1,nullable=False)
+    updated_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=now,nullable=False)
+
 class EntryReview(Base):
     """Staging review history. This is not an immutable regulatory audit trail."""
     __tablename__='entry_reviews'
@@ -261,6 +274,67 @@ def edit_entry(entry_id:str,data:EntryEdit,u:AuthContext=Depends(current),s:Sess
     s.flush();s.refresh(e)
     audit(s,u,'update',e.kind,e.id,e.patient_id,old,as_dict(e),data.reason);s.commit()
     return {'id':entry_id,'revision':e.revision}
+# Server-held drafts are kept separate from final CRF entries and audit/review queues.
+# They are per user/patient/module, with optimistic concurrency for multiple tabs.
+DRAFT_KINDS=Literal['admission','visit','lab','infection','medication','transplant','safety','pharmacy','rejection']
+class DraftInput(BaseModel):
+    occurred_on:date
+    payload:dict[str,Any]
+    expected_revision:int|None=Field(default=None,ge=1)
+
+def draft_patient(s:Session,patient_id:str,u:AuthContext,kind:str):
+    permission(u,kind)
+    if not s.get(Patient,patient_id): raise HTTPException(404,'Patient not found')
+
+@app.get('/api/patients/{patient_id}/drafts/{kind}')
+def read_draft(patient_id:str,kind:DRAFT_KINDS,u:AuthContext=Depends(current),s:Session=Depends(db)):
+    draft_patient(s,patient_id,u,kind)
+    d=s.scalar(select(EntryDraft).where(EntryDraft.patient_id==patient_id,
+        EntryDraft.user_id==u.user_id,EntryDraft.kind==kind))
+    return {'draft': as_dict(d) if d else None}
+
+@app.put('/api/patients/{patient_id}/drafts/{kind}')
+def save_draft(patient_id:str,kind:DRAFT_KINDS,data:DraftInput,
+               u:AuthContext=Depends(current),s:Session=Depends(db)):
+    draft_patient(s,patient_id,u,kind)
+    if len(str(data.payload))>20000: raise HTTPException(413,'Draft too large')
+    d=s.scalar(select(EntryDraft).where(EntryDraft.patient_id==patient_id,
+        EntryDraft.user_id==u.user_id,EntryDraft.kind==kind))
+    if d is None:
+        if data.expected_revision is not None:
+            raise HTTPException(409,'Draft was removed or replaced; reload')
+        d=EntryDraft(user_id=u.user_id,patient_id=patient_id,kind=kind,
+                     occurred_on=data.occurred_on,payload=data.payload)
+        s.add(d)
+        try: s.commit()
+        except IntegrityError: s.rollback();raise HTTPException(409,'Draft created elsewhere; reload')
+        return {'id':d.id,'revision':d.revision,'updated_at':d.updated_at}
+    if data.expected_revision!=d.revision:
+        raise HTTPException(409,'Draft changed in another tab; reload to reconcile')
+    from sqlalchemy import update
+    updated=s.execute(update(EntryDraft).where(EntryDraft.id==d.id,
+        EntryDraft.revision==data.expected_revision).values(
+        occurred_on=data.occurred_on,payload=data.payload,
+        revision=EntryDraft.revision+1,updated_at=now()))
+    if updated.rowcount!=1:
+        s.rollback();raise HTTPException(409,'Concurrent draft edit; reload')
+    s.commit()
+    s.refresh(d)
+    return {'id':d.id,'revision':d.revision,'updated_at':d.updated_at}
+
+@app.delete('/api/patients/{patient_id}/drafts/{kind}')
+def delete_draft(patient_id:str,kind:DRAFT_KINDS,expected_revision:int,
+                 u:AuthContext=Depends(current),s:Session=Depends(db)):
+    draft_patient(s,patient_id,u,kind)
+    from sqlalchemy import delete
+    result=s.execute(delete(EntryDraft).where(EntryDraft.patient_id==patient_id,
+        EntryDraft.user_id==u.user_id,EntryDraft.kind==kind,
+        EntryDraft.revision==expected_revision))
+    if result.rowcount!=1:
+        s.rollback();raise HTTPException(409,'Draft revision changed; not deleted')
+    s.commit()
+    return {'ok':True}
+
 @app.get('/api/patients/{patient_id}/audit')
 def audit_history(patient_id:str,u:AuthContext=Depends(current),s:Session=Depends(db)):
     if u.role not in {'admin','pi','consultant','monitor','scientist'}: raise HTTPException(403)
@@ -269,14 +343,23 @@ def audit_history(patient_id:str,u:AuthContext=Depends(current),s:Session=Depend
 
 @app.get('/api/dashboard')
 def dashboard(u:AuthContext=Depends(current),s:Session=Depends(db)):
-    entries=s.scalars(select(Entry)).all()
+    # A single left join avoids per-entry review queries as the study grows.
+    from sqlalchemy import and_
+    rows=s.execute(select(Entry.kind,Entry.occurred_on,EntryReview.decision)
+        .outerjoin(EntryReview,and_(EntryReview.entry_id==Entry.id,
+                                   EntryReview.entry_revision==Entry.revision))).all()
     counts={'pending':0,'verified':0,'needs_correction':0}
-    by_kind={}
-    for e in entries:
-        counts[review_state(s,e)]+=1
-        by_kind[e.kind]=by_kind.get(e.kind,0)+1
-    return {'patients':s.scalar(select(func.count(Patient.id))), 'entries':len(entries),
-            'review':counts,'by_kind':by_kind,'scope':'staging synthetic data only'}
+    by_kind={}; monthly={}
+    for kind,occurred_on,decision in rows:
+        counts[decision or 'pending']+=1
+        by_kind[kind]=by_kind.get(kind,0)+1
+        month=occurred_on.strftime('%Y-%m')
+        monthly[month]=monthly.get(month,0)+1
+    return {'patients':s.scalar(select(func.count(Patient.id))),
+            'study_ids_assigned':s.scalar(select(func.count(Patient.id)).where(Patient.study_id.is_not(None))),
+            'entries':len(rows),'review':counts,'by_kind':by_kind,
+            'monthly_entries':[{'month':m,'count':monthly[m]} for m in sorted(monthly)[-12:]],
+            'scope':'staging synthetic data only'}
 
 @app.get('/api/review-queue')
 def review_queue(u:AuthContext=Depends(current),s:Session=Depends(db)):
@@ -338,8 +421,17 @@ def dose_preview(data:DoseInput,u:AuthContext=Depends(current)):
     except ValueError: raise HTTPException(422,'Invalid calculation inputs')
 @app.get('/api/due')
 def due(u:AuthContext=Depends(current),s:Session=Depends(db)):
-    today=date.today(); records=[]
-    for p in s.scalars(select(Patient).where(Patient.transplant_date!=None)).all():
+    # Current staging schedule uses the transplant date ONLY as a placeholder.
+    # Final protocol worklists must anchor to verified enrollment/randomization date.
+    from zoneinfo import ZoneInfo
+    today=datetime.now(ZoneInfo('Asia/Kolkata')).date()
+    records=[]
+    completed=set()
+    for visit in s.scalars(select(Entry).where(Entry.kind=='visit')).all():
+        if visit.payload.get('visit_complete') is True:
+            try: completed.add((visit.patient_id,int(visit.payload.get('scheduled_month'))))
+            except (ValueError,TypeError): continue
+    for p in s.scalars(select(Patient).where(Patient.transplant_date.is_not(None))).all():
         # Calendar month target dates; windows require investigator approval.
         from calendar import monthrange
         for month in (1,2,3,4,6,9,12):
@@ -347,8 +439,10 @@ def due(u:AuthContext=Depends(current),s:Session=Depends(db)):
             m=(p.transplant_date.month-1+month)%12+1
             day=min(p.transplant_date.day,monthrange(y,m)[1]); target=date(y,m,day)
             if (target-today).days in range(-30,15):
-                visits=s.scalars(select(Entry).where(Entry.patient_id==p.id,Entry.kind=='visit')).all()
-                if not any(v.payload.get('scheduled_month')==month and v.payload.get('visit_complete') for v in visits):
-                    records.append({'patient_id':p.id,'cr_number':p.cr_number,'scheduled_month':month,'target_date':target.isoformat(),'days_until':(target-today).days})
+                if (p.id,month) not in completed:
+                    records.append({'patient_id':p.id,'cr_number':p.cr_number,
+                        'scheduled_month':month,'target_date':target.isoformat(),
+                        'days_until':(target-today).days,'date_basis':'transplant_date_placeholder',
+                        'warning':'Do not use for clinical visit scheduling; verify enrolled-date anchor and approved windows.'})
     return sorted(records,key=lambda x:x['days_until'])
 

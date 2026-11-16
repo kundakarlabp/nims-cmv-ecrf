@@ -1,0 +1,11 @@
+[Unit]
+Description=NIMS CMV encrypted backup every six hours
+
+[Timer]
+OnCalendar=*-*-* 00,06,12,18:20:00 UTC
+RandomizedDelaySec=120
+Persistent=true
+Unit=nims-cmv-backup.service
+
+[Install]
+WantedBy=timers.target
