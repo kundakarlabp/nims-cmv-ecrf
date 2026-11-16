@@ -183,6 +183,14 @@ def assign(subject_id:int,data:RandomizeInput,u:AuthContext=Depends(current),
         raise HTTPException(409,"PI-approved enrollment required before randomization")
     if not subject.consent_on or subject.consent_on>subject.enrolled_on:
         raise HTTPException(422,"Signed consent must precede randomization")
+    if CLINICAL_MODE:
+        from .main import Patient
+        from zoneinfo import ZoneInfo
+        from datetime import datetime
+        transplant=s.get(Patient,subject.patient_id).transplant_date
+        local_today=datetime.now(ZoneInfo("Asia/Kolkata")).date()
+        if not transplant or (local_today-transplant).days>10:
+            raise HTTPException(422,"Randomization outside protocol 10-day post-transplant initiation window")
     eligibility=s.get(TrialEligibility,subject_id)
     if (not eligibility or not eligibility.baseline.get("is_eligible")
         or not all(eligibility.inclusion.values())
@@ -202,6 +210,13 @@ def assign(subject_id:int,data:RandomizeInput,u:AuthContext=Depends(current),
                RandomizationSlot.subject_id.is_(None))
         .order_by(RandomizationSlot.position).limit(1).with_for_update())
     if not row:raise HTTPException(409,"Sequence exhausted in this stratum; refer to statistician")
+    # Verify the sealed assignment *before* consuming the irreversible slot.
+    try:
+        assigned_arm=cipher().decrypt(row.encrypted_arm.encode("ascii")).decode("ascii")
+    except InvalidToken:
+        raise HTTPException(503,"Allocation encryption key mismatch; assignment not consumed")
+    if assigned_arm not in ARMS:
+        raise HTTPException(503,"Sealed allocation integrity failure; assignment not consumed")
     code="NCMV-R-"+secrets.token_hex(7).upper()
     matched=s.execute(update(RandomizationSlot).where(
         RandomizationSlot.id==row.id,RandomizationSlot.subject_id.is_(None))
@@ -220,7 +235,7 @@ def assign(subject_id:int,data:RandomizeInput,u:AuthContext=Depends(current),
     except IntegrityError:
         s.rollback();raise HTTPException(409,"Duplicate participant randomization; check existing assignment")
     return {"allocation_code":code,"study_code":subject.study_code,
-            "assigned_arm_mg":arm_for(s,subject_id),
+            "assigned_arm_mg":assigned_arm,
             "stratum":key,"assigned_at":row.assigned_at,
             "note":"Open-label nominal group; renal adjustment follows signed physician prescription"}
 
