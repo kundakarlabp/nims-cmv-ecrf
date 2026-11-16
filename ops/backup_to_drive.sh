@@ -23,6 +23,13 @@ rclone copyto "$TMP_DIR/$ARCHIVE" "$BACKUP_REMOTE/$ARCHIVE" --retries 4 --low-le
 # Check actual encrypted Drive round-trip: decrypt stream and compare the original bytes.
 REMOTE_HASH=$(rclone cat "$BACKUP_REMOTE/$ARCHIVE" | sha256sum | awk '{print $1}')
 if [[ "$HASH" != "$REMOTE_HASH" ]]; then echo 'REMOTE RESTORE HASH FAILURE' >&2; exit 5; fi
+# A status marker is written only after the cloud round trip hash matches.
+STATUS_DIR="${BACKUP_STATUS_DIR:-$PWD/.backup-state}"
+install -d -m 700 "$STATUS_DIR"
+status_tmp=$(mktemp "$STATUS_DIR/.pending.XXXXXXXX")
+printf '%s %s %s\n' "$STAMP" "$HASH" "$BACKUP_REMOTE/$ARCHIVE" > "$status_tmp"
+chmod 600 "$status_tmp"
+mv -f "$status_tmp" "$STATUS_DIR/last_success"
 printf 'Backup completed and remote content verified: %s %s\n' "$STAMP" "$HASH"
 ; then
   echo 'Refusing backup: ecrfcrypt remote must have type=crypt' >&2; exit 4

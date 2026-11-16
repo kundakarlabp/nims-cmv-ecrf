@@ -15,19 +15,27 @@ umask 077
 TMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TMP_DIR"' EXIT
 rclone copyto "$BACKUP_REMOTE/$ARCHIVE" "$TMP_DIR/$ARCHIVE"
-# Temporary plaintext in the DB container is removed even if parsing/restoring fails.
-# The target is always a separate database and is never the live nims_ecrf database.
+# Use a separate test database; remove plaintext archives and disposable DB by default.
+# This does not overwrite or restart the active study database.
 docker compose exec -T -e TARGET_DB="$TEST_DB" db sh -ec '
     TEMP_DUMP=$(mktemp /tmp/nims-restorecheck.XXXXXXXX)
-    trap '\''rm -f "$TEMP_DUMP"'\'' EXIT
+    CREATED=0
+    cleanup() {
+      rm -f "$TEMP_DUMP"
+      if [ "$CREATED" = 1 ]; then
+        dropdb -U "$POSTGRES_USER" "$TARGET_DB" || echo "WARNING: disposable restore DB cleanup failed" >&2
+      fi
+    }
+    trap cleanup EXIT
     cat > "$TEMP_DUMP"
     pg_restore --list "$TEMP_DUMP" >/dev/null
     if psql -U "$POSTGRES_USER" -d postgres -tAc "SELECT datname FROM pg_database" | grep -Fxq "$TARGET_DB"; then
-        echo "Test database already exists; refusing to overwrite" >&2
-        exit 4
+      echo "Test DB exists; refusing overwrite" >&2
+      exit 4
     fi
     createdb -U "$POSTGRES_USER" "$TARGET_DB"
+    CREATED=1
     pg_restore -U "$POSTGRES_USER" -d "$TARGET_DB" --no-owner --no-acl "$TEMP_DUMP"
     psql -U "$POSTGRES_USER" -d "$TARGET_DB" -tAc "SELECT count(*) FROM audit_events;"
-' <"$TMP_DIR/$ARCHIVE"
-echo "Restore test succeeded in database $TEST_DB; remove it after reviewing its result."
+'
+echo "Restore verification completed; disposable DB $TEST_DB removed."

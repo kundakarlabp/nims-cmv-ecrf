@@ -15,6 +15,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker,
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError, VerificationError
+import pyotp
 
 DATABASE_URL=os.getenv('DATABASE_URL','')
 if not DATABASE_URL and os.getenv('DB_HOST'):
@@ -107,8 +108,20 @@ class EntryReview(Base):
     reviewer_id: Mapped[str]=mapped_column(ForeignKey('users.id'),nullable=False)
     created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=now,nullable=False)
 
+# Register structured study models before the staging metadata is built.
+from .trial_models import TrialSubject, PCRRecord, DrugLot, DrugAuthorization, DrugDispense, DrugReturn, UserInvitation, LoginThrottle, UserTotp
+
 app=FastAPI(title='NIMS Transplant Registry — staging foundation',docs_url=None,redoc_url=None)
-Base.metadata.create_all(bind=ENGINE)  # Staging convenience; replace with reviewed migrations before production
+# Fail closed if someone enables real-patient mode without the independent go-live
+# attestation and authenticated/staff MFA configuration. Production schema must
+# be installed by an independently reviewed migration, never by create_all.
+CLINICAL_MODE=os.getenv('CLINICAL_DATA_ENABLED','false').lower()=='true'
+if CLINICAL_MODE:
+    signoff=os.getenv('CLINICAL_GOLIVE_ATTESTATION_PATH','')
+    if os.getenv('MFA_REQUIRED','false').lower()!='true' or not signoff or not Path(signoff).is_file():
+        raise RuntimeError('Clinical mode blocked: institutional signoff file and mandatory MFA configuration required')
+else:
+    Base.metadata.create_all(bind=ENGINE)  # Synthetic staging only
 
 ROLES={'pi','admin','consultant','pg','scientist','nurse','technician','microbiology','pharmacy','monitor'}
 WRITE_ROLES={
@@ -150,7 +163,7 @@ def current(request:Request,s:Session=Depends(db)) -> AuthContext:
     return AuthContext(user_id=user.id,role=user.role,name=user.display_name,csrf_hash=active.csrf_hash)
 
 def audit(s:Session,u:AuthContext,action:str,entity_type:str,entity_id:str,patient_id:str|None,old:dict|None,new:dict|None,reason:str):
-    s.add(Audit(actor_id=u.user_id,action=action,entity_type=entity_type,entity_id=entity_id,patient_id=patient_id,old_record=old,new_record=new,reason=reason))
+    s.add(Audit(actor_id=u.user_id,action=action,entity_type=entity_type,entity_id=entity_id,patient_id=patient_id,old_record=jsonable_encoder(old),new_record=jsonable_encoder(new),reason=reason))
 
 def permission(u,kind):
     if u.role not in (WRITE_ROLES.get(kind) or set()) and u.role!='admin':
@@ -167,9 +180,13 @@ def review_state(s:Session,e:Entry):
 class LoginInput(BaseModel):
     username:str=Field(min_length=2,max_length=100)
     password:str=Field(min_length=1,max_length=200)
+    otp:str|None=Field(default=None,min_length=6,max_length=6,pattern=r'^[0-9]{6}$')
 
 @app.get('/')
 def home(): return FileResponse(Path(__file__).parent/'ui.html')
+@app.get('/study_ui.js')
+def study_script(): return FileResponse(Path(__file__).parent/'study_ui.js',media_type='application/javascript')
+
 @app.get('/healthz')
 def health(): return {'ok':True,'service':'staging'}
 @app.get('/readyz')
@@ -182,16 +199,43 @@ def ready():
     return {'ok':True,'service':'staging','database':'reachable'}
 @app.post('/api/login')
 def login(data:LoginInput,response:Response,s:Session=Depends(db)):
-    # Production gate: add external identity provider/MFA and persistent rate limiting.
-    u=s.scalar(select(User).where(User.username==data.username))
-    try: matched=bool(u and u.active and PH.verify(u.password_hash,data.password))
-    except (VerifyMismatchError,VerificationError): matched=False
-    if not matched: raise HTTPException(401,'Invalid credentials')
-    token=secrets.token_urlsafe(48); csrf=secrets.token_urlsafe(32)
+    username=data.username.strip().lower()
+    throttle=s.get(LoginThrottle,username)
+    if throttle and throttle.locked_until and throttle.locked_until.replace(tzinfo=UTC)>now():
+        raise HTTPException(429,'Account temporarily locked; contact the study administrator')
+    u=s.scalar(select(User).where(User.username==username))
+    try:
+        password_ok=bool(u and u.active and PH.verify(u.password_hash,data.password))
+    except (VerifyMismatchError,VerificationError):
+        password_ok=False
+    mfa=s.get(UserTotp,u.id) if password_ok else None
+    otp_ok=bool(password_ok and (not mfa or not mfa.enabled or
+        (data.otp and pyotp.TOTP(mfa.secret).verify(data.otp,valid_window=1))))
+    if password_ok and os.getenv('MFA_REQUIRED','false').lower()=='true' and (not mfa or not mfa.enabled):
+        raise HTTPException(403,'Authenticator enrollment required before clinical access')
+    if not password_ok or not otp_ok:
+        # Per-username persistent lockout. Deploy IP-based rate limiting at the
+        # TLS reverse proxy as a separate production control.
+        if u:
+            if not throttle:
+                throttle=LoginThrottle(username=username,failures=0)
+                s.add(throttle)
+            throttle.failures+=1
+            if throttle.failures>=5:
+                throttle.locked_until=now()+timedelta(minutes=15)
+            s.commit()
+        raise HTTPException(401,'Invalid credentials or authenticator code')
+    if throttle:
+        throttle.failures=0
+        throttle.locked_until=None
+    token=secrets.token_urlsafe(48);csrf=secrets.token_urlsafe(32)
     expiry=now()+timedelta(hours=SESSION_HOURS)
-    s.add(LoginSession(token_hash=sha(token),user_id=u.id,csrf_hash=sha(csrf),expires_at=expiry));s.commit()
-    response.set_cookie('nims_session',token,max_age=SESSION_HOURS*3600,httponly=True,secure=COOKIE_SECURE,samesite='strict',path='/')
-    return {'username':u.username,'role':u.role,'display_name':u.display_name,'csrf_token':csrf}
+    s.add(LoginSession(token_hash=sha(token),user_id=u.id,csrf_hash=sha(csrf),expires_at=expiry))
+    s.commit()
+    response.set_cookie('nims_session',token,max_age=SESSION_HOURS*3600,
+        httponly=True,secure=COOKIE_SECURE,samesite='strict',path='/')
+    return {'username':u.username,'role':u.role,'display_name':u.display_name,
+            'csrf_token':csrf,'mfa_enabled':bool(mfa and mfa.enabled)}
 @app.get('/api/me')
 def me(u:AuthContext=Depends(current)):
     return {'user_id':u.user_id,'role':u.role,'display_name':u.name}
@@ -210,6 +254,8 @@ class NewUser(BaseModel):
 def create_user(data:NewUser,u:AuthContext=Depends(current),s:Session=Depends(db)):
     if u.role not in ('admin','pi'): raise HTTPException(403)
     if data.role not in ROLES: raise HTTPException(422,'Unknown role')
+    if CLINICAL_MODE:
+        raise HTTPException(403,'Use named invitations rather than administrator-selected credentials')
     obj=User(username=data.username,display_name=data.display_name,role=data.role,password_hash=PH.hash(data.password))
     s.add(obj)
     try: s.commit()
@@ -223,6 +269,9 @@ class PatientIn(BaseModel):
 @app.post('/api/patients')
 def create_patient(data:PatientIn,u:AuthContext=Depends(current),s:Session=Depends(db)):
     if u.role not in {'admin','pi','consultant','scientist'}: raise HTTPException(403)
+    if os.getenv('CLINICAL_DATA_ENABLED','false').lower()!='true':
+        if not (data.cr_number.upper().startswith('TEST-') and data.name.lower().startswith('synthetic')):
+            raise HTTPException(403,'Synthetic-only staging: identifiable patient registration is disabled')
     p=Patient(**data.model_dump(),created_by=u.user_id)
     try:
         s.add(p);s.flush();audit(s,u,'create','patient',p.id,p.id,None,as_dict(p),'Initial registration')
@@ -233,15 +282,30 @@ def create_patient(data:PatientIn,u:AuthContext=Depends(current),s:Session=Depen
 def patients(q:str='',limit:int=50,u:AuthContext=Depends(current),s:Session=Depends(db)):
     limit=min(max(limit,1),100)
     st=select(Patient)
-    if q.strip(): st=st.where(Patient.name.ilike('%'+q.strip()+'%')|Patient.cr_number.ilike('%'+q.strip()+'%')|Patient.study_id.ilike('%'+q.strip()+'%'))
+    if q.strip():
+        if u.role in {'microbiology','pharmacy','technician','monitor'}:
+            st=st.where(Patient.study_id.ilike('%'+q.strip()+'%'))
+        else:
+            st=st.where(Patient.name.ilike('%'+q.strip()+'%') |
+                Patient.cr_number.ilike('%'+q.strip()+'%') |
+                Patient.study_id.ilike('%'+q.strip()+'%'))
     ps=s.scalars(st.order_by(Patient.created_at.desc()).limit(limit)).all()
-    return [{'id':p.id,'cr_number':p.cr_number,'name':p.name,'study_id':p.study_id,'transplant_date':p.transplant_date,'revision':p.revision} for p in ps]
+    restricted=u.role in {'microbiology','pharmacy','technician','monitor'}
+    return [{'id':p.id,'cr_number':None if restricted else p.cr_number,
+             'name':None if restricted else p.name,'study_id':p.study_id,
+             'transplant_date':p.transplant_date,'revision':p.revision} for p in ps]
 @app.get('/api/patients/{patient_id}')
 def patient(patient_id:str,u:AuthContext=Depends(current),s:Session=Depends(db)):
     p=s.get(Patient,patient_id)
     if not p: raise HTTPException(404)
     es=s.scalars(select(Entry).where(Entry.patient_id==patient_id).order_by(Entry.occurred_on.desc(),Entry.created_at.desc())).all()
-    return {'patient':as_dict(p),'entries':[dict(as_dict(e),review_status=review_state(s,e)) for e in es]}
+    data=as_dict(p)
+    if u.role in {'microbiology','pharmacy','technician','monitor'}:
+        data.pop('name',None);data.pop('cr_number',None)
+        # Lab, pharmacy and external monitors never receive unrelated clinical entry payloads.
+        permitted={'lab'} if u.role in {'microbiology','technician'} else ({'pharmacy'} if u.role=='pharmacy' else set())
+        es=[e for e in es if e.kind in permitted]
+    return {'patient':data,'entries':[dict(as_dict(e),review_status=review_state(s,e)) for e in es]}
 class EntryIn(BaseModel):
     kind:Literal['admission','visit','lab','infection','medication','transplant','safety','pharmacy','rejection']
     occurred_on:date
@@ -339,6 +403,11 @@ def delete_draft(patient_id:str,kind:DRAFT_KINDS,expected_revision:int,
 def audit_history(patient_id:str,u:AuthContext=Depends(current),s:Session=Depends(db)):
     if u.role not in {'admin','pi','consultant','monitor','scientist'}: raise HTTPException(403)
     rows=s.scalars(select(Audit).where(Audit.patient_id==patient_id).order_by(Audit.created_at.desc()).limit(500)).all()
+    if u.role=='monitor':
+        # No identity-bearing old/new JSON snapshots in the blinded monitor view.
+        return [{'id':x.id,'actor_id':x.actor_id,'action':x.action,
+                 'entity_type':x.entity_type,'created_at':x.created_at}
+                for x in rows]
     return [as_dict(x) for x in rows]
 
 @app.get('/api/dashboard')
@@ -366,7 +435,7 @@ def review_queue(u:AuthContext=Depends(current),s:Session=Depends(db)):
     review_permission(u)
     rows=s.execute(select(Entry,Patient).join(Patient,Entry.patient_id==Patient.id)
                    .order_by(Entry.updated_at.desc()).limit(200)).all()
-    return [{'entry_id':e.id,'patient_id':p.id,'study_id':p.study_id,'cr_number':p.cr_number,
+    return [{'entry_id':e.id,'patient_id':p.id,'study_id':p.study_id,'cr_number':None if u.role=='monitor' else p.cr_number,
              'kind':e.kind,'occurred_on':e.occurred_on,'revision':e.revision,
              'review_status':review_state(s,e),'payload':e.payload,
              'updated_by':e.updated_by} for e,p in rows]
@@ -446,3 +515,7 @@ def due(u:AuthContext=Depends(current),s:Session=Depends(db)):
                         'warning':'Do not use for clinical visit scheduling; verify enrolled-date anchor and approved windows.'})
     return sorted(records,key=lambda x:x['days_until'])
 
+
+# Trial-specific closed-loop endpoints, registered after the shared auth helpers.
+from .trial_api import router as trial_router
+app.include_router(trial_router)
