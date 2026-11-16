@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import secrets
+from pathlib import Path
 from collections import Counter, defaultdict
 from datetime import date
 from typing import Literal
@@ -29,7 +30,14 @@ REVEAL_ROLES={"pi","consultant","pharmacy"}
 CUSTODIAN_ROLE="randomization_custodian"
 
 def cipher():
-    key=os.getenv("RANDOMIZATION_FERNET_KEY","")
+    # Clinical installations read a protected mounted key, never a GitHub or
+    # Compose environment variable. Synthetic CI may use an env-only key.
+    keyfile=os.getenv("RANDOMIZATION_FERNET_KEY_FILE","")
+    try:
+        key=Path(keyfile).read_text(encoding="ascii").strip() if keyfile else (
+            os.getenv("RANDOMIZATION_FERNET_KEY",""))
+    except (OSError,UnicodeError):
+        raise HTTPException(503,"Sealed allocation key is unavailable")
     if not key:
         raise HTTPException(503,"Sealed allocation key is not configured; contact system custodian")
     try:return Fernet(key.encode("ascii"))

@@ -16,6 +16,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError, VerificationError
 import pyotp
+from .clinical_gate import startup_deficiencies, backup_fresh, restore_verified, metadata_fingerprint
 
 DATABASE_URL=os.getenv('DATABASE_URL','')
 if not DATABASE_URL and os.getenv('DB_HOST'):
@@ -117,9 +118,38 @@ app=FastAPI(title='NIMS Transplant Registry — staging foundation',docs_url=Non
 # be installed by an independently reviewed migration, never by create_all.
 CLINICAL_MODE=os.getenv('CLINICAL_DATA_ENABLED','false').lower()=='true'
 if CLINICAL_MODE:
-    signoff=os.getenv('CLINICAL_GOLIVE_ATTESTATION_PATH','')
-    if os.getenv('MFA_REQUIRED','false').lower()!='true' or not signoff or not Path(signoff).is_file():
-        raise RuntimeError('Clinical mode blocked: institutional signoff file and mandatory MFA configuration required')
+    # A clinic sign-off must be tied to the exact approved file; DB and recovery
+    # must be independently provisioned before this process may start.
+    missing=startup_deficiencies()
+    if missing:
+        raise RuntimeError('Clinical startup BLOCKED: '+', '.join(missing))
+    from sqlalchemy import inspect, text as sql_text
+    try:
+        actual=set(inspect(ENGINE).get_table_names())
+        absent=set(Base.metadata.tables)-actual
+        if absent:
+            raise RuntimeError('Clinical schema incomplete: reviewed migrations required')
+        with ENGINE.connect() as check_conn:
+            database_identity=check_conn.execute(sql_text(
+                "SELECT current_database(), current_user"
+            )).one()
+            if tuple(database_identity)!=("nims_cmv_clinical","nims_clinical_app"):
+                raise RuntimeError('Clinical database identity is not the approved restricted target')
+            if check_conn.execute(sql_text(
+                "SELECT has_schema_privilege(current_user, 'public', 'CREATE')"
+            )).scalar():
+                raise RuntimeError('Clinical application database role has unsafe schema creation rights')
+            revision=check_conn.execute(sql_text(
+                "SELECT fingerprint FROM clinical_schema_baseline WHERE revision='initial-2026-11'"
+            )).scalar_one_or_none()
+            if revision!=metadata_fingerprint(Base.metadata):
+                raise RuntimeError('Clinical schema version/fingerprint mismatch; reviewed migration required')
+    except SQLAlchemyError as error:
+        raise RuntimeError('Clinical database/permissions could not be verified') from error
+elif os.getenv('CLINICAL_SCHEMA_BOOTSTRAP','false').lower()=='true':
+    # One-time operator CLI must verify a fresh, dedicated DB before creating
+    # the initial schema. The API never performs this action automatically.
+    pass
 else:
     Base.metadata.create_all(bind=ENGINE)  # Synthetic staging only
 
@@ -161,9 +191,20 @@ def current(request:Request,s:Session=Depends(db)) -> AuthContext:
         raise HTTPException(403,'Account access expired; contact the study administrator')
     if CLINICAL_MODE and user.role not in {'admin','pi'} and not access:
         raise HTTPException(403,'Named staff authorization required')
+    # Freeze clinical writes when offsite backup or the monthly restore proof is
+    # stale; account sign-in and read-only review remain available.
+    clinical_path=request.url.path
+    if (CLINICAL_MODE and request.method not in ('GET','HEAD','OPTIONS')
+        and (clinical_path.startswith(('/api/patients','/api/entries',
+                                      '/api/trial/screening','/api/trial/subjects',
+                                      '/api/trial/pcr','/api/trial/pharmacy',
+                                      '/api/trial/crf','/api/trial/randomization/subjects')))):
+        if not backup_fresh() or not restore_verified():
+            raise HTTPException(503,'Clinical write temporarily paused: backup or restore verification overdue')
+
     if user.role=='randomization_custodian' and not (
         request.url.path.startswith('/api/trial/randomization/')
-        or request.url.path in {'/api/me','/api/logout',
+        or request.url.path in {'/api/me','/api/logout','/api/system/mode',
           '/api/trial/staff/change-password','/api/trial/staff/mfa-setup',
           '/api/trial/staff/mfa-confirm'}
     ):
@@ -200,7 +241,7 @@ def home(): return FileResponse(Path(__file__).parent/'ui.html')
 def study_script(): return FileResponse(Path(__file__).parent/'study_ui.js',media_type='application/javascript')
 
 @app.get('/healthz')
-def health(): return {'ok':True,'service':'staging'}
+def health(): return {'ok':True,'service':'clinical' if CLINICAL_MODE else 'staging'}
 @app.get('/readyz')
 def ready():
     try:
@@ -208,7 +249,19 @@ def ready():
             connection.execute(select(1))
     except SQLAlchemyError:
         raise HTTPException(503,'Service temporarily unavailable')
-    return {'ok':True,'service':'staging','database':'reachable'}
+    return {'ok':True,'service':'clinical' if CLINICAL_MODE else 'staging',
+            'database':'reachable'}
+@app.get('/api/system/mode')
+def system_mode(u:AuthContext=Depends(current)):
+    writable=bool(CLINICAL_MODE and backup_fresh() and restore_verified())
+    return {'mode':'clinical' if CLINICAL_MODE else 'synthetic',
+            'clinical_registration_enabled':writable,
+            'institutional_release_required':not CLINICAL_MODE,
+            'backup_verified':bool(CLINICAL_MODE and backup_fresh()),
+            'restore_verified':bool(CLINICAL_MODE and restore_verified()),
+            'message':('Clinical database authorized and operational' if writable else
+              'Staging only: real patient identifiers must not be entered' if not CLINICAL_MODE else
+              'Clinical write temporarily paused: backup/restore proof is overdue')}
 @app.post('/api/login')
 def login(data:LoginInput,response:Response,s:Session=Depends(db)):
     username=data.username.strip().lower()
@@ -289,7 +342,7 @@ class PatientIn(BaseModel):
 @app.post('/api/patients')
 def create_patient(data:PatientIn,u:AuthContext=Depends(current),s:Session=Depends(db)):
     if u.role not in {'admin','pi','consultant','scientist'}: raise HTTPException(403)
-    if os.getenv('CLINICAL_DATA_ENABLED','false').lower()!='true':
+    if not CLINICAL_MODE:
         if not (data.cr_number.upper().startswith('TEST-') and data.name.lower().startswith('synthetic')):
             raise HTTPException(403,'Synthetic-only staging: identifiable patient registration is disabled')
     p=Patient(**data.model_dump(),created_by=u.user_id)

@@ -1,0 +1,40 @@
+# Separate clinical deployment, NEVER used by the staging auto-deploy timer.
+# Use only after signed governance/UAT, approved institutional hostname,
+# clinical DB provision/migrations and independently verified recovery.
+name: nims-cmv-clinical
+services:
+  db:
+    environment:
+      POSTGRES_DB: nims_cmv_clinical
+      POSTGRES_USER: nims_clinical_owner
+      POSTGRES_PASSWORD: ${CLINICAL_DB_OWNER_PASSWORD:?Clinical owner password required}
+    volumes:
+      - clinical_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nims_clinical_owner -d nims_cmv_clinical"]
+  api:
+    environment:
+      DB_HOST: db
+      DB_NAME: nims_cmv_clinical
+      DB_USER: nims_clinical_app
+      POSTGRES_PASSWORD: ${CLINICAL_DB_APP_PASSWORD:?Separate restricted app password required}
+      CLINICAL_DATA_ENABLED: "true"
+      MFA_REQUIRED: "true"
+      COOKIE_SECURE: "true"
+      CLINICAL_INSTITUTIONAL_APPROVAL: ${CLINICAL_INSTITUTIONAL_APPROVAL:-unverified}
+      CLINICAL_UAT_APPROVED: ${CLINICAL_UAT_APPROVED:-unverified}
+      CLINICAL_GOLIVE_ATTESTATION_PATH: /run/clinical-release/release.txt
+      CLINICAL_GOLIVE_SHA256: ${CLINICAL_GOLIVE_SHA256:?Signed release SHA256 required}
+      CLINICAL_BACKUP_RECEIPT_PATH: /run/clinical-backup/last_success
+      CLINICAL_RESTORE_RECEIPT_PATH: /run/clinical-backup/last_restore
+      RANDOMIZATION_FERNET_KEY_FILE: /run/clinical-secrets/fernet.key
+      SITE_DOMAIN: ${CLINICAL_SITE_DOMAIN:?Approved institutional clinical domain required}
+    volumes:
+      - ${CLINICAL_SIGNOFF_PATH:?Read-only signed release file required}:/run/clinical-release/release.txt:ro
+      - ${CLINICAL_BACKUP_STATE_DIR:?Verified backup and restore receipts required}:/run/clinical-backup:ro
+      - ${CLINICAL_RANDOMIZATION_KEY_PATH:?Escrowed independent randomization key required}:/run/clinical-secrets/fernet.key:ro
+  caddy:
+    environment:
+      SITE_DOMAIN: ${CLINICAL_SITE_DOMAIN:?Approved institutional clinical domain required}
+volumes:
+  clinical_postgres_data:
