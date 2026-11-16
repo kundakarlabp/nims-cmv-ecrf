@@ -161,6 +161,13 @@ def current(request:Request,s:Session=Depends(db)) -> AuthContext:
         raise HTTPException(403,'Account access expired; contact the study administrator')
     if CLINICAL_MODE and user.role not in {'admin','pi'} and not access:
         raise HTTPException(403,'Named staff authorization required')
+    if user.role=='randomization_custodian' and not (
+        request.url.path.startswith('/api/trial/randomization/')
+        or request.url.path in {'/api/me','/api/logout',
+          '/api/trial/staff/change-password','/api/trial/staff/mfa-setup',
+          '/api/trial/staff/mfa-confirm'}
+    ):
+        raise HTTPException(403,'Allocation custodian has no patient/eligibility or treatment record access')
     if request.method not in ('GET','HEAD','OPTIONS'):
         supplied=request.headers.get('x-csrf-token','')
         if not supplied or not secrets.compare_digest(sha(supplied),active.csrf_hash):
