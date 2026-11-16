@@ -259,8 +259,10 @@ def read_allocation(subject_id:int,u:AuthContext=Depends(current),
 
 @router.get("/assigned-group-counts")
 def assigned_group_counts(u:AuthContext=Depends(current),s:Session=Depends(db)):
-    if u.role not in {"pi","consultant","pharmacy","randomization_custodian"}:
-        raise HTTPException(403,"Treatment-group breakdown is restricted during recruitment")
+    # Even observed aggregate group totals can reveal future assignments near the
+    # end of a permuted block. Conceal them from all recruitment/dispensing staff.
+    if u.role!="randomization_custodian":
+        raise HTTPException(403,"Arm totals concealed from the enrolling clinical team")
     rows=s.scalars(select(RandomizationSlot).where(
         RandomizationSlot.subject_id.is_not(None))).all()
     summary={"450":0,"900":0}
