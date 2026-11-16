@@ -727,3 +727,42 @@ def test_screening_source_metadata_restricted_and_donor_relationship_checked():
     with TestClient(app) as monitor:
         h=auth(monitor,'sourcemonitor','SyntheticSourcePassword123!')
         assert monitor.get(f'/api/trial/subjects/{sid}/restricted-screening').status_code==403
+
+
+def test_batch_ten_individual_90_day_named_accounts_no_shared_passwords():
+    with TestClient(app) as admin:
+        h=auth(admin)
+        requested=[{'username':f'cmvdata{n:02d}',
+            'display_name':f'Synthetic staff member {n:02d}',
+            'role':'scientist' if n<=3 else ('nurse' if n<=5 else
+                 ('microbiology' if n<=7 else ('pharmacy' if n==8 else 'monitor')))}
+                 for n in range(1,11)]
+        result=admin.post('/api/trial/staff/invite-batch',headers=h,
+                          json={'staff':requested})
+        assert result.status_code==200,result.text
+        data=result.json()
+        assert data['created']==10
+        codes=[x['activation_token'] for x in data['invitations']]
+        assert len(set(codes))==10
+        assert all(x['expires_in_days']==7 for x in data['invitations'])
+        assert all(x['access_validity_days_after_activation']==90
+                    for x in data['invitations'])
+        accounts={x['username']:x for x in admin.get('/api/trial/staff/accounts').json()}
+        for n in range(1,11):
+            assert accounts[f'cmvdata{n:02d}']['active'] is False
+        accepted=admin.post('/api/trial/staff/activate',json={
+            'token':codes[0],'password':'UniqueStudyScientistPassword123!'})
+        assert accepted.status_code==200,accepted.text
+        assert admin.post('/api/trial/staff/activate',json={
+            'token':codes[0],'password':'SecondTryPassword123!'}).status_code==400
+        repeat=admin.post('/api/trial/staff/invite-batch',headers=h,json={
+            'staff':[{'username':'cmvdata01','display_name':'Duplicate tester',
+                      'role':'nurse'},
+                     {'username':'newcmvstaff','display_name':'Should not create',
+                      'role':'nurse'}]})
+        assert repeat.status_code==409
+        assert all(x['username']!='newcmvstaff'
+                   for x in admin.get('/api/trial/staff/accounts').json())
+    with TestClient(app) as scientist:
+        assert scientist.post('/api/login',json={
+            'username':'cmvdata01','password':'UniqueStudyScientistPassword123!'}).status_code==200
