@@ -173,6 +173,9 @@ class LoginInput(BaseModel):
 
 @app.get('/')
 def home(): return FileResponse(Path(__file__).parent/'ui.html')
+@app.get('/study_ui.js')
+def study_script(): return FileResponse(Path(__file__).parent/'study_ui.js',media_type='application/javascript')
+
 @app.get('/healthz')
 def health(): return {'ok':True,'service':'staging'}
 @app.get('/readyz')
