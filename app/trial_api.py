@@ -617,7 +617,7 @@ def return_drug(dispense_id:int,data:ReturnIn,u:AuthContext=Depends(current),s:S
 
 @router.get("/subjects/{subject_id}/pharmacy")
 def subject_pharmacy(subject_id:int,u:AuthContext=Depends(current),s:Session=Depends(db)):
-    role(u,PHARMACISTS|{"pi","consultant","scientist","monitor"})
+    role(u,PHARMACISTS|{"pi","consultant","scientist","nurse","monitor"})
     t=find_subject(s,subject_id)
     authorizations=s.scalars(select(DrugAuthorization).where(
         DrugAuthorization.subject_id==t.id)).all()
