@@ -153,7 +153,7 @@ def current(request:Request,s:Session=Depends(db)) -> AuthContext:
     return AuthContext(user_id=user.id,role=user.role,name=user.display_name,csrf_hash=active.csrf_hash)
 
 def audit(s:Session,u:AuthContext,action:str,entity_type:str,entity_id:str,patient_id:str|None,old:dict|None,new:dict|None,reason:str):
-    s.add(Audit(actor_id=u.user_id,action=action,entity_type=entity_type,entity_id=entity_id,patient_id=patient_id,old_record=old,new_record=new,reason=reason))
+    s.add(Audit(actor_id=u.user_id,action=action,entity_type=entity_type,entity_id=entity_id,patient_id=patient_id,old_record=jsonable_encoder(old),new_record=jsonable_encoder(new),reason=reason))
 
 def permission(u,kind):
     if u.role not in (WRITE_ROLES.get(kind) or set()) and u.role!='admin':
