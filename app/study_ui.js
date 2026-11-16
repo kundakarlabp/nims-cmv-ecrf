@@ -94,6 +94,15 @@ panel('drug','MSS drug accountability',
  '<div class="study-card"><h3>MSS issue slip</h3><div id="tw-slip">Generate a confirmed issue to print and sign.</div></div>'+
  '<div id="tw-drug-status" class="status hide"></div>'
 );
+panel('security','Account security',
+ '<div class="study-card"><h3>Register two-factor authenticator</h3>'+
+ '<p class="hint">Use a trusted authenticator application. Treat the setup secret as a password; never share it or post it into chat.</p>'+
+ btn('Generate private authenticator secret','tw-mfa-setup')+
+ '<div id="tw-mfa-secret" class="status hide" style="white-space:pre-wrap"></div>'+
+ field('Enter a current 6-digit authenticator code','tw-mfa-code')+
+ btn('Confirm and enable authenticator','tw-mfa-confirm')+
+ '<div id="tw-mfa-status" class="status hide"></div></div>'
+);
 panel('staff','Staff access',
  '<div class="study-card"><h3>Individual account invitation</h3>'+
  field('Unique username','tw-username')+field('Staff name','tw-fullname')+
@@ -112,7 +121,7 @@ login.insertAdjacentHTML('beforeend','<hr><h3>Activate individual staff account<
  '<label>Choose a private password<input type="password" id="tw-password" autocomplete="new-password"></label>'+
  btn('Activate account','tw-activate-save')+'<div id="tw-activate-status" class="status hide"></div>');
 for(const id of ['tw-screen-date','tw-consent-date','tw-enroll-date','tw-anchor-date','tw-collected','tw-reported','tw-receipt-date','tw-rx-date','tw-issue-date','tw-return-date'])$(id).value=today();
-var perms={study:['pi','consultant','scientist'],pcr:['pi','consultant','scientist','nurse','technician','microbiology','monitor'],drug:['pi','consultant','scientist','pharmacy','monitor'],staff:['pi','admin']};
+var perms={study:['pi','consultant','scientist'],pcr:['pi','consultant','scientist','nurse','technician','microbiology','monitor'],drug:['pi','consultant','scientist','pharmacy','monitor'],staff:['pi','admin'],security:['pi','admin','consultant','pg','scientist','nurse','technician','microbiology','pharmacy','monitor']};
 function setRole(){
  var r=$('currentRole').textContent.trim();
  for(const k of Object.keys(perms))$('btn'+k).classList.toggle('hide',!perms[k].includes(r));
@@ -131,10 +140,10 @@ var originalApply=applyRoleUI;
 applyRoleUI=function(role){originalApply(role);setRole();};
 var oldTab=tab;
 tab=async function(name){
- if(['study','pcr','drug','staff'].includes(name)){
+ if(['study','pcr','drug','staff','security'].includes(name)){
   if(activeTab==='entry'){try{await saveDraftNow();}catch(e){show('msg','Draft not saved: '+e.message,true);return;}}
   activeTab=name;
-  for(const section of ['dashboard','registry','review','entry','dose','due','study','pcr','drug','staff']){
+  for(const section of ['dashboard','registry','review','entry','dose','due','study','pcr','drug','staff','security']){
    $(section).classList.toggle('hide',section!==name);
    $('btn'+section).classList.toggle('selected',section===name);
   }
@@ -265,5 +274,20 @@ $('tw-activate-save').onclick=()=>{void task('tw-activate-status',async()=>{
   token:value('tw-token'),password:value('tw-password')})});
  $('tw-token').value='';$('tw-password').value='';
  notify('tw-activate-status','Account '+r.username+' activated. Sign in above.');
+});};
+
+$('tw-mfa-setup').onclick=()=>{void task('tw-mfa-status',async()=>{
+ var r=await api('/api/trial/staff/mfa-setup',{method:'POST'});
+ $('tw-mfa-secret').classList.remove('hide');
+ $('tw-mfa-secret').textContent='Private authenticator secret:\n'+r.secret+
+ '\nEnter this in your authenticator app, then confirm the generated code below.';
+ notify('tw-mfa-status','Confirm your code before logging out.');
+});};
+$('tw-mfa-confirm').onclick=()=>{void task('tw-mfa-status',async()=>{
+ var r=await api('/api/trial/staff/mfa-confirm',{method:'POST',
+  body:JSON.stringify({otp:value('tw-mfa-code')})});
+ $('tw-mfa-code').value='';$('tw-mfa-secret').textContent='';
+ $('tw-mfa-secret').classList.add('hide');
+ notify('tw-mfa-status','MFA enabled. Future logins require your password and authenticator code.');
 });};
 })();
