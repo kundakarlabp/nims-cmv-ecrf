@@ -16,7 +16,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError, VerificationError
 import pyotp
-from .clinical_gate import startup_deficiencies, backup_fresh, restore_verified
+from .clinical_gate import startup_deficiencies, backup_fresh, restore_verified, metadata_fingerprint
 
 DATABASE_URL=os.getenv('DATABASE_URL','')
 if not DATABASE_URL and os.getenv('DB_HOST'):
@@ -134,8 +134,17 @@ if CLINICAL_MODE:
                 "SELECT has_schema_privilege(current_user, 'public', 'CREATE')"
             )).scalar():
                 raise RuntimeError('Clinical application database role has unsafe schema creation rights')
+            revision=check_conn.execute(sql_text(
+                "SELECT fingerprint FROM clinical_schema_baseline WHERE revision='initial-2026-11'"
+            )).scalar_one_or_none()
+            if revision!=metadata_fingerprint(Base.metadata):
+                raise RuntimeError('Clinical schema version/fingerprint mismatch; reviewed migration required')
     except SQLAlchemyError as error:
         raise RuntimeError('Clinical database/permissions could not be verified') from error
+elif os.getenv('CLINICAL_SCHEMA_BOOTSTRAP','false').lower()=='true':
+    # One-time operator CLI must verify a fresh, dedicated DB before creating
+    # the initial schema. The API never performs this action automatically.
+    pass
 else:
     Base.metadata.create_all(bind=ENGINE)  # Synthetic staging only
 
