@@ -207,3 +207,36 @@ class TrialScreeningMeta(Base):
     consent_language: Mapped[str | None] = mapped_column(String(20))
     consent_obtained_by: Mapped[str | None] = mapped_column(String(150))
     signed_consent_source_ref: Mapped[str | None] = mapped_column(String(120))
+
+class RandomizationPlan(Base):
+    """Externally prepared, permanently locked sequence metadata."""
+    __tablename__="trial_randomization_plans"
+    id: Mapped[int] = mapped_column(Integer,primary_key=True,autoincrement=True)
+    protocol_version: Mapped[str] = mapped_column(String(40),nullable=False)
+    statistician_reference: Mapped[str] = mapped_column(String(160),nullable=False)
+    signed_specification_reference: Mapped[str] = mapped_column(String(160),nullable=False)
+    sequence_sha256: Mapped[str] = mapped_column(String(64),nullable=False,unique=True)
+    block_sizes: Mapped[dict] = mapped_column(JSON,nullable=False)
+    active: Mapped[bool] = mapped_column(nullable=False,default=True)
+    locked_by: Mapped[str] = mapped_column(ForeignKey("users.id"),nullable=False)
+    locked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),nullable=False,default=now)
+
+class RandomizationSlot(Base):
+    """Ciphertext of a future allocation; never serialize it in APIs or audits."""
+    __tablename__="trial_randomization_slots"
+    __table_args__=(
+        UniqueConstraint("plan_id","stratum","position"),
+        UniqueConstraint("subject_id"),
+        UniqueConstraint("allocation_code"),
+        CheckConstraint("position>0",name="randomization_positive_position")
+    )
+    id: Mapped[int] = mapped_column(Integer,primary_key=True,autoincrement=True)
+    plan_id: Mapped[int] = mapped_column(ForeignKey("trial_randomization_plans.id"),nullable=False,index=True)
+    stratum: Mapped[str] = mapped_column(String(32),nullable=False,index=True)
+    position: Mapped[int] = mapped_column(Integer,nullable=False)
+    encrypted_arm: Mapped[str] = mapped_column(Text,nullable=False)
+    subject_id: Mapped[int | None] = mapped_column(ForeignKey("trial_subjects.id"),nullable=True)
+    allocation_code: Mapped[str | None] = mapped_column(String(100))
+    assigned_by: Mapped[str | None] = mapped_column(ForeignKey("users.id"))
+    assigned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    signed_source_reference: Mapped[str | None] = mapped_column(String(160))
