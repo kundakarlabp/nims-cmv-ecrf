@@ -14,7 +14,22 @@ function fill(id,records,key,render){
  if(prior)el.value=prior;
  if(!el.value&&records.length)el.value=String(records[0][key]);
 }
-function error(id,e){show(id,e.message||String(e),true);}
+function error(id,e){
+ let message=e.message||String(e);
+ try {
+  const issues=JSON.parse(message);
+  if(Array.isArray(issues)){
+   message=issues.map(x=>{
+    const field=Array.isArray(x.loc)?x.loc[x.loc.length-1]:'field';
+    if(field==='username')return 'Username: use at least 3 letters/numbers; it will be stored in lowercase (example: saisree).';
+    if(field==='display_name')return 'Staff name: enter the person’s name (at least 3 characters).';
+    if(field==='role')return 'Select an authorized delegated role.';
+    return String(field)+': '+(x.msg||'Invalid entry');
+   }).join(' ');
+  }
+ }catch(_ignored){}
+ show(id,message,true);
+}
 function notify(id,s){show(id,s,false);}
 async function task(id,callback){try{await callback();}catch(e){error(id,e);}}
 function panel(id,title,html){
@@ -167,7 +182,8 @@ panel('security','Account security',
 );
 panel('staff','Staff access',
  '<div class="study-card"><h3>Individual account invitation</h3>'+
- field('Unique username','tw-username')+field('Staff name','tw-fullname')+
+ '<label>Unique username (e.g., saisree)<input id="tw-username" type="text" minlength="3" maxlength="100" autocapitalize="off" spellcheck="false" autocomplete="off" placeholder="saisree"></label>'+
+ field('Staff name','tw-fullname')+
  choose('Delegated role','tw-role',[['scientist','Project scientist'],['nurse','Research nurse'],['technician','Lab technician'],['microbiology','Microbiology'],['pharmacy','MSS pharmacist'],['consultant','Consultant'],['pg','PG resident'],['monitor','CRA / monitor'],['randomization_custodian','Independent allocation custodian (admin invitation only)']])+
  btn('Generate one-time staff activation','tw-invite-save')+
  '<div id="tw-invitation" class="status hide" style="white-space:pre-wrap"></div></div>'+
@@ -367,8 +383,13 @@ $('tw-return-save').onclick=()=>{void task('tw-drug-status',async()=>{
  notify('tw-drug-status','Returned quantity recorded. Remaining unreconciled: '+r.unreconciled_quantity);await loadDrug();
 });};
 $('tw-invite-save').onclick=()=>{void task('tw-staff-status',async()=>{
+ const username=value('tw-username').toLowerCase();
+ const display_name=value('tw-fullname');
+ if(!/^[a-z][a-z0-9_.-]{2,99}$/.test(username))
+  throw Error('Enter a unique username of at least 3 characters, beginning with a letter (e.g., saisree).');
+ if(display_name.length<3)throw Error('Enter the full staff name (at least 3 characters).');
  var r=await api('/api/trial/staff/invite',{method:'POST',body:JSON.stringify({
-  username:value('tw-username'),display_name:value('tw-fullname'),role:value('tw-role')})});
+  username,display_name,role:value('tw-role')})});
  $('tw-invitation').classList.remove('hide');
  $('tw-invitation').textContent='Private activation for '+r.username+' ('+r.role+')\n'+
  r.activation_token+'\nInitial invitation expires in 7 days. After activation the staff account remains valid for 90 days. Hand the code privately.';
@@ -382,11 +403,16 @@ $('tw-bulk-save').onclick=()=>{void task('tw-staff-status',async()=>{
  const staff=lines.map(line=>{
   const parts=line.split('|').map(x=>x.trim());
   if(parts.length!==3||parts.some(x=>!x))throw Error('Use username | Staff full name | delegated role');
-  const [username,display_name,role]=parts;
+  const [entered,display_name,role]=parts;
+  const username=entered.toLowerCase();
+  if(!/^[a-z][a-z0-9_.-]{2,99}$/.test(username))throw Error('Invalid username: '+entered+'. Use at least 3 letters/numbers, starting with a letter.');
+  if(display_name.length<3)throw Error('Full staff name required for '+username);
   if(!['scientist','nurse','technician','microbiology','pharmacy','consultant','pg','monitor'].includes(role))
    throw Error('Unrecognized delegated role: '+role);
   return {username,display_name,role};
  });
+ if(new Set(staff.map(x=>x.username)).size!==staff.length)
+  throw Error('The batch includes the same username twice; remove duplicates.');
  if(!confirm('Create '+staff.length+' inactive named accounts and one-time personal activation tokens?'))return;
  const result=await api('/api/trial/staff/invite-batch',{
   method:'POST',body:JSON.stringify({staff})
@@ -463,29 +489,60 @@ $('tw-checklist-save').onclick=()=>{void task('tw-status',async()=>{
 for(const id of ['tw-cbc-date','tw-review-on'])$(id).value=today();
 async function loadAccounts(){
  const accounts=await api('/api/trial/staff/accounts');
- $('tw-accounts').innerHTML='<table><thead><tr><th>Username</th><th>Role</th>'+
-   '<th>Valid until</th><th>MFA</th><th>State</th><th>Access</th></tr></thead><tbody>'+
-   accounts.map(x=>'<tr><td>'+txt(x.username)+'</td><td>'+txt(x.role)+'</td>'+
-   '<td>'+txt(x.access_expires_at?x.access_expires_at.slice(0,10):'Legacy / no time limit')+'</td>'+
-   '<td>'+(x.mfa_enabled?'Yes':'Not yet')+'</td>'+
-   '<td>'+(x.active?'Active':'Inactive')+'</td><td>'+
-   (x.active?'<button data-staff-id="'+txt(x.id)+'" data-staff-action="renew" class="secondary">Renew 90 days</button> '+
-   '<button data-staff-id="'+txt(x.id)+'" data-staff-action="revoke">Revoke</button>':'—')+
-   '</td></tr>').join('')+'</tbody></table>';
+ $('tw-accounts').innerHTML='<div style="overflow-x:auto"><table><thead><tr>'+
+   '<th>Username / name</th><th>Role</th><th>Valid until</th><th>MFA</th><th>State</th><th>Actions</th>'+
+   '</tr></thead><tbody>'+
+   accounts.map(x=>{
+    const state=x.status||(x.active?'active':'awaiting_activation');
+    const actions= x.active ?
+      '<button data-staff-id="'+txt(x.id)+'" data-staff-action="renew" class="secondary">Renew 90 days</button> '+
+      '<button data-staff-id="'+txt(x.id)+'" data-staff-action="revoke">Revoke</button>' :
+      state==='revoked' ?
+      '<button data-staff-id="'+txt(x.id)+'" data-staff-action="reissue" data-restoring="true" class="secondary">Reinstate + new activation</button>' :
+      '<button data-staff-id="'+txt(x.id)+'" data-staff-action="reissue" data-restoring="false" class="secondary">Reissue activation</button>';
+    return '<tr><td><strong>'+txt(x.username)+'</strong><div class="hint">'+txt(x.display_name)+'</div></td>'+
+    '<td>'+txt(x.role)+'</td>'+
+    '<td>'+txt(x.active&&x.access_expires_at?x.access_expires_at.slice(0,10):'—')+'</td>'+
+    '<td>'+(x.mfa_enabled?'Enabled':'Not yet')+'</td>'+
+    '<td>'+txt(state.replaceAll('_',' '))+'</td><td>'+actions+'</td></tr>';
+   }).join('')+'</tbody></table></div>';
 }
 $('tw-accounts').addEventListener('click',e=>{
  const button=e.target.closest('button[data-staff-action]');if(!button)return;
  const action=button.dataset.staffAction,id=button.dataset.staffId;
- if(!confirm(action==='revoke'?'Immediately revoke this account and end all sessions?':
-       'Authorize this person for another 90 days and end current sessions?'))return;
+ const reinstating=button.dataset.restoring==='true';
+ const promptText=action==='reissue'?(reinstating?
+   'This account was previously revoked. Explicitly approve reinstatement with a new one-time activation code?':
+   'Issue a fresh private activation code; old codes will become invalid?'):
+  action==='revoke'?'Immediately revoke this account and end all sessions?':
+   'Authorize this person for another 90 days and end current sessions?';
+ if(!confirm(promptText))return;
  void task('tw-staff-status',async()=>{
   const explanation=prompt('Enter an audit reason (at least 8 characters):');
-  if(!explanation||explanation.trim().length<8)return;
+  if(explanation===null)return;
+  if(explanation.trim().length<8)throw Error('Audit reason must have at least 8 characters.');
+  const data=action==='reissue'?
+   {reason:explanation.trim(),restore_revoked:reinstating}:
+   {reason:explanation.trim()};
   const result=await api('/api/trial/staff/accounts/'+encodeURIComponent(id)+'/'+action,
-   {method:'POST',body:JSON.stringify({reason:explanation})});
-  notify('tw-staff-status',result.username+' — '+(action==='renew'?'90-day access renewed':'Access revoked'));
+   {method:'POST',body:JSON.stringify(data)});
+  if(action==='reissue'){
+   $('tw-invitation').classList.remove('hide');
+   $('tw-invitation').textContent='PRIVATE new activation for '+result.username+' ('+result.role+
+     ')\n'+result.activation_token+
+     '\nThis one-time code expires in 7 days. On activation, personal access lasts 90 days.'+
+     '\nGive only to the identity-verified named staff member. Do not share their password.';
+   notify('tw-staff-status','Fresh activation generated for '+result.username+
+      '. Give the private code to that person and ask them to choose their own password on the login page.');
+  }else{
+   notify('tw-staff-status',result.username+' — '+(action==='renew'?
+     '90-day access renewed':'Access revoked'));
+  }
   await loadAccounts();
  });
+});
+$('tw-username').addEventListener('blur',()=>{
+ $('tw-username').value=value('tw-username').toLowerCase();
 });
 $('tw-change-password').onclick=()=>{void task('tw-mfa-status',async()=>{
  const result=await api('/api/trial/staff/change-password',{method:'POST',body:JSON.stringify({
