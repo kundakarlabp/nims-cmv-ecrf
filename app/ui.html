@@ -219,7 +219,7 @@ async function saveDraftNow(){
  clearTimeout(draftTimer);
  if(!selected||activeTab!=='entry')return;
  let snapshot;
- try{snapshot=getDraftData()}catch(err){setDraftStatus('Draft not saved: '+err.message,true);return;}
+ try{snapshot=getDraftData()}catch(err){setDraftStatus('Draft not saved: '+err.message,true);throw err;}
  const context=selected+':'+activeKind;
  const endpoint='/api/patients/'+encodeURIComponent(selected)+'/drafts/'+encodeURIComponent(activeKind);
  const serialized=JSON.stringify(snapshot);
@@ -235,7 +235,7 @@ async function saveDraftNow(){
    lastSavedDraft=serialized;
    setDraftStatus('Draft autosaved to server · revision '+response.revision+' · Not yet submitted');
   }catch(err){
-   setDraftStatus('Draft could not be saved: '+err.message+'. Copy notes locally only if they contain no patient information.',true);
+   setDraftStatus('Draft could not be saved: '+err.message+'. Stay on this form and retry; do not navigate away.',true);throw err;
   }
  });
  await draftWriting;
@@ -244,7 +244,7 @@ function scheduleDraft(){
  clearTimeout(draftTimer);
  if(!selected){setDraftStatus('Select a patient before entering data.');return;}
  setDraftStatus('Unsaved changes · autosave pending…');
- draftTimer=setTimeout(function(){void saveDraftNow();},1200);
+ draftTimer=setTimeout(function(){void saveDraftNow().catch(function(){});},1200);
 }
 async function restoreDraft(){
  clearTimeout(draftTimer);
@@ -264,12 +264,12 @@ async function restoreDraft(){
  }catch(err){setDraftStatus('Could not load draft: '+err.message,true);}
 }
 choose=async function(id){
- if(activeTab==='entry')await saveDraftNow();
+ if(activeTab==='entry'){try{await saveDraftNow();}catch(err){show('msg','Cannot switch patient while draft is unsaved: '+err.message,true);return;}}
  await oldChoose(id);
  if(activeTab==='entry')await restoreDraft();
 };
 async function kindChanged(){
- await saveDraftNow();
+ try{await saveDraftNow();}catch(err){$('kind').value=activeKind;return;}
  activeKind=$('kind').value;
  renderQuickForm();
  await restoreDraft();
@@ -297,7 +297,7 @@ newEntry=async function(){
  }catch(err){show('msg','Entry not submitted: '+err.message,true);}
 };
 tab=async function(name){
- if(activeTab==='entry'&&name!=='entry')await saveDraftNow();
+ if(activeTab==='entry'&&name!=='entry'){try{await saveDraftNow();}catch(err){show('msg','Cannot leave unsaved entry: '+err.message,true);return;}}
  activeTab=name;
  ['dashboard','registry','review','entry','dose','due'].forEach(function(n){
   $(n).classList.toggle('hide',n!==name);
@@ -310,7 +310,7 @@ tab=async function(name){
  if(name==='due')await loadDue();
 };
 logout=async function(){
- if(activeTab==='entry')await saveDraftNow();
+ if(activeTab==='entry'){try{await saveDraftNow();}catch(err){show('msg','Cannot log out with unsaved draft: '+err.message,true);return;}}
  await oldLogout();
 };
 
