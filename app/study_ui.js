@@ -630,4 +630,53 @@ $('tw-crf-entries').addEventListener('click',e=>{
  });
 });
 
+
+/* The study overview is grounded in persisted counts, never demo values. */
+const originalStudyDashboard=loadDashboard;
+loadDashboard=async function(){
+ await originalStudyDashboard();
+ const target=$('dashboardResults');
+ try{
+  const [trial,forms]=await Promise.all([
+   api('/api/trial/overview'),api('/api/trial/crf/completeness')
+  ]);
+  const lab=trial.pcr||{}, drug=trial.drug_accountability||{};
+  const cards=[
+   ['Screened',trial.screened,'Coded screening records'],
+   ['Enrolled',trial.ever_enrolled,'Includes withdrawn/closed participants'],
+   ['PCR scheduled',trial.scheduled_pcr_slots,'Seven protocol slots per enrolled subject'],
+   ['PCR verified',trial.verified_protocol_pcr_slots,'Independent review completed'],
+   ['Stock remaining',drug.tablets_in_stock,'450-mg tablets in study inventory'],
+   ['Unreconciled issues',drug.tablets_not_yet_reconciled,'Not necessarily taken or lost']
+  ];
+  const kpi='<div class="dash-kpis">'+cards.map((x,i)=>
+    '<div class="dash-card dash-kpi"><span class="accent" style="background:'+
+    ['#405fe4','#27ba9c','#6e87bc','#2495aa','#ac8a37','#d77b42'][i]+'"></span>'+
+    '<span class="num">'+Number(x[1]||0).toLocaleString('en-IN')+'</span>'+
+    '<div class="label">'+txt(x[0])+'</div><div class="explain">'+txt(x[2])+'</div></div>'
+  ).join('')+'</div>';
+  const months=['1','2','3','4','6','9','12'];
+  const rows=months.map(m=>{
+   const slot=forms.visit_completion[m]||{};
+   return '<tr><td>Month '+m+'</td><td>'+(slot.submitted||0)+'</td>'+
+    '<td>'+(slot.verified||0)+'</td>'+
+    '<td>'+(slot.needs_correction||0)+'</td></tr>';
+  }).join('');
+  const visits='<div class="dash-card" style="margin:16px 0">'+
+   '<h3>Protocol follow-up completeness</h3>'+
+   '<p class="dash-note">Count of submitted and independently verified CRF visits. PCR result verification is tracked separately.</p>'+
+   '<div style="overflow-x:auto"><table style="width:100%;font-size:12px;border-collapse:collapse">'+
+   '<thead><tr><th>Timepoint</th><th>Submitted</th><th>Verified</th><th>Needs correction</th></tr></thead>'+
+   '<tbody>'+rows+'</tbody></table></div></div>';
+  const note='<p class="warn-demo">Study status is computed from persisted records. '+
+   'Enrollment and PCR completion do not imply endpoint adjudication or data lock. '+
+   'Clinical activation remains blocked until go-live validation and recovery drills are signed off.</p>';
+  target.insertAdjacentHTML('afterbegin',
+    '<h3 style="margin-top:8px">Clinical trial progress</h3>'+note+kpi+visits+
+    '<h3 style="margin:20px 0 12px">Registry and entry-review activity</h3>');
+ }catch(err){
+  target.insertAdjacentHTML('afterbegin','<p class="dash-note">Clinical trial metrics unavailable: '+txt(err.message)+'</p>');
+ }
+};
+
 })();
