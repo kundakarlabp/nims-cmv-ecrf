@@ -20,7 +20,7 @@ from .main import (
 )
 from .trial_models import (
     TrialSubject, PCRRecord, DrugLot, DrugAuthorization, DrugDispense,
-    DrugReturn, UserInvitation, LoginThrottle, UserTotp, StaffAccess
+    DrugReturn, UserInvitation, LoginThrottle, UserTotp, StaffAccess, TrialEligibility
 )
 
 router=APIRouter(prefix="/api/trial",tags=["trial-workflows"])
@@ -144,10 +144,120 @@ def subject(subject_id:int,u:AuthContext=Depends(current),s:Session=Depends(db))
     t=find_subject(s,subject_id)
     return subject_view(t)
 
+
+# Exact inclusion/exclusion concepts transcribed from signed CRF v3.0
+# (14 Aug 2026), checked against protocol v5.0.
+INCLUSION_ITEMS={
+ "age_ge_18":"Age >=18 years",
+ "solitary_kidney":"Solitary kidney transplant at NIMS",
+ "donor_cmv_positive":"Donor CMV IgG positive",
+ "recipient_cmv_positive":"Recipient CMV IgG positive",
+ "vgcv_within_10_days":"Valganciclovir can start <=10 days after transplant",
+ "written_consent":"Written NIEC-approved informed consent",
+ "anc_ge_1500":"ANC >=1500 per microlitre",
+ "platelets_ge_50000":"Platelets >=50000 per microlitre",
+ "hemoglobin_ge_7":"Hemoglobin >=7 g/dL",
+ "clinically_stable":"Clinically stable for prophylaxis and 12-month follow-up"
+}
+EXCLUSION_ITEMS={
+ "pre_randomization_cmv_treatment":"Pre-randomization CMV requiring treatment",
+ "multi_organ_transplant":"Multi-organ transplant",
+ "ongoing_dialysis":"Ongoing dialysis at randomization",
+ "crcl_below_10":"Cockcroft-Gault CrCl <10 mL/min",
+ "vgcv_hypersensitivity":"Valganciclovir/ganciclovir hypersensitivity",
+ "blood_counts_below_threshold":"Blood counts below inclusion thresholds",
+ "pregnancy_or_breastfeeding":"Pregnancy or breastfeeding",
+ "severe_infection_or_instability":"Severe infection, instability or unsafe randomization",
+ "conflicting_interventional_trial":"Conflicting interventional trial",
+ "unable_to_complete_followup":"Unable/unwilling to complete follow-up"
+}
+class EligibilityReviewIn(BaseModel):
+    inclusion:dict[str,bool]
+    exclusion:dict[str,bool]
+    age_years:int=Field(ge=0,le=120)
+    anc_per_ul:float=Field(ge=0)
+    platelets_per_ul:float=Field(ge=0)
+    hemoglobin_g_dl:float=Field(ge=0,le=25)
+    crcl_cg_ml_min:float=Field(ge=0)
+    baseline_cbc_on:date
+    reviewed_on:date
+    signed_source_reference:str=Field(min_length=3,max_length=100)
+
+@router.get("/eligibility-schema")
+def eligibility_schema(u:AuthContext=Depends(current)):
+    return {"version":"CRF 3.0 / Protocol 5.0, 14 August 2026",
+        "inclusion":INCLUSION_ITEMS,"exclusion":EXCLUSION_ITEMS}
+
+@router.get("/subjects/{subject_id}/eligibility")
+def eligibility_detail(subject_id:int,u:AuthContext=Depends(current),s:Session=Depends(db)):
+    role(u,{"pi","consultant","scientist","monitor"})
+    t=find_subject(s,subject_id)
+    row=s.get(TrialEligibility,t.id)
+    return {"eligibility":as_dict(row) if row else None}
+
+@router.put("/subjects/{subject_id}/eligibility")
+def eligibility_review(subject_id:int,data:EligibilityReviewIn,
+    u:AuthContext=Depends(current),s:Session=Depends(db)):
+    role(u,{"pi","consultant"})
+    t=find_subject(s,subject_id)
+    if t.status!="screened":
+        raise HTTPException(409,"Eligibility cannot be rewritten after enrollment")
+    if set(data.inclusion)!=set(INCLUSION_ITEMS) or set(data.exclusion)!=set(EXCLUSION_ITEMS):
+        raise HTTPException(422,"Complete every protocol inclusion and exclusion item")
+    if any(type(v) is not bool for v in list(data.inclusion.values())+list(data.exclusion.values())):
+        raise HTTPException(422,"Eligibility answers must be explicit yes/no")
+    if data.reviewed_on<t.screening_on or data.reviewed_on>date.today():
+        raise HTTPException(422,"Invalid eligibility review date")
+    if data.baseline_cbc_on>data.reviewed_on:
+        raise HTTPException(422,"CBC source date after eligibility review")
+    p=eligible_patient(s,t.patient_id)
+    if not p.transplant_date:raise HTTPException(422,"Transplant date must be verified in registry")
+    incl=data.inclusion;excl=data.exclusion
+    if incl["age_ge_18"]!=(data.age_years>=18):
+        raise HTTPException(422,"Age answer conflicts with age at randomization")
+    if incl["anc_ge_1500"]!=(data.anc_per_ul>=1500) or \
+       incl["platelets_ge_50000"]!=(data.platelets_per_ul>=50000) or \
+       incl["hemoglobin_ge_7"]!=(data.hemoglobin_g_dl>=7):
+        raise HTTPException(422,"Blood-count eligibility answers conflict with measured source results")
+    if ex["blood_counts_below_threshold"]!=(
+        data.anc_per_ul<1500 or data.platelets_per_ul<50000 or data.hemoglobin_g_dl<7):
+        raise HTTPException(422,"Blood-count exclusion conflicts with source results")
+    if excl["crcl_below_10"]!=(data.crcl_cg_ml_min<10):
+        raise HTTPException(422,"CrCl exclusion conflicts with Cockcroft-Gault result")
+    if incl["donor_cmv_positive"]!=(t.donor_cmv_igg=="positive") or \
+       incl["recipient_cmv_positive"]!=(t.recipient_cmv_igg=="positive"):
+        raise HTTPException(422,"Serostatus checklist conflicts with laboratory serostatus")
+    if incl["written_consent"]!=bool(t.consent_on and t.consent_version):
+        raise HTTPException(422,"Consent checklist does not match recorded signed consent")
+    eligible=all(incl.values()) and not any(excl.values())
+    baseline={"age_years":data.age_years,"anc_per_ul":data.anc_per_ul,
+       "platelets_per_ul":data.platelets_per_ul,"hemoglobin_g_dl":data.hemoglobin_g_dl,
+       "crcl_cg_ml_min":data.crcl_cg_ml_min,"baseline_cbc_on":data.baseline_cbc_on.isoformat(),
+       "signed_source_reference":data.signed_source_reference,
+       "is_eligible":eligible}
+    prior=s.get(TrialEligibility,t.id)
+    if prior:
+        old=as_dict(prior)
+        prior.inclusion=incl;prior.exclusion=excl;prior.baseline=baseline
+        prior.reviewed_by=u.user_id;prior.reviewed_on=data.reviewed_on;prior.updated_at=now()
+    else:
+        old=None
+        prior=TrialEligibility(subject_id=t.id,inclusion=incl,exclusion=excl,
+            baseline=baseline,reviewed_by=u.user_id,reviewed_on=data.reviewed_on)
+        s.add(prior)
+    audit(s,u,"eligibility_review","trial_eligibility",str(t.id),t.patient_id,
+        old,{"inclusion":incl,"exclusion":excl,"baseline":baseline,
+             "reviewed_by":u.user_id,"reviewed_on":data.reviewed_on},
+        "Verified against "+data.signed_source_reference)
+    s.commit()
+    return {"subject_id":t.id,"eligible":eligible,
+        "reviewed_by":u.user_id,"reviewed_on":data.reviewed_on,
+        "note":"A complete checklist is mandatory; no auto-randomization."}
+
 class EnrollmentIn(BaseModel):
     enrolled_on:date
     pcr_anchor_on:date
-    pcr_anchor_basis:Literal["transplant_date","enrollment_date","randomization_date","prophylaxis_start_date"]
+    pcr_anchor_basis:Literal["transplant_date"]
     protocol_reference:str=Field(min_length=3,max_length=80)
     reviewed_eligibility_and_consent:bool
     approved_visit_anchor:bool
@@ -157,6 +267,11 @@ def enroll(subject_id:int,data:EnrollmentIn,u:AuthContext=Depends(current),s:Ses
     role(u,ENROLLERS)
     t=find_subject(s,subject_id)
     if t.status!="screened": raise HTTPException(409,"Enrollment already decided")
+    signed_check=s.get(TrialEligibility,t.id)
+    if not signed_check or not signed_check.baseline.get("is_eligible") or \
+       signed_check.reviewed_on>data.enrolled_on or \
+       not all(signed_check.inclusion.values()) or any(signed_check.exclusion.values()):
+        raise HTTPException(422,"Complete an eligible, signed protocol checklist before enrollment")
     if not (t.eligibility_attested and t.consent_on and t.consent_version and
             t.donor_cmv_igg=="positive" and t.recipient_cmv_igg=="positive" and
             t.ratg_induction is not None and data.reviewed_eligibility_and_consent and
@@ -165,10 +280,10 @@ def enroll(subject_id:int,data:EnrollmentIn,u:AuthContext=Depends(current),s:Ses
     if data.enrolled_on<t.consent_on:
         raise HTTPException(422,"Enrollment cannot precede informed consent")
     p=eligible_patient(s,t.patient_id)
-    if p.transplant_date and data.pcr_anchor_basis=="transplant_date" and data.pcr_anchor_on!=p.transplant_date:
-        raise HTTPException(422,"Transplant-date anchor conflicts with registry record")
-    if data.pcr_anchor_basis=="enrollment_date" and data.pcr_anchor_on!=data.enrolled_on:
-        raise HTTPException(422,"Enrollment-date anchor must match enrollment date")
+    if not p.transplant_date or data.pcr_anchor_on!=p.transplant_date:
+        raise HTTPException(422,"Per protocol v5.0, all seven CMV PCR targets are anchored to verified transplantation date")
+    if data.enrolled_on<p.transplant_date or (data.enrolled_on-p.transplant_date).days>10:
+        raise HTTPException(422,"Enrollment must support valganciclovir start within 10 days of transplantation")
     if data.enrolled_on>date.today() or data.pcr_anchor_on>date.today():
         raise HTTPException(422,"Study milestone dates cannot be in the future")
     new_code=f"NCMV-{t.id:05d}"
