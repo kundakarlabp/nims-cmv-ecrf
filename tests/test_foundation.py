@@ -375,6 +375,7 @@ def lock_test_sequence(monkeypatch):
         assert 'entries' not in response.json()
         again=custodian.post('/api/trial/randomization/sequence/lock',headers=h,json=package)
         assert again.status_code==409
+        assert custodian.get('/api/trial/randomization/assigned-group-counts').json()['randomized']==0
     return package
 
 def test_pharmacy_authorization_stock_issue_return_and_separate_roles(monkeypatch):
@@ -876,8 +877,7 @@ def test_concealed_randomization_requires_pi_eligibility_and_one_irreversible_sl
         assert pi.post(f'/api/trial/randomization/subjects/{sid}/assign',
             headers=h,json={'investigator_confirmation':True,'stratification_verified':True,
               'signed_randomization_source_ref':'TEST-CONFIRMED-002'}).status_code==409
-        r=pi.get('/api/trial/randomization/assigned-group-counts').json()
-        assert r['randomized']==1 and r['group_450']==1 and r['group_900']==0
+        assert pi.get('/api/trial/randomization/assigned-group-counts').status_code==403
         forms=pi.get('/api/trial/crf/schema').json()['forms']['C_baseline']['fields']
         for locked in ('allocation_code','randomization_on','assigned_nominal_arm'):
             assert locked not in forms
