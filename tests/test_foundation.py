@@ -211,7 +211,13 @@ def setup_synthetic_trial(client,headers):
         'transplant_date':'2026-10-01'})
     assert patient.status_code==200,patient.text
     pid=patient.json()['id']
-    screening=client.post('/api/trial/screening',headers=headers,json={
+    r=client.post('/api/users',headers=headers,json={'username':'syntheticscreener',
+        'display_name':'Synthetic screening scientist','role':'scientist',
+        'password':'SyntheticScreenerPassword123!'})
+    assert r.status_code==200,r.text
+    with TestClient(app) as scientist:
+        screener_auth=auth(scientist,'syntheticscreener','SyntheticScreenerPassword123!')
+        screening=scientist.post('/api/trial/screening',headers=screener_auth,json={
         'patient_id':pid,'screening_on':'2026-10-02',
         'donor_cmv_igg':'positive','recipient_cmv_igg':'positive',
         'donor_type':'living','ratg_induction':True,
