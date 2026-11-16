@@ -1047,10 +1047,15 @@ def test_reinstatement_of_revoked_account_requires_reason_and_explicit_approval(
             'token':reissued.json()['activation_token'],
             'password':'AfterReinstatementPassword123!'})
         assert activated.status_code==200,activated.text
+        # Staff login changes this test client's cookie; inspect the staff table
+        # from a fresh admin session rather than mistaking a 403 for a list.
         assert admin.post('/api/login',json={
             'username':'revokerestore','password':'AfterReinstatementPassword123!'}).status_code==200
-        state=next(u for u in admin.get('/api/trial/staff/accounts').json()
-                   if u['username']=='revokerestore')
+        with TestClient(app) as fresh_admin:
+            auth(fresh_admin)
+            listing=fresh_admin.get('/api/trial/staff/accounts')
+            assert listing.status_code==200,listing.text
+            state=next(u for u in listing.json() if u['username']=='revokerestore')
         assert state['active'] and state['status']=='active'
         assert state['access_expires_at'] is not None
 
