@@ -688,7 +688,7 @@ def invite_named_staff(data:BulkStaffInviteIn,u:AuthContext=Depends(current),
     usernames=[person.username.strip().lower() for person in data.staff]
     if len(set(usernames))!=len(usernames):
         raise HTTPException(422,"Duplicate username in this batch")
-    if u.role!="admin" and any(x.role in {"pi","admin"} for x in data.staff):
+    if u.role!="admin" and any(x.role in {"pi","admin","randomization_custodian"} for x in data.staff):
         raise HTTPException(403,"Only administrator may invite high-privilege users")
     created=[]
     for person in data.staff:
