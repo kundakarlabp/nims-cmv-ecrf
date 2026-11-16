@@ -213,7 +213,7 @@ def pcr_list(subject_id:int,u:AuthContext=Depends(current),s:Session=Depends(db)
 def pcr_worklist(u:AuthContext=Depends(current),s:Session=Depends(db)):
     rows=s.execute(select(PCRRecord,TrialSubject).join(TrialSubject,PCRRecord.subject_id==TrialSubject.id)
         .where(TrialSubject.status=="enrolled",PCRRecord.attempt==1)
-        .order_by(PCRRecord.target_on).limit(1000)).all()
+        .order_by(PCRRecord.target_on).limit(4000)).all()
     today=date.today()
     return [{
         "study_code":subject.study_code,"specimen_code":pcr.specimen_code,
@@ -426,7 +426,7 @@ def dispense(subject_id:int,data:DispenseIn,u:AuthContext=Depends(current),s:Ses
     if stock.rowcount!=1:
         s.rollback();raise HTTPException(409,"Insufficient available stock")
     d=DrugDispense(subject_id=t.id,authorization_id=a.id,lot_id=lot.id,
-        slip_code="PENDING",quantity_issued=data.quantity_issued,
+        slip_code="UNASSIGNED-"+secrets.token_hex(12),quantity_issued=data.quantity_issued,
         issued_on=data.issued_on,issued_by=u.user_id)
     s.add(d);s.flush()
     d.slip_code=code_for(t,"MSS",f"{d.id:05d}")
@@ -498,9 +498,11 @@ def invite_user(data:InviteIn,u:AuthContext=Depends(current),s:Session=Depends(d
     user=User(username=data.username,display_name=data.display_name,role=data.role,
         password_hash=PH.hash(secrets.token_urlsafe(48)),active=False)
     token=secrets.token_urlsafe(36)
+    s.add(user)
+    s.flush()  # Generate the DB identity before binding the one-time invitation.
     invitation=UserInvitation(user_id=user.id,token_sha256=sha(token),
         created_by=u.user_id,expires_at=now()+timedelta(hours=48))
-    s.add(user);s.flush();s.add(invitation)
+    s.add(invitation)
     try:
         s.commit()
     except IntegrityError:
