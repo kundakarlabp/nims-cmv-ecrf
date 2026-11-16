@@ -77,7 +77,7 @@ def subject_view(subject):
       "d_plus_r_plus":subject.donor_cmv_igg=="positive" and subject.recipient_cmv_igg=="positive",
       "consent_recorded":bool(subject.consent_on and subject.consent_version),
       "eligibility_attested":subject.eligibility_attested,
-      "randomization_status":"EXTERNAL_VERIFICATION_REQUIRED",
+      "randomization_status":"SEE_RESTRICTED_ALLOCATION_MODULE",
     }
 
 def pcr_view(row):
@@ -536,7 +536,16 @@ class AuthorizationIn(BaseModel):
 def authorise_drug(subject_id:int,data:AuthorizationIn,u:AuthContext=Depends(current),s:Session=Depends(db)):
     role(u,PRESCRIBERS)
     t=active_subject(s,subject_id)
-    if data.signed_on>date.today():raise HTTPException(422,"Future signed prescription")
+    from .randomization import allocation_for, arm_for
+    assigned=allocation_for(s,t.id)
+    if assigned is None:
+        raise HTTPException(409,"No concealed randomized allocation released; prescription not authorized")
+    if data.allocation_reference!=assigned.allocation_code:
+        raise HTTPException(422,"Signed prescription allocation code does not match locked randomization")
+    arm_for(s,t.id)  # Decrypt and verify sealed allocation before authorizing drug.
+    if data.signed_on>date.today() or (
+        assigned.assigned_at and data.signed_on<assigned.assigned_at.date()):
+        raise HTTPException(422,"Signed prescription must follow actual randomized allocation")
     d=DrugAuthorization(subject_id=t.id,prescription_ref=data.prescription_ref,
         signed_on=data.signed_on,allocation_reference=data.allocation_reference,
         renal_assessment_ref=data.renal_assessment_ref,
@@ -565,6 +574,11 @@ def dispense(subject_id:int,data:DispenseIn,u:AuthContext=Depends(current),s:Ses
     t=active_subject(s,subject_id)
     a=s.get(DrugAuthorization,data.authorization_id)
     if not a or a.subject_id!=t.id:raise HTTPException(422,"Approved prescription not linked to subject")
+    from .randomization import allocation_for, arm_for
+    assigned=allocation_for(s,t.id)
+    if not assigned or a.allocation_reference!=assigned.allocation_code:
+        raise HTTPException(409,"Dispensing blocked until sealed allocation and signed order reconcile")
+    arm_for(s,t.id)  # Raise if independent encryption key or ciphertext is invalid.
     lot=s.get(DrugLot,data.lot_id)
     if not lot:raise HTTPException(404,"Study drug lot not found")
     if data.issued_on<a.signed_on or data.issued_on>date.today() or data.issued_on>lot.expiry_on:
@@ -638,12 +652,12 @@ class InviteIn(BaseModel):
     username:str=Field(min_length=3,max_length=100,pattern=r"^[a-z][a-z0-9_.-]{2,99}$")
     display_name:str=Field(min_length=3,max_length=150)
     role:Literal["consultant","pg","scientist","nurse","technician","microbiology",
-                 "pharmacy","monitor","pi","admin"]
+                 "pharmacy","monitor","pi","admin","randomization_custodian"]
 
 @router.post("/staff/invite")
 def invite_user(data:InviteIn,u:AuthContext=Depends(current),s:Session=Depends(db)):
     role(u,MANAGERS)
-    if data.role in {"pi","admin"} and u.role!="admin":
+    if data.role in {"pi","admin","randomization_custodian"} and u.role!="admin":
         raise HTTPException(403,"Only an administrator may delegate privileged roles")
     user=User(username=data.username,display_name=data.display_name,role=data.role,
         password_hash=PH.hash(secrets.token_urlsafe(48)),active=False)
@@ -737,6 +751,7 @@ def roles(u:AuthContext=Depends(current)):
       "pg":["clinical visit entries"],
       "monitor":["read-only trial review","independent PCR verification"],
       "admin":["account provisioning","system administration"],
+      "randomization_custodian":["import and lock independently signed concealed allocation sequence; no enrollment or patient details"],
     }
 
 @router.get("/overview")
@@ -753,7 +768,9 @@ def overview(u:AuthContext=Depends(current),s:Session=Depends(db)):
     lot_balance=s.scalar(select(func.coalesce(func.sum(DrugLot.quantity_on_hand),0))) or 0
     issued=s.scalar(select(func.coalesce(func.sum(DrugDispense.quantity_issued),0))) or 0
     returned=s.scalar(select(func.coalesce(func.sum(DrugReturn.quantity_returned),0))) or 0
-    return {"screened":s.scalar(select(func.count(TrialSubject.id))),
+    from .trial_models import RandomizationSlot
+    randomized=s.scalar(select(func.count(RandomizationSlot.id)).where(RandomizationSlot.subject_id.is_not(None))) or 0
+    return {"randomized":randomized,"screened":s.scalar(select(func.count(TrialSubject.id))),
         "enrolled":subject_counts.get("enrolled",0),
         "ever_enrolled":total_enrolled,"subject_status":subject_counts,
         "pcr":pcr_counts,"protocol_pcr_per_subject":len(MONTHS),
@@ -762,7 +779,7 @@ def overview(u:AuthContext=Depends(current),s:Session=Depends(db)):
         "drug_accountability":{"tablets_in_stock":lot_balance,
                                "tablets_issued":issued,"tablets_returned":returned,
                                "tablets_not_yet_reconciled":issued-returned},
-        "randomization":"external authorized system required",
+        "randomization":"sealed sequence module; future allocations are never shown",
         "data_mode":"synthetic_staging" if os.getenv("CLINICAL_DATA_ENABLED","false").lower()!="true"
             else "clinical_requested_not_validated"}
 
