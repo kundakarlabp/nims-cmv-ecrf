@@ -826,3 +826,120 @@ def test_batch_ten_individual_90_day_named_accounts_no_shared_passwords():
     with TestClient(app) as scientist:
         assert scientist.post('/api/login',json={
             'username':'cmvdata01','password':'UniqueStudyScientistPassword123!'}).status_code==200
+
+
+def test_concealed_randomization_requires_pi_eligibility_and_one_irreversible_slot(monkeypatch):
+    from app.trial_models import RandomizationSlot
+    from app.main import SessionLocal
+    from sqlalchemy import select
+    with TestClient(app) as admin:
+        h=auth(admin)
+        _,sid=setup_synthetic_trial(admin,h)
+        for username,role in [('randpi','pi'),('randscientist','scientist'),
+                              ('randmonitor','monitor'),('randpharm','pharmacy')]:
+            r=admin.post('/api/users',headers=h,json={'username':username,
+                'display_name':'Synthetic '+role,'role':role,
+                'password':'SyntheticConcealedPassword123!'})
+            assert r.status_code==200
+    with TestClient(app) as scientist:
+        h=auth(scientist,'randscientist','SyntheticConcealedPassword123!')
+        assert scientist.post(f'/api/trial/randomization/subjects/{sid}/assign',
+            headers=h,json={'investigator_confirmation':True,'stratification_verified':True,
+              'signed_randomization_source_ref':'TEST-CONFIRMED-001'}).status_code==403
+    with TestClient(app) as pi:
+        h=auth(pi,'randpi','SyntheticConcealedPassword123!')
+        assert pi.post(f'/api/trial/randomization/subjects/{sid}/assign',
+            headers=h,json={'investigator_confirmation':True,'stratification_verified':True,
+              'signed_randomization_source_ref':'TEST-CONFIRMED-001'}).status_code==409
+        enrolled=pi.post(f'/api/trial/subjects/{sid}/enroll',headers=h,json={
+          'enrolled_on':'2026-10-03','pcr_anchor_on':'2026-10-01',
+          'pcr_anchor_basis':'transplant_date','protocol_reference':'protocol-v5',
+          'reviewed_eligibility_and_consent':True,'approved_visit_anchor':True})
+        assert enrolled.status_code==200,enrolled.text
+        assert pi.post(f'/api/trial/randomization/subjects/{sid}/assign',
+            headers=h,json={'investigator_confirmation':True,'stratification_verified':True,
+              'signed_randomization_source_ref':'TEST-CONFIRMED-001'}).status_code==503
+    package=lock_test_sequence(monkeypatch)
+    with TestClient(app) as pi:
+        h=auth(pi,'randpi','SyntheticConcealedPassword123!')
+        ready=pi.get('/api/trial/randomization/readiness').json()
+        assert ready['sequence_locked'] and ready['randomized']==0
+        allocated=pi.post(f'/api/trial/randomization/subjects/{sid}/assign',
+             headers=h,json={'investigator_confirmation':True,'stratification_verified':True,
+               'signed_randomization_source_ref':'TEST-CONFIRMED-001'})
+        assert allocated.status_code==200,allocated.text
+        assignment=allocated.json()
+        assert assignment['stratum']=='rATG:living'
+        assert assignment['assigned_arm_mg']=='450'  # Test-only independent list.
+        assert assignment['allocation_code'].startswith('NCMV-R-')
+        assert 'position' not in assignment and 'block_size' not in assignment
+        assert pi.post(f'/api/trial/randomization/subjects/{sid}/assign',
+            headers=h,json={'investigator_confirmation':True,'stratification_verified':True,
+              'signed_randomization_source_ref':'TEST-CONFIRMED-002'}).status_code==409
+        r=pi.get('/api/trial/randomization/assigned-group-counts').json()
+        assert r['randomized']==1 and r['group_450']==1 and r['group_900']==0
+        forms=pi.get('/api/trial/crf/schema').json()['forms']['C_baseline']['fields']
+        for locked in ('allocation_code','randomization_on','assigned_nominal_arm'):
+            assert locked not in forms
+        bad=pi.post(f'/api/trial/crf/subjects/{sid}/entries',headers=h,json={
+           'section':'C_baseline','occurred_on':'2026-10-03',
+           'payload':{'hemoglobin_g_dl':11,
+                       'assigned_nominal_arm':'900 mg OD'}})
+        assert bad.status_code==422
+        good=pi.post(f'/api/trial/crf/subjects/{sid}/entries',headers=h,json={
+           'section':'C_baseline','occurred_on':'2026-10-03',
+           'payload':{'hemoglobin_g_dl':11}})
+        assert good.status_code==200,good.text
+        records=pi.get(f'/api/trial/crf/subjects/{sid}/entries').json()['entries']
+        baseline=next(x for x in records if x['section']=='C_baseline')
+        assert baseline['payload']['assigned_nominal_arm']=='450 mg OD'
+        assert baseline['payload']['allocation_code']==assignment['allocation_code']
+    with TestClient(app) as monitor:
+        h=auth(monitor,'randmonitor','SyntheticConcealedPassword123!')
+        masked=monitor.get(f'/api/trial/randomization/subjects/{sid}/allocation').json()
+        assert masked['randomized'] is True
+        assert 'assigned_arm_mg' not in masked
+        assert monitor.get('/api/trial/randomization/assigned-group-counts').status_code==403
+    with TestClient(app) as pharm:
+        h=auth(pharm,'randpharm','SyntheticConcealedPassword123!')
+        allocation=pharm.get(f'/api/trial/randomization/subjects/{sid}/allocation').json()
+        assert allocation['assigned_arm_mg']=='450'
+    with SessionLocal() as s:
+        rows=s.scalars(select(RandomizationSlot).order_by(RandomizationSlot.position)).all()
+        assert len(rows)==40
+        assert sum(r.subject_id is not None for r in rows)==1
+        assert all('450' not in r.encrypted_arm and '900' not in r.encrypted_arm for r in rows)
+        assert rows[0].subject_id==sid
+
+
+def test_sequence_import_rejects_tampering_and_invalid_block(monkeypatch):
+    from app.randomization import canonical
+    from cryptography.fernet import Fernet
+    import hashlib
+    monkeypatch.setenv('RANDOMIZATION_FERNET_KEY',Fernet.generate_key().decode())
+    rows=sealed_test_rows()
+    package={'protocol_version':'5.0','statistician_reference':'TEST-INDEPENDENT-STATISTICIAN',
+             'signed_specification_reference':'TEST-SIGNED-SPECIFICATION',
+             'independent_sequence_attested':True,
+             'sequence_sha256':hashlib.sha256(canonical(rows)).hexdigest(),
+             'entries':rows}
+    with TestClient(app) as admin:
+        h=auth(admin)
+        assert admin.post('/api/users',headers=h,json={
+            'username':'invalidcustodian','display_name':'Synthetic independent custodian',
+            'role':'randomization_custodian',
+            'password':'CustodianInvalidTest123456!'}).status_code==200
+    with TestClient(app) as custodian:
+        h=auth(custodian,'invalidcustodian','CustodianInvalidTest123456!')
+        changed=dict(package,entries=[dict(r) for r in rows])
+        changed['entries'][0]['arm']='900'
+        assert custodian.post('/api/trial/randomization/sequence/lock',
+            headers=h,json=changed).status_code==422
+        changed['sequence_sha256']=hashlib.sha256(canonical(changed['entries'])).hexdigest()
+        assert custodian.post('/api/trial/randomization/sequence/lock',
+            headers=h,json=changed).status_code==422
+        noattest=dict(package,independent_sequence_attested=False)
+        assert custodian.post('/api/trial/randomization/sequence/lock',
+            headers=h,json=noattest).status_code==422
+        ready=custodian.get('/api/trial/randomization/readiness').json()
+        assert ready['sequence_locked'] is False and ready['planned_randomizations']==0
