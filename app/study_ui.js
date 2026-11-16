@@ -33,10 +33,19 @@ var btn=(label,id)=>'<button id="'+id+'">'+label+'</button>';
 panel('study','Enrollment',
  '<div class="study-columns"><section class="study-card"><h3>1 · Screening</h3>'+
  choose('Registry record','tw-patient',[])+field('Screening date','tw-screen-date','date')+
- field('Informed consent signed','tw-consent-date','date')+field('Signed ICF version','tw-icf')+
+ field('Informed consent signed','tw-consent-date','date')+
+ field('Signed ICF version','tw-icf')+field('Signed PIS version','tw-pis')+
+ choose('Consent language','tw-consent-language',[['English','English'],['Telugu','Telugu'],['Hindi','Hindi']])+
+ field('Consent obtained by','tw-consent-obtained')+
+ field('Signed consent document/source reference','tw-consent-source')+
+ field('Participant initials (restricted)','tw-initials')+
+ field('Age at transplant (years)','tw-screen-age','number')+
+ choose('Sex (source record)','tw-sex',[['','Not recorded'],['female','Female'],['male','Male'],['other','Other']])+
  choose('Donor CMV IgG','tw-digg',[['positive','Positive'],['negative','Negative'],['unknown','Unknown']])+
  choose('Recipient CMV IgG','tw-rigg',[['positive','Positive'],['negative','Negative'],['unknown','Unknown']])+
  choose('Donor type','tw-donor',[['living','Living'],['deceased','Deceased']])+
+ choose('Donor relationship','tw-relationship',[['living_related','Living related'],
+    ['living_unrelated','Living unrelated'],['deceased','Deceased']])+
  choose('rATG induction','tw-ratg',[['','Undocumented'],['true','Yes'],['false','No']])+
  '<label><input id="tw-eligible" type="checkbox" style="width:auto"> Signed protocol eligibility reviewed</label>'+
  btn('Save screening','tw-screen-save')+'</section>'+
@@ -227,7 +236,14 @@ $('tw-screen-save').onclick=()=>{void task('tw-status',async()=>{
  var r=await api('/api/trial/screening',{method:'POST',body:JSON.stringify({
   patient_id:value('tw-patient'),screening_on:value('tw-screen-date'),consent_on:value('tw-consent-date')||null,
   consent_version:value('tw-icf')||null,donor_cmv_igg:value('tw-digg'),recipient_cmv_igg:value('tw-rigg'),
-  donor_type:value('tw-donor'),ratg_induction:value('tw-ratg')===''?null:value('tw-ratg')==='true',
+  donor_type:value('tw-donor'),donor_relationship:value('tw-relationship'),
+  participant_initials:value('tw-initials')||null,
+  age_at_transplant:value('tw-screen-age')?n('tw-screen-age'):null,
+  sex_at_birth:value('tw-sex')||null,pis_version:value('tw-pis')||null,
+  consent_language:value('tw-consent-language')||null,
+  consent_obtained_by:value('tw-consent-obtained')||null,
+  signed_consent_source_ref:value('tw-consent-source')||null,
+  ratg_induction:value('tw-ratg')===''?null:value('tw-ratg')==='true',
   eligibility_attested:$('tw-eligible').checked})});
  notify('tw-status','Screening code '+r.screening_code+' assigned. No randomization performed.');
  await loadSubjects();
