@@ -154,3 +154,42 @@ class TrialEligibility(Base):
     reviewed_by: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
     reviewed_on: Mapped[date] = mapped_column(Date, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, nullable=False)
+
+class TrialCRFEntry(Base):
+    __tablename__ = "trial_crf_entries"
+    __table_args__ = (UniqueConstraint("subject_id","section","occurrence_key"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    subject_id: Mapped[int] = mapped_column(ForeignKey("trial_subjects.id"), index=True, nullable=False)
+    section: Mapped[str] = mapped_column(String(40), nullable=False)
+    occurrence_key: Mapped[str] = mapped_column(String(60), nullable=False)
+    occurred_on: Mapped[date] = mapped_column(Date, nullable=False)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
+    updated_by: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, nullable=False)
+
+class TrialCRFDraft(Base):
+    __tablename__ = "trial_crf_drafts"
+    __table_args__ = (UniqueConstraint("user_id","subject_id","section","occurrence_key"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
+    subject_id: Mapped[int] = mapped_column(ForeignKey("trial_subjects.id"), index=True, nullable=False)
+    section: Mapped[str] = mapped_column(String(40), nullable=False)
+    occurrence_key: Mapped[str] = mapped_column(String(60), nullable=False)
+    occurred_on: Mapped[date] = mapped_column(Date, nullable=False)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, nullable=False)
+
+class TrialCRFReview(Base):
+    __tablename__ = "trial_crf_reviews"
+    __table_args__ = (UniqueConstraint("entry_id","entry_revision"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    entry_id: Mapped[int] = mapped_column(ForeignKey("trial_crf_entries.id"), index=True, nullable=False)
+    entry_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    decision: Mapped[str] = mapped_column(String(30), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    reviewer_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, nullable=False)
