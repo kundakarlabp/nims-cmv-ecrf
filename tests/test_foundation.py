@@ -328,7 +328,56 @@ def test_pcr_collection_qualitative_quantitative_and_independent_review():
         assert sum(x['completion_verified'] for x in worklist)==1
 
 
-def test_pharmacy_authorization_stock_issue_return_and_separate_roles():
+
+def sealed_test_rows():
+    from app.randomization import STRATA
+    # Test-only fixed example, not a clinical allocation sequence.
+    rows=[]
+    for stratum in STRATA:
+        position=1
+        for number,size in ((1,4),(2,6)):
+            arms=['450']*(size//2)+['900']*(size//2)
+            for arm in arms:
+                rows.append({'stratum':stratum,'position':position,
+                    'block_no':number,'block_size':size,'arm':arm})
+                position+=1
+    return rows
+
+
+def lock_test_sequence(monkeypatch):
+    from cryptography.fernet import Fernet
+    from app.randomization import canonical
+    import hashlib
+    monkeypatch.setenv('RANDOMIZATION_FERNET_KEY',Fernet.generate_key().decode('ascii'))
+    rows=sealed_test_rows()
+    package={'protocol_version':'5.0','statistician_reference':'TEST-INDEPENDENT-STATISTICIAN',
+             'signed_specification_reference':'TEST-SIGNED-BLOCK-PLAN',
+             'independent_sequence_attested':True,
+             'sequence_sha256':hashlib.sha256(canonical(rows)).hexdigest(),
+             'entries':rows}
+    with TestClient(app) as admin:
+        h=auth(admin)
+        created=admin.post('/api/users',headers=h,json={
+            'username':'testallocationcustodian','display_name':'Synthetic independent sequence holder',
+            'role':'randomization_custodian','password':'IndependentCustodianPassword123!'})
+        assert created.status_code==200,created.text
+        denied=admin.post('/api/trial/randomization/sequence/lock',headers=h,json=package)
+        assert denied.status_code==403
+    with TestClient(app) as custodian:
+        h=auth(custodian,'testallocationcustodian','IndependentCustodianPassword123!')
+        assert custodian.get('/api/patients').status_code==403
+        assert custodian.get('/api/trial/subjects').status_code==403
+        response=custodian.post('/api/trial/randomization/sequence/lock',headers=h,json=package)
+        assert response.status_code==200,response.text
+        assert response.json()['locked'] and response.json()['sequence_sha256']==package['sequence_sha256']
+        assert response.json()['stratum_capacities']=={s:10 for s in (
+            'rATG:living','rATG:deceased','no_rATG:living','no_rATG:deceased')}
+        assert 'entries' not in response.json()
+        again=custodian.post('/api/trial/randomization/sequence/lock',headers=h,json=package)
+        assert again.status_code==409
+    return package
+
+def test_pharmacy_authorization_stock_issue_return_and_separate_roles(monkeypatch):
     with TestClient(app) as admin:
         h=auth(admin)
         _,sid=setup_synthetic_trial(admin,h)
@@ -343,9 +392,20 @@ def test_pharmacy_authorization_stock_issue_return_and_separate_roles():
             'pcr_anchor_basis':'transplant_date','protocol_reference':'approved-v5',
             'reviewed_eligibility_and_consent':True,'approved_visit_anchor':True})
         assert r.status_code==200
+        before=pi.post(f'/api/trial/subjects/{sid}/drug-authorization',headers=h,json={
+            'prescription_ref':'TEST-RX-UNRANDOMIZED','signed_on':'2026-10-03',
+            'allocation_reference':'UNLOCKED-ATTEMPT',
+            'renal_assessment_ref':'TEST-CRCL-001',
+            'authorized_dose_instruction':'Use signed prescription only'})
+        assert before.status_code==409
+        lock_test_sequence(monkeypatch)
+        assigned=pi.post(f'/api/trial/randomization/subjects/{sid}/assign',
+            headers=h,json={'investigator_confirmation':True,'stratification_verified':True,
+                'signed_randomization_source_ref':'TEST-SIGNED-PI-001'})
+        assert assigned.status_code==200,assigned.text
         order=pi.post(f'/api/trial/subjects/{sid}/drug-authorization',headers=h,json={
-            'prescription_ref':'TEST-RX-001','signed_on':'2026-10-03',
-            'allocation_reference':'TEST-EXTERNAL-ALLOCATION',
+            'prescription_ref':'TEST-RX-001','signed_on':__import__('datetime').date.today().isoformat(),
+            'allocation_reference':assigned.json()['allocation_code'],
             'renal_assessment_ref':'TEST-CRCL-001',
             'authorized_dose_instruction':'Use signed prescription only'})
         assert order.status_code==200,order.text
@@ -362,17 +422,17 @@ def test_pharmacy_authorization_stock_issue_return_and_separate_roles():
         lot=received.json()['lot_id']
         issued=pharm.post(f'/api/trial/subjects/{sid}/dispense',headers=h,json={
             'authorization_id':order_id,'lot_id':lot,'quantity_issued':30,
-            'issued_on':'2026-10-03'})
+            'issued_on':__import__('datetime').date.today().isoformat()})
         assert issued.status_code==200,issued.text
         assert issued.json()['remaining_in_lot']==30
         assert '-MSS-' in issued.json()['slip_code']
         assert pharm.post(f'/api/trial/subjects/{sid}/dispense',headers=h,json={
             'authorization_id':order_id,'lot_id':lot,'quantity_issued':31,
-            'issued_on':'2026-10-03'}).status_code==409
+            'issued_on':__import__('datetime').date.today().isoformat()}).status_code==409
         dispenses=pharm.get(f'/api/trial/subjects/{sid}/pharmacy').json()['dispenses']
         assert len(dispenses)==1
         r=pharm.post(f"/api/trial/pharmacy/dispenses/{dispenses[0]['id']}/return",headers=h,
-            json={'quantity_returned':5,'returned_on':'2026-10-10','disposition':'quarantine'})
+            json={'quantity_returned':5,'returned_on':__import__('datetime').date.today().isoformat(),'disposition':'quarantine'})
         assert r.status_code==200,r.text
         assert r.json()['unreconciled_quantity']==25
         assert pharm.get('/api/trial/pharmacy/lots').json()[0]['quantity_on_hand']==30
