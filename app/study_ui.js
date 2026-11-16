@@ -90,6 +90,7 @@ panel('pcr','CMV PCR',
 );
 panel('drug','MSS drug accountability',
  choose('Enrolled subject','tw-drug-subject',[])+
+ '<div id="tw-drug-allocation" class="hint">No randomized allocation verified.</div>'+
  '<div class="study-columns"><section class="study-card"><h3>Receive valganciclovir stock</h3>'+
  field('Batch/lot reference','tw-lot')+field('Received on','tw-receipt-date','date')+
  field('Expires on','tw-expiry','date')+field('Number of 450 mg tablets','tw-received','number')+
@@ -126,6 +127,30 @@ panel('crf','Structured eCRF · Sections C–L',
  '<div class="study-card"><h3>Submitted forms and review states</h3>'+
  '<div id="tw-crf-entries"></div></div>'+
  '<div id="tw-crf-status" class="status hide"></div>'
+);
+panel('randomization','Concealed randomization',
+ '<div class="study-card"><h3>Protocol v5.0 · independent 1:1 assignment</h3>'+
+ '<p class="hint">Variable permuted blocks stratified by rATG (yes/no) × living/deceased donor. '+
+ 'The next assignment remains concealed until PI-approved enrollment and eligibility; no manual group selection, reuse or rerandomization.</p>'+
+ '<div id="tw-rand-overview" class="hint">Checking signed sequence readiness…</div></div>'+
+ '<div class="study-card" id="tw-rand-assign-panel"><h3>Release next concealed allocation</h3>'+
+ choose('Enrolled and eligible subject','tw-rand-subject',[])+
+ '<div id="tw-rand-subject-status" class="hint">Choose an eligible enrolled subject.</div>'+
+ field('Signed randomization source / investigator confirmation','tw-rand-source')+
+ '<label><input type="checkbox" id="tw-rand-eligibility-confirm" style="width:auto"> '+
+ 'I verified signed consent, complete current eligibility and both stratification factors.</label>'+
+ btn('Randomize participant (irreversible)','tw-rand-assign')+
+ '<p class="hint">A single irreversible allocation is released. Nominal arms require Cockcroft–Gault renal adjustment and a separate signed prescription.</p></div>'+
+ '<div class="study-card" id="tw-rand-custodian-panel"><h3>Independent statistician/custodian only</h3>'+
+ '<p class="hint">Upload the signed allocation package generated independently offline. '+
+ 'Only its fingerprint and stratum capacities are displayed; future treatment groups are never shown. '+
+ 'A plan cannot be replaced, edited or regenerated after locking.</p>'+
+ '<label>Locally held signed sequence JSON<input id="tw-rand-file" type="file" accept=".json,application/json"></label>'+
+ '<div id="tw-rand-file-info" class="hint">No confidential sequence uploaded.</div>'+
+ btn('Permanently lock signed sequence','tw-rand-lock')+'</div>'+
+ '<div class="study-card" id="tw-rand-groups-panel"><h3>Realized group balance</h3>'+
+ '<div id="tw-rand-groups" class="hint">Only assigned participants are counted.</div></div>'+
+ '<div id="tw-rand-status" class="status hide" role="status"></div>'
 );
 panel('security','Account security',
  '<div class="study-card"><h3>Register two-factor authenticator</h3>'+
@@ -164,7 +189,7 @@ login.insertAdjacentHTML('beforeend','<hr><h3>Activate individual staff account<
  '<label>Choose a private password<input type="password" id="tw-password" autocomplete="new-password"></label>'+
  btn('Activate account','tw-activate-save')+'<div id="tw-activate-status" class="status hide"></div>');
 for(const id of ['tw-screen-date','tw-consent-date','tw-enroll-date','tw-anchor-date','tw-collected','tw-reported','tw-receipt-date','tw-rx-date','tw-issue-date','tw-return-date'])$(id).value=today();
-var perms={crf:['pi','consultant','scientist','nurse','pg','technician','microbiology','pharmacy','monitor'],study:['pi','consultant','scientist'],pcr:['pi','consultant','scientist','nurse','technician','microbiology','monitor'],drug:['pi','consultant','scientist','pharmacy','monitor'],staff:['pi','admin'],security:['pi','admin','consultant','pg','scientist','nurse','technician','microbiology','pharmacy','monitor']};
+var perms={randomization:['pi','consultant','pharmacy','scientist','monitor','randomization_custodian'],crf:['pi','consultant','scientist','nurse','pg','technician','microbiology','pharmacy','monitor'],study:['pi','consultant','scientist'],pcr:['pi','consultant','scientist','nurse','technician','microbiology','monitor'],drug:['pi','consultant','scientist','pharmacy','monitor'],staff:['pi','admin'],security:['pi','admin','consultant','pg','scientist','nurse','technician','microbiology','pharmacy','monitor','randomization_custodian']};
 function setRole(){
  var r=$('currentRole').textContent.trim();
  for(const k of Object.keys(perms))$('btn'+k).classList.toggle('hide',!perms[k].includes(r));
@@ -190,10 +215,10 @@ tab=async function(name){
   $('tw-invitation').textContent='';$('tw-invitation').classList.add('hide');
   $('tw-bulk-result').textContent='';$('tw-bulk-result').classList.add('hide');
  }
- if(['study','pcr','drug','staff','security','crf'].includes(name)){
+ if(['study','pcr','drug','staff','security','crf','randomization'].includes(name)){
   if(activeTab==='entry'){try{await saveDraftNow();}catch(e){show('msg','Draft not saved: '+e.message,true);return;}}
   activeTab=name;
-  for(const section of ['dashboard','registry','review','entry','dose','due','study','pcr','drug','staff','security','crf']){
+  for(const section of ['dashboard','registry','review','entry','dose','due','study','pcr','drug','staff','security','crf','randomization']){
    $(section).classList.toggle('hide',section!==name);
    $('btn'+section).classList.toggle('selected',section===name);
   }
@@ -203,6 +228,7 @@ tab=async function(name){
    if(name==='pcr'){await loadSubjects();await loadPCR();}
    if(name==='drug'){await loadSubjects();await loadDrug();}
    if(name==='staff'){await loadAccounts();}
+   if(name==='randomization'){await loadRandomization();}
    if(name==='crf'){await loadSubjects();await loadCrfSchema();await loadCrfEntries();}
   });
  }else{
@@ -219,7 +245,7 @@ async function loadSubjects(){
  fill('tw-screened',studySubjects.filter(x=>x.status==='screened'),'id',x=>x.screening_code);
  fill('tw-checklist-subject',studySubjects.filter(x=>x.status==='screened'),'id',x=>x.screening_code);
  var active=studySubjects.filter(x=>x.status==='enrolled');
- for(const id of ['tw-pcr-subject','tw-drug-subject','tw-crf-subject'])fill(id,active,'id',x=>x.study_code);
+ for(const id of ['tw-pcr-subject','tw-drug-subject','tw-crf-subject','tw-rand-subject'])fill(id,active,'id',x=>x.study_code);
  $('tw-register').innerHTML='<table><thead><tr><th>Study code</th><th>Status</th><th>D+/R+</th><th>Signed consent</th></tr></thead><tbody>'+
  studySubjects.map(x=>'<tr><td>'+txt(x.study_code||x.screening_code)+'</td><td>'+txt(x.status)+'</td><td>'+String(x.d_plus_r_plus)+'</td><td>'+String(x.consent_recorded)+'</td></tr>').join('')+'</tbody></table>';
 }
@@ -239,6 +265,14 @@ async function loadDrug(){
   fill('tw-lot-id',drugLots,'id',x=>x.lot_number+' ('+x.quantity_on_hand+' remaining)');
  }
  var p=await api('/api/trial/subjects/'+selectedId+'/pharmacy');
+ if(['pi','consultant','pharmacy'].includes($('currentRole').textContent.trim())){
+   const allocation=await api('/api/trial/randomization/subjects/'+selectedId+'/allocation');
+   const banner=$('tw-drug-allocation');
+   if(banner)banner.textContent=allocation.randomized?
+    'Verified assignment '+allocation.allocation_code+' · nominal '+allocation.assigned_arm_mg+' mg OD (renal-adjusted prescribing required)':
+    'No randomized allocation: prescriptions and dispensing must not proceed.';
+   if(allocation.randomized)$('tw-allocation').value=allocation.allocation_code;
+ }
  $('tw-ledger').innerHTML='<table><thead><tr><th>MSS slip code</th><th>Issued</th><th>Returned</th><th>Unreconciled</th></tr></thead><tbody>'+
  p.dispenses.map(x=>'<tr><td>'+txt(x.slip_code)+'</td><td>'+x.quantity_issued+'</td><td>'+x.total_returned+'</td><td>'+x.remaining_unreconciled+'</td></tr>').join('')+'</tbody></table>';
 }
@@ -759,5 +793,95 @@ async function populateCrfLinkedIdentifiers(){
  parent.replaceChild(select,previous);
  if(initial)select.value=initial;
 }
+
+
+/* Independent, concealed sequence import and PI-only randomized assignment. */
+let lockedSequenceFile=null;
+async function loadRandomization(){
+ const role=$('currentRole').textContent.trim();
+ const isCustodian=role==='randomization_custodian';
+ $('tw-rand-assign-panel').classList.toggle('hide',role!=='pi');
+ $('tw-rand-custodian-panel').classList.toggle('hide',!isCustodian);
+ $('tw-rand-groups-panel').classList.toggle('hide',!['pi','consultant','pharmacy'].includes(role));
+ if(!isCustodian){
+  await loadSubjects();
+  await loadRandSubject();
+ }
+ const r=await api('/api/trial/randomization/readiness');
+ $('tw-rand-overview').textContent=
+  'Sequence: '+(r.sequence_locked?'locked · SHA-256 '+r.sequence_sha256:'not loaded')+
+  ' | Reserved positions: '+r.planned_randomizations+
+  ' | Randomized: '+r.randomized+
+  ' | Release: '+(r.activation_ready?'configured':'blocked')+
+  ' | Mode: '+(r.clinical_mode?'clinical gated':'synthetic staging');
+ if(['pi','consultant','pharmacy'].includes(role)){
+  const groups=await api('/api/trial/randomization/assigned-group-counts');
+  $('tw-rand-groups').textContent=
+   'Already randomized: '+groups.randomized+
+   ' | 450-mg nominal group: '+groups.group_450+
+   ' | 900-mg nominal group: '+groups.group_900+
+   '. No undisclosed future allocations or block details are visible.';
+ }
+}
+async function loadRandSubject(){
+ const subject=n('tw-rand-subject');
+ const target=$('tw-rand-subject-status');
+ if(!subject){target.textContent='Choose an enrolled participant.';return;}
+ const r=await api('/api/trial/randomization/subjects/'+subject+'/allocation');
+ target.textContent=r.randomized?
+  'Already randomized · '+r.allocation_code+
+    (r.assigned_arm_mg?' · '+r.assigned_arm_mg+' mg nominal':'')+
+    '. Repeat randomization is prohibited.':
+  'Not randomized · study ID '+r.study_code+
+  '. Verify signed eligibility, consent and induction/donor type before release.';
+ $('tw-rand-assign').disabled=r.randomized;
+}
+$('tw-rand-subject').onchange=()=>{void task('tw-rand-status',loadRandSubject);};
+$('tw-rand-assign').onclick=()=>{void task('tw-rand-status',async()=>{
+ const sid=n('tw-rand-subject');
+ if(!sid)throw Error('Select an enrolled participant');
+ if(!$('tw-rand-eligibility-confirm').checked)
+  throw Error('Check the signed eligibility/stratum confirmation before requesting an allocation');
+ const source=value('tw-rand-source');
+ if(source.length<8)throw Error('Enter signed source reference (at least 8 characters)');
+ if(!confirm('Permanently allocate the NEXT concealed assignment in the approved stratum? '+
+      'You cannot select or undo this treatment arm.'))return;
+ const r=await api('/api/trial/randomization/subjects/'+sid+'/assign',{
+  method:'POST',body:JSON.stringify({investigator_confirmation:true,
+   stratification_verified:true,signed_randomization_source_ref:source})});
+ notify('tw-rand-status','Randomization completed: '+r.study_code+
+  ' · '+r.allocation_code+' · '+r.assigned_arm_mg+
+  ' mg nominal arm. Follow signed renal-adjusted prescription and record allocation code at MSS.');
+ $('tw-rand-eligibility-confirm').checked=false;
+ $('tw-rand-source').value='';
+ await loadRandomization();
+});};
+$('tw-rand-file').onchange=()=>{void task('tw-rand-status',async()=>{
+ const file=$('tw-rand-file').files?.[0];
+ lockedSequenceFile=null;
+ if(!file){$('tw-rand-file-info').textContent='No file selected.';return;}
+ if(file.size>2000000)throw Error('Allocation package exceeds 2 MB');
+ const raw=JSON.parse(await file.text());
+ if(!Array.isArray(raw.entries)||!raw.entries.length||
+     !raw.sequence_sha256||!raw.independent_sequence_attested)
+  throw Error('Invalid unsigned sequence package. Use independently approved generator output.');
+ lockedSequenceFile=raw;
+ $('tw-rand-file-info').textContent=
+  'Package read locally · '+raw.entries.length+' allocation positions · fingerprint '+
+  raw.sequence_sha256+
+  ' · no future group assignments displayed. Verify signed statistician specification.';
+});};
+$('tw-rand-lock').onclick=()=>{void task('tw-rand-status',async()=>{
+ if(!lockedSequenceFile)throw Error('Select the independently signed allocation package');
+ if(!confirm('PERMANENT sequence lock: this cannot be replaced or regenerated after first import. '+
+    'Confirm independent statistician specification and protocol v5.0?'))return;
+ const result=await api('/api/trial/randomization/sequence/lock',{
+  method:'POST',body:JSON.stringify(lockedSequenceFile)});
+ lockedSequenceFile=null;$('tw-rand-file').value='';
+ $('tw-rand-file-info').textContent='Sequence locked; local plaintext selection cleared.';
+ notify('tw-rand-status','Signed sealed sequence locked · SHA-256 '+result.sequence_sha256+
+  '. All unreleased treatment assignments remain encrypted.');
+ await loadRandomization();
+});};
 
 })();
