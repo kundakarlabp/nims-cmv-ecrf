@@ -44,3 +44,8 @@ CLINICAL_DATA_ENABLED defaults false: TEST- CR numbers and Synthetic-prefixed na
 ## CRF v3.0 account and form upgrade (16 November 2026)
 
 Source-aligned CRF A/B eligibility and source-link metadata, typed sections C–L, autosave/review and staff expiry controls are described in `ops/CRF_V3_IMPLEMENTATION_MATRIX.md`. This does not eliminate the independent randomization, institutional authorization, server backup and signed UAT gates. Account access validity defaults to 90 days after activation; initial invite tokens last seven days.
+
+
+## Sealed sequence module added (16 November 2026)
+
+Protocol v5.0 requires stratified 1:1 variable permuted blocks with independent sequence custody. An offline independent-statistician generator, custodian-only one-time encrypted sequence import/lock, PI-only atomic next-slot allocation, per-subject read-after-release, clinical randomization checksum gate and pharmacy allocation reconciliation are implemented for synthetic staging. Assignment balances are hidden from enrolling staff to avoid block predictability. The signed final block-size specification and fingerprint, independent-statistician review, encryption key backup, all production migrations, real participant consent/eligibility source tests, approved Drive backup/restore and signed UAT remain prerequisites; see ops/RANDOMIZATION_SOP.md. There is no official live sequence in the repository or staging VM by this code change. An independent custodian must be appointed and activated as an individual named user with MFA; this is not one of the ten routine entry accounts.

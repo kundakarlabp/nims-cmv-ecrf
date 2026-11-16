@@ -62,6 +62,17 @@ def enforce_record_date(subject,event_on,section):
 
 def enrich_from_sources(s,subject,section,payload):
     result=dict(payload)
+    if section=="C_baseline":
+        from .randomization import allocation_for, arm_for
+        slot=allocation_for(s,subject.id)
+        if not slot:
+            raise HTTPException(409,"Cannot finalize baseline randomization fields before an independently locked allocation")
+        locked={"allocation_code":slot.allocation_code,
+                "assigned_nominal_arm":arm_for(s,subject.id)+" mg OD",
+                "randomization_on":slot.assigned_at.date().isoformat()}
+        if any(key in result and result[key]!=value for key,value in locked.items()):
+            raise HTTPException(422,"Manually supplied treatment allocation contradicts the locked randomized group")
+        result.update(locked)  # Read-only randomized source of truth, never an editable arm.
     if section=="E_followup" and result.get("pcr_specimen_code"):
         specimen=s.scalar(select(PCRRecord).where(
             PCRRecord.subject_id==subject.id,
@@ -98,8 +109,12 @@ def occurrence_for(section,payload,requested=None):
 
 @router.get("/schema")
 def crf_schema(u:AuthContext=Depends(current)):
-    permitted={k:v for k,v in CRF_FORMS.items()
+    # Never render treatment-arm fields as editable CRF inputs.
+    permitted={k:dict(v,fields=dict(v["fields"])) for k,v in CRF_FORMS.items()
               if u.role in FORM_EDITOR[k] or (u.role=="monitor" and k in BLINDED_FORM_SECTIONS)}
+    if "C_baseline" in permitted:
+        for key in ("allocation_code","assigned_nominal_arm","randomization_on"):
+            permitted["C_baseline"]["fields"].pop(key,None)
     return {"crf_version":CRF_VERSION,"protocol_version":PROTOCOL_VERSION,
         "forms":permitted,"notice":"CRF v3.0 approved-form mapping; randomization and dosing are separate controlled functions"}
 

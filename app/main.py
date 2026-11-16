@@ -109,7 +109,7 @@ class EntryReview(Base):
     created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=now,nullable=False)
 
 # Register structured study models before the staging metadata is built.
-from .trial_models import TrialSubject, PCRRecord, DrugLot, DrugAuthorization, DrugDispense, DrugReturn, UserInvitation, LoginThrottle, UserTotp, StaffAccess, TrialEligibility, TrialCRFEntry, TrialCRFDraft, TrialCRFReview, TrialScreeningMeta
+from .trial_models import TrialSubject, PCRRecord, DrugLot, DrugAuthorization, DrugDispense, DrugReturn, UserInvitation, LoginThrottle, UserTotp, StaffAccess, TrialEligibility, TrialCRFEntry, TrialCRFDraft, TrialCRFReview, TrialScreeningMeta, RandomizationPlan, RandomizationSlot
 
 app=FastAPI(title='NIMS Transplant Registry — staging foundation',docs_url=None,redoc_url=None)
 # Fail closed if someone enables real-patient mode without the independent go-live
@@ -123,7 +123,7 @@ if CLINICAL_MODE:
 else:
     Base.metadata.create_all(bind=ENGINE)  # Synthetic staging only
 
-ROLES={'pi','admin','consultant','pg','scientist','nurse','technician','microbiology','pharmacy','monitor'}
+ROLES={'pi','admin','consultant','pg','scientist','nurse','technician','microbiology','pharmacy','monitor','randomization_custodian'}
 WRITE_ROLES={
  'admission':{'pi','consultant','pg','scientist','nurse'},
  'visit':{'pi','consultant','pg','scientist','nurse'},
@@ -161,6 +161,13 @@ def current(request:Request,s:Session=Depends(db)) -> AuthContext:
         raise HTTPException(403,'Account access expired; contact the study administrator')
     if CLINICAL_MODE and user.role not in {'admin','pi'} and not access:
         raise HTTPException(403,'Named staff authorization required')
+    if user.role=='randomization_custodian' and not (
+        request.url.path.startswith('/api/trial/randomization/')
+        or request.url.path in {'/api/me','/api/logout',
+          '/api/trial/staff/change-password','/api/trial/staff/mfa-setup',
+          '/api/trial/staff/mfa-confirm'}
+    ):
+        raise HTTPException(403,'Allocation custodian has no patient/eligibility or treatment record access')
     if request.method not in ('GET','HEAD','OPTIONS'):
         supplied=request.headers.get('x-csrf-token','')
         if not supplied or not secrets.compare_digest(sha(supplied),active.csrf_hash):
@@ -265,6 +272,8 @@ class NewUser(BaseModel):
 def create_user(data:NewUser,u:AuthContext=Depends(current),s:Session=Depends(db)):
     if u.role not in ('admin','pi'): raise HTTPException(403)
     if data.role not in ROLES: raise HTTPException(422,'Unknown role')
+    if data.role in {'pi','admin','randomization_custodian'} and u.role!='admin':
+        raise HTTPException(403,'Only administrator can delegate privileged access')
     if CLINICAL_MODE:
         raise HTTPException(403,'Use named invitations rather than administrator-selected credentials')
     obj=User(username=data.username,display_name=data.display_name,role=data.role,password_hash=PH.hash(data.password))
@@ -533,3 +542,6 @@ app.include_router(trial_router)
 
 from .trial_crf import router as crf_router
 app.include_router(crf_router)
+
+from .randomization import router as randomization_router
+app.include_router(randomization_router)

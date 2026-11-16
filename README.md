@@ -156,3 +156,7 @@ All source code, schema definition, reference field dictionary, instructions and
 Oracle documentation: https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm
 rclone docs: https://rclone.org/crypt/ and https://rclone.org/drive/
 
+
+### Concealed stratified randomization
+
+The NIMS CMV protocol v5.0 allocation workflow now has custodian-controlled, encrypted future assignments, four rATG/donor strata, an irreversible PI Randomize action and pharmacy/CRF cross-checks. The independent statistician **must sign and lock** the final variable-block specification and sequence before first clinical use. See ops/RANDOMIZATION_SOP.md. This is not an activated clinical randomization system. A bulk dashboard can issue up to 15 distinct staff invitations for 90-day access; it never shares passwords.
