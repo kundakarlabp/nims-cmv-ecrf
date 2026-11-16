@@ -122,6 +122,13 @@ class UserInvitation(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     redeemed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+class UserTotp(Base):
+    __tablename__ = "trial_user_totp"
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    secret: Mapped[str] = mapped_column(String(64), nullable=False)
+    enabled: Mapped[bool] = mapped_column(nullable=False, default=False)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
 class LoginThrottle(Base):
     __tablename__ = "trial_login_throttle"
     username: Mapped[str] = mapped_column(String(100), primary_key=True)
