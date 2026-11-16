@@ -409,3 +409,22 @@ def test_user_lockout_after_five_failed_passwords():
         response=client.post('/api/login',json={
             'username':'testadmin','password':'ThisIsALongTestingPassword123!'})
         assert response.status_code==429,response.text
+
+
+def test_blinded_monitor_audit_does_not_include_identity_or_raw_payload():
+    with TestClient(app) as admin:
+        h=auth(admin)
+        patient=admin.post('/api/patients',headers=h,json={
+            'name':'Synthetic monitor target','cr_number':'TEST-MON-001'})
+        pid=patient.json()['id']
+        assert admin.post('/api/users',headers=h,json={
+            'username':'monitortest','display_name':'Synthetic monitor','role':'monitor',
+            'password':'SyntheticMonitorPass123!'}).status_code==200
+    with TestClient(app) as monitor:
+        auth(monitor,'monitortest','SyntheticMonitorPass123!')
+        rows=monitor.get(f'/api/patients/{pid}/audit').json()
+        assert len(rows)>0
+        assert all('old_record' not in row and 'new_record' not in row for row in rows)
+        p=monitor.get(f'/api/patients/{pid}').json()['patient']
+        assert 'name' not in p and 'cr_number' not in p
+        assert monitor.get('/api/patients?q=TEST-MON-001').json()==[]
