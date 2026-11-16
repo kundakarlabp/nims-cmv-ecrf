@@ -81,8 +81,13 @@ def check_sequence(raw):
             blocks[x["block_no"]].append(x)
         if sorted(blocks)!=list(range(1,len(blocks)+1)):
             raise HTTPException(422,f"Noncontiguous block numbers in {name}")
-        for idx,block in blocks.items():
+        next_position=1
+        for idx in sorted(blocks):
+            block=blocks[idx]
             size=block[0]["block_size"]
+            if sorted(x["position"] for x in block)!=list(range(next_position,next_position+size)):
+                raise HTTPException(422,f"Permuted block positions not contiguous in {name}/{idx}")
+            next_position+=size
             if len(block)!=size or any(x["block_size"]!=size for x in block):
                 raise HTTPException(422,f"Incomplete permuted block {name}/{idx}")
             if Counter(x["arm"] for x in block)!={"450":size//2,"900":size//2}:
