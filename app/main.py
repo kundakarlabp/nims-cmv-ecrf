@@ -107,6 +107,9 @@ class EntryReview(Base):
     reviewer_id: Mapped[str]=mapped_column(ForeignKey('users.id'),nullable=False)
     created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=now,nullable=False)
 
+# Register structured study models before the staging metadata is built.
+from .trial_models import TrialSubject, PCRRecord, DrugLot, DrugAuthorization, DrugDispense, DrugReturn, UserInvitation, LoginThrottle
+
 app=FastAPI(title='NIMS Transplant Registry — staging foundation',docs_url=None,redoc_url=None)
 Base.metadata.create_all(bind=ENGINE)  # Staging convenience; replace with reviewed migrations before production
 
@@ -223,6 +226,9 @@ class PatientIn(BaseModel):
 @app.post('/api/patients')
 def create_patient(data:PatientIn,u:AuthContext=Depends(current),s:Session=Depends(db)):
     if u.role not in {'admin','pi','consultant','scientist'}: raise HTTPException(403)
+    if os.getenv('CLINICAL_DATA_ENABLED','false').lower()!='true':
+        if not (data.cr_number.upper().startswith('TEST-') and data.name.lower().startswith('synthetic')):
+            raise HTTPException(403,'Synthetic-only staging: identifiable patient registration is disabled')
     p=Patient(**data.model_dump(),created_by=u.user_id)
     try:
         s.add(p);s.flush();audit(s,u,'create','patient',p.id,p.id,None,as_dict(p),'Initial registration')
@@ -235,13 +241,22 @@ def patients(q:str='',limit:int=50,u:AuthContext=Depends(current),s:Session=Depe
     st=select(Patient)
     if q.strip(): st=st.where(Patient.name.ilike('%'+q.strip()+'%')|Patient.cr_number.ilike('%'+q.strip()+'%')|Patient.study_id.ilike('%'+q.strip()+'%'))
     ps=s.scalars(st.order_by(Patient.created_at.desc()).limit(limit)).all()
-    return [{'id':p.id,'cr_number':p.cr_number,'name':p.name,'study_id':p.study_id,'transplant_date':p.transplant_date,'revision':p.revision} for p in ps]
+    restricted=u.role in {'microbiology','pharmacy','technician','monitor'}
+    return [{'id':p.id,'cr_number':None if restricted else p.cr_number,
+             'name':None if restricted else p.name,'study_id':p.study_id,
+             'transplant_date':p.transplant_date,'revision':p.revision} for p in ps]
 @app.get('/api/patients/{patient_id}')
 def patient(patient_id:str,u:AuthContext=Depends(current),s:Session=Depends(db)):
     p=s.get(Patient,patient_id)
     if not p: raise HTTPException(404)
     es=s.scalars(select(Entry).where(Entry.patient_id==patient_id).order_by(Entry.occurred_on.desc(),Entry.created_at.desc())).all()
-    return {'patient':as_dict(p),'entries':[dict(as_dict(e),review_status=review_state(s,e)) for e in es]}
+    data=as_dict(p)
+    if u.role in {'microbiology','pharmacy','technician','monitor'}:
+        data.pop('name',None);data.pop('cr_number',None)
+        # Lab, pharmacy and external monitors never receive unrelated clinical entry payloads.
+        permitted={'lab','pharmacy'} if u.role in {'microbiology','pharmacy','technician'} else set()
+        es=[e for e in es if e.kind in permitted]
+    return {'patient':data,'entries':[dict(as_dict(e),review_status=review_state(s,e)) for e in es]}
 class EntryIn(BaseModel):
     kind:Literal['admission','visit','lab','infection','medication','transplant','safety','pharmacy','rejection']
     occurred_on:date
@@ -366,7 +381,7 @@ def review_queue(u:AuthContext=Depends(current),s:Session=Depends(db)):
     review_permission(u)
     rows=s.execute(select(Entry,Patient).join(Patient,Entry.patient_id==Patient.id)
                    .order_by(Entry.updated_at.desc()).limit(200)).all()
-    return [{'entry_id':e.id,'patient_id':p.id,'study_id':p.study_id,'cr_number':p.cr_number,
+    return [{'entry_id':e.id,'patient_id':p.id,'study_id':p.study_id,'cr_number':None if u.role=='monitor' else p.cr_number,
              'kind':e.kind,'occurred_on':e.occurred_on,'revision':e.revision,
              'review_status':review_state(s,e),'payload':e.payload,
              'updated_by':e.updated_by} for e,p in rows]
@@ -446,3 +461,7 @@ def due(u:AuthContext=Depends(current),s:Session=Depends(db)):
                         'warning':'Do not use for clinical visit scheduling; verify enrolled-date anchor and approved windows.'})
     return sorted(records,key=lambda x:x['days_until'])
 
+
+# Trial-specific closed-loop endpoints, registered after the shared auth helpers.
+from .trial_api import router as trial_router
+app.include_router(trial_router)
