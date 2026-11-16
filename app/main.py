@@ -294,7 +294,7 @@ def read_draft(patient_id:str,kind:DRAFT_KINDS,u:AuthContext=Depends(current),s:
     return {'draft': as_dict(d) if d else None}
 
 @app.put('/api/patients/{patient_id}/drafts/{kind}')
-def save_draft(patient_id:str,kind:DRAFT_KIN,data:DraftInput,
+def save_draft(patient_id:str,kind:DRAFT_KINDS,data:DraftInput,
                u:AuthContext=Depends(current),s:Session=Depends(db)):
     draft_patient(s,patient_id,u,kind)
     if len(str(data.payload))>20000: raise HTTPException(413,'Draft too large')
@@ -323,7 +323,7 @@ def save_draft(patient_id:str,kind:DRAFT_KIN,data:DraftInput,
     return {'id':d.id,'revision':d.revision,'updated_at':d.updated_at}
 
 @app.delete('/api/patients/{patient_id}/drafts/{kind}')
-def delete_draft(patient_id:str,kind:DRAFT_KIN,expected_revision:int,
+def delete_draft(patient_id:str,kind:DRAFT_KINDS,expected_revision:int,
                  u:AuthContext=Depends(current),s:Session=Depends(db)):
     draft_patient(s,patient_id,u,kind)
     from sqlalchemy import delete
