@@ -662,6 +662,49 @@ def invite_user(data:InviteIn,u:AuthContext=Depends(current),s:Session=Depends(d
         "expires_in_days":7,
         "instruction":"Give this one-time token privately to the named staff member. They set their own password. No shared accounts."}
 
+
+class BulkStaffInviteIn(BaseModel):
+    staff:list[InviteIn]=Field(min_length=1,max_length=15)
+
+@router.post("/staff/invite-batch")
+def invite_named_staff(data:BulkStaffInviteIn,u:AuthContext=Depends(current),
+                       s:Session=Depends(db)):
+    """Provision 1–15 named inactive users atomically. No shared passwords."""
+    role(u,MANAGERS)
+    usernames=[person.username.strip().lower() for person in data.staff]
+    if len(set(usernames))!=len(usernames):
+        raise HTTPException(422,"Duplicate username in this batch")
+    if u.role!="admin" and any(x.role in {"pi","admin"} for x in data.staff):
+        raise HTTPException(403,"Only administrator may invite high-privilege users")
+    created=[]
+    for person in data.staff:
+        token=secrets.token_urlsafe(36)
+        user=User(username=person.username.strip().lower(),
+            display_name=person.display_name.strip(),role=person.role,
+            password_hash=PH.hash(secrets.token_urlsafe(48)),active=False)
+        s.add(user)
+        try:
+            s.flush()
+        except IntegrityError:
+            s.rollback();raise HTTPException(409,"One or more usernames already exist; none were provisioned")
+        s.add(UserInvitation(user_id=user.id,token_sha256=sha(token),
+            created_by=u.user_id,expires_at=now()+timedelta(days=7)))
+        created.append({"username":user.username,"display_name":user.display_name,
+            "role":user.role,"activation_token":token,
+            "expires_in_days":7,"access_validity_days_after_activation":90})
+    try:
+        s.flush()
+        audit(s,u,"staff_batch_invite","user_invitation_batch",u.user_id,None,None,
+            {"count":len(created),
+             "usernames":[x["username"] for x in created],
+             "roles":[x["role"] for x in created]},
+            "PI/administrator issued individual named-user enrollment tokens")
+        s.commit()
+    except IntegrityError:
+        s.rollback();raise HTTPException(409,"Batch conflict; no invitation tokens issued")
+    return {"created":len(created),"invitations":created,
+        "private_distribution_notice":"Each invitation token is shown only in this authenticated response. Distribute separately to verified named staff. Never share passwords."}
+
 class ActivateIn(BaseModel):
     token:str=Field(min_length=40,max_length=300)
     password:str=Field(min_length=14,max_length=200)
