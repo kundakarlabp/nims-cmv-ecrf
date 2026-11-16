@@ -40,10 +40,20 @@ panel('study','Enrollment',
  choose('rATG induction','tw-ratg',[['','Undocumented'],['true','Yes'],['false','No']])+
  '<label><input id="tw-eligible" type="checkbox" style="width:auto"> Signed protocol eligibility reviewed</label>'+
  btn('Save screening','tw-screen-save')+'</section>'+
- '<section class="study-card"><h3>2 · PI enrollment verification</h3>'+
+ '<section class="study-card"><h3>2 · Protocol inclusion/exclusion checklist</h3>'+
+ choose('Screened subject','tw-checklist-subject',[])+
+ '<div id="tw-eligibility-fields">Select a subject and complete all protocol criteria.</div>'+
+ field('Age at randomization (years)','tw-age','number')+
+ field('ANC (/µL)','tw-anc','number')+field('Platelets (/µL)','tw-platelets','number')+
+ field('Hemoglobin (g/dL)','tw-hb','number')+
+ field('Cockcroft–Gault CrCl (mL/min)','tw-crcl','number')+
+ field('CBC date','tw-cbc-date','date')+field('Investigator review date','tw-review-on','date')+
+ field('Signed eligibility source/reference','tw-source')+
+ btn('Validate complete eligibility checklist','tw-checklist-save')+'</section>'+
+ '<section class="study-card"><h3>3 · PI enrollment verification</h3>'+
  choose('Screened subject','tw-screened',[])+field('Enrollment date','tw-enroll-date','date')+
  field('Approved PCR anchor date','tw-anchor-date','date')+
- choose('Schedule anchor source','tw-anchor-basis',[['transplant_date','Transplant date'],['enrollment_date','Enrollment date'],['randomization_date','Randomization date'],['prophylaxis_start_date','Prophylaxis start date']])+
+ choose('Protocol PCR anchor','tw-anchor-basis',[['transplant_date','Transplant date only (protocol v5.0)']])+
  field('Approved protocol reference','tw-protocol')+
  '<label><input type="checkbox" id="tw-pi-consent" style="width:auto"> Consent, D+/R+ and eligibility verified</label>'+
  '<label><input type="checkbox" id="tw-pi-anchor" style="width:auto"> Protocol PCR timing explicitly verified</label>'+
@@ -101,7 +111,11 @@ panel('security','Account security',
  '<div id="tw-mfa-secret" class="status hide" style="white-space:pre-wrap"></div>'+
  field('Enter a current 6-digit authenticator code','tw-mfa-code')+
  btn('Confirm and enable authenticator','tw-mfa-confirm')+
- '<div id="tw-mfa-status" class="status hide"></div></div>'
+ '<div id="tw-mfa-status" class="status hide"></div></div>'+
+ '<div class="study-card"><h3>Change my password</h3>'+
+ '<label>Current password<input type="password" id="tw-oldpassword" autocomplete="current-password"></label>'+
+ '<label>New password<input type="password" id="tw-newpassword" autocomplete="new-password"></label>'+
+ field('Authenticator code if enabled','tw-password-otp')+btn('Change password and sign out all devices','tw-change-password')+'</div>'
 );
 panel('staff','Staff access',
  '<div class="study-card"><h3>Individual account invitation</h3>'+
@@ -109,6 +123,7 @@ panel('staff','Staff access',
  choose('Delegated role','tw-role',[['scientist','Project scientist'],['nurse','Research nurse'],['technician','Lab technician'],['microbiology','Microbiology'],['pharmacy','MSS pharmacist'],['consultant','Consultant'],['pg','PG resident'],['monitor','CRA / monitor']])+
  btn('Generate one-time staff activation','tw-invite-save')+
  '<div id="tw-invitation" class="status hide" style="white-space:pre-wrap"></div></div>'+
+ '<div class="study-card"><h3>Named staff · 90-day authorization</h3><p class="hint">Each person keeps their own password. Access expires after 90 days, with investigator-controlled renewal or immediate revocation.</p><div id="tw-accounts"></div></div>'+
  '<p class="hint">Each person activates their account and chooses a private password. Never share a common account. MFA and permission review remain production gates.</p>'+
  '<div id="tw-staff-status" class="status hide"></div>'
 );
@@ -126,7 +141,7 @@ function setRole(){
  var r=$('currentRole').textContent.trim();
  for(const k of Object.keys(perms))$('btn'+k).classList.toggle('hide',!perms[k].includes(r));
  for(const [id,roles] of [
-  ['tw-screen-save',['pi','consultant','scientist']],['tw-enroll-save',['pi']],
+  ['tw-screen-save',['pi','consultant','scientist']],['tw-checklist-save',['pi','consultant']],['tw-enroll-save',['pi']],
   ['tw-collect-save',['pi','consultant','scientist','nurse','technician','microbiology']],
   ['tw-result-save',['microbiology','technician']],
   ['tw-verify-save',['pi','consultant','scientist','monitor']],
@@ -149,9 +164,10 @@ tab=async function(name){
   }
   root.querySelector('.grid').classList.add('hide');
   await task(name==='pcr'?'tw-pcr-status':name==='drug'?'tw-drug-status':'tw-status',async()=>{
-   if(name==='study'){await loadRegistry();await loadSubjects();}
+   if(name==='study'){await loadRegistry();await loadSubjects();await loadEligibilitySchema();}
    if(name==='pcr'){await loadSubjects();await loadPCR();}
    if(name==='drug'){await loadSubjects();await loadDrug();}
+   if(name==='staff'){await loadAccounts();}
   });
  }else{
   await oldTab(name);
@@ -165,6 +181,7 @@ async function loadRegistry(){
 async function loadSubjects(){
  studySubjects=await api('/api/trial/subjects');
  fill('tw-screened',studySubjects.filter(x=>x.status==='screened'),'id',x=>x.screening_code);
+ fill('tw-checklist-subject',studySubjects.filter(x=>x.status==='screened'),'id',x=>x.screening_code);
  var active=studySubjects.filter(x=>x.status==='enrolled');
  for(const id of ['tw-pcr-subject','tw-drug-subject'])fill(id,active,'id',x=>x.study_code);
  $('tw-register').innerHTML='<table><thead><tr><th>Study code</th><th>Status</th><th>D+/R+</th><th>Signed consent</th></tr></thead><tbody>'+
@@ -266,14 +283,15 @@ $('tw-invite-save').onclick=()=>{void task('tw-staff-status',async()=>{
   username:value('tw-username'),display_name:value('tw-fullname'),role:value('tw-role')})});
  $('tw-invitation').classList.remove('hide');
  $('tw-invitation').textContent='Private activation for '+r.username+' ('+r.role+')\n'+
- r.activation_token+'\nExpires in 48 hours. Hand over individually, never in public chat.';
- notify('tw-staff-status','Account created inactive. Recipient sets their own password on activation.');
+ r.activation_token+'\nInitial invitation expires in 7 days. After activation the staff account remains valid for 90 days. Hand the code privately.';
+ notify('tw-staff-status','Inactive named account created. Activated access lasts 90 days.');
+ await loadAccounts();
 });};
 $('tw-activate-save').onclick=()=>{void task('tw-activate-status',async()=>{
  var r=await api('/api/trial/staff/activate',{method:'POST',body:JSON.stringify({
   token:value('tw-token'),password:value('tw-password')})});
  $('tw-token').value='';$('tw-password').value='';
- notify('tw-activate-status','Account '+r.username+' activated. Sign in above.');
+ notify('tw-activate-status','Account '+r.username+' activated for 90 days. Sign in above.');
 });};
 
 $('tw-mfa-setup').onclick=()=>{void task('tw-mfa-status',async()=>{
@@ -290,4 +308,77 @@ $('tw-mfa-confirm').onclick=()=>{void task('tw-mfa-status',async()=>{
  $('tw-mfa-secret').classList.add('hide');
  notify('tw-mfa-status','MFA enabled. Future logins require your password and authenticator code.');
 });};
+
+let eligibilityItems=null;
+async function loadEligibilitySchema(){
+ eligibilityItems=await api('/api/trial/eligibility-schema');
+ const makeFields=(group,items,label)=>{
+  return '<h4>'+label+'</h4>'+Object.entries(items).map(([key,value])=>
+   '<label>'+txt(value)+'<select data-eligibility="'+group+'" data-key="'+txt(key)+'">'+
+   '<option value="">Not assessed</option><option value="true">Yes</option>'+
+   '<option value="false">No</option></select></label>').join('');
+ };
+ $('tw-eligibility-fields').innerHTML=makeFields('inclusion',eligibilityItems.inclusion,'Inclusion: all must be Yes')+
+  makeFields('exclusion',eligibilityItems.exclusion,'Exclusion: all must be No');
+}
+$('tw-checklist-save').onclick=()=>{void task('tw-status',async()=>{
+ if(!eligibilityItems)await loadEligibilitySchema();
+ const subject=n('tw-checklist-subject');if(!subject)throw Error('Select a screened subject');
+ const make=(group,items)=>{
+  const result={};
+  for(const key of Object.keys(items)){
+   const el=Array.from(document.querySelectorAll('[data-eligibility="'+group+'"]'))
+    .find(e=>e.dataset.key===key);
+   if(!el||el.value==='')throw Error('Complete every inclusion and exclusion item before review');
+   result[key]=el.value==='true';
+  }return result;
+ };
+ const r=await api('/api/trial/subjects/'+subject+'/eligibility',{
+  method:'PUT',body:JSON.stringify({
+   inclusion:make('inclusion',eligibilityItems.inclusion),
+   exclusion:make('exclusion',eligibilityItems.exclusion),
+   age_years:n('tw-age'),anc_per_ul:n('tw-anc'),
+   platelets_per_ul:n('tw-platelets'),hemoglobin_g_dl:n('tw-hb'),
+   crcl_cg_ml_min:n('tw-crcl'),baseline_cbc_on:value('tw-cbc-date'),
+   reviewed_on:value('tw-review-on'),signed_source_reference:value('tw-source')
+  })});
+ notify('tw-status',r.eligible?
+  'All protocol criteria checked and eligible; PI enrollment may proceed.':
+  'Screening exclusion detected; enrollment is blocked. Preserve signed source.');
+});};
+for(const id of ['tw-cbc-date','tw-review-on'])$(id).value=today();
+async function loadAccounts(){
+ const accounts=await api('/api/trial/staff/accounts');
+ $('tw-accounts').innerHTML='<table><thead><tr><th>Username</th><th>Role</th>'+
+   '<th>Valid until</th><th>MFA</th><th>State</th><th>Access</th></tr></thead><tbody>'+
+   accounts.map(x=>'<tr><td>'+txt(x.username)+'</td><td>'+txt(x.role)+'</td>'+
+   '<td>'+txt(x.access_expires_at?x.access_expires_at.slice(0,10):'Legacy / no time limit')+'</td>'+
+   '<td>'+(x.mfa_enabled?'Yes':'Not yet')+'</td>'+
+   '<td>'+(x.active?'Active':'Inactive')+'</td><td>'+
+   (x.active?'<button data-staff-id="'+txt(x.id)+'" data-staff-action="renew" class="secondary">Renew 90 days</button> '+
+   '<button data-staff-id="'+txt(x.id)+'" data-staff-action="revoke">Revoke</button>':'—')+
+   '</td></tr>').join('')+'</tbody></table>';
+}
+$('tw-accounts').addEventListener('click',e=>{
+ const button=e.target.closest('button[data-staff-action]');if(!button)return;
+ const action=button.dataset.staffAction,id=button.dataset.staffId;
+ if(!confirm(action==='revoke'?'Immediately revoke this account and end all sessions?':
+       'Authorize this person for another 90 days and end current sessions?'))return;
+ void task('tw-staff-status',async()=>{
+  const explanation=prompt('Enter an audit reason (at least 8 characters):');
+  if(!explanation||explanation.trim().length<8)return;
+  const result=await api('/api/trial/staff/accounts/'+encodeURIComponent(id)+'/'+action,
+   {method:'POST',body:JSON.stringify({reason:explanation})});
+  notify('tw-staff-status',result.username+' — '+(action==='renew'?'90-day access renewed':'Access revoked'));
+  await loadAccounts();
+ });
+});
+$('tw-change-password').onclick=()=>{void task('tw-mfa-status',async()=>{
+ const result=await api('/api/trial/staff/change-password',{method:'POST',body:JSON.stringify({
+  old_password:value('tw-oldpassword'),new_password:value('tw-newpassword'),
+  otp:value('tw-password-otp')||null})});
+ $('tw-oldpassword').value='';$('tw-newpassword').value='';$('tw-password-otp').value='';
+ notify('tw-mfa-status','Password changed; all sessions revoked. Please sign in with your new password.');
+});};
+
 })();
