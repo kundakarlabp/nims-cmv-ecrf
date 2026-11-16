@@ -146,6 +146,11 @@ panel('staff','Staff access',
  choose('Delegated role','tw-role',[['scientist','Project scientist'],['nurse','Research nurse'],['technician','Lab technician'],['microbiology','Microbiology'],['pharmacy','MSS pharmacist'],['consultant','Consultant'],['pg','PG resident'],['monitor','CRA / monitor']])+
  btn('Generate one-time staff activation','tw-invite-save')+
  '<div id="tw-invitation" class="status hide" style="white-space:pre-wrap"></div></div>'+
+ '<div class="study-card"><h3>Bulk provision 1–15 staff</h3>'+
+ '<p class="hint">One per line: unique_username | Staff full name | delegated_role. Each receives a separate private activation; no shared passwords. Roles: scientist, nurse, technician, microbiology, pharmacy, consultant, pg, monitor.</p>'+
+ '<textarea id="tw-bulk-input" rows="7" placeholder="username | Name | role"></textarea>'+
+ btn('Generate named invitations for this batch','tw-bulk-save')+
+ '<pre id="tw-bulk-result" class="status hide" style="white-space:pre-wrap;overflow:auto"></pre></div>'+
  '<div class="study-card"><h3>Named staff · 90-day authorization</h3><p class="hint">Each person keeps their own password. Access expires after 90 days, with investigator-controlled renewal or immediate revocation.</p><div id="tw-accounts"></div></div>'+
  '<p class="hint">Each person activates their account and chooses a private password. Never share a common account. MFA and permission review remain production gates.</p>'+
  '<div id="tw-staff-status" class="status hide"></div>'
@@ -183,6 +188,7 @@ tab=async function(name){
  }
  if(activeTab==='staff'&&name!=='staff'){
   $('tw-invitation').textContent='';$('tw-invitation').classList.add('hide');
+  $('tw-bulk-result').textContent='';$('tw-bulk-result').classList.add('hide');
  }
  if(['study','pcr','drug','staff','security','crf'].includes(name)){
   if(activeTab==='entry'){try{await saveDraftNow();}catch(e){show('msg','Draft not saved: '+e.message,true);return;}}
@@ -322,6 +328,32 @@ $('tw-invite-save').onclick=()=>{void task('tw-staff-status',async()=>{
  $('tw-invitation').textContent='Private activation for '+r.username+' ('+r.role+')\n'+
  r.activation_token+'\nInitial invitation expires in 7 days. After activation the staff account remains valid for 90 days. Hand the code privately.';
  notify('tw-staff-status','Inactive named account created. Activated access lasts 90 days.');
+ await loadAccounts();
+});};
+
+$('tw-bulk-save').onclick=()=>{void task('tw-staff-status',async()=>{
+ const lines=value('tw-bulk-input').split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
+ if(!lines.length||lines.length>15)throw Error('Enter 1–15 distinct named staff records');
+ const staff=lines.map(line=>{
+  const parts=line.split('|').map(x=>x.trim());
+  if(parts.length!==3||parts.some(x=>!x))throw Error('Use username | Staff full name | delegated role');
+  const [username,display_name,role]=parts;
+  if(!['scientist','nurse','technician','microbiology','pharmacy','consultant','pg','monitor'].includes(role))
+   throw Error('Unrecognized delegated role: '+role);
+  return {username,display_name,role};
+ });
+ if(!confirm('Create '+staff.length+' inactive named accounts and one-time personal activation tokens?'))return;
+ const result=await api('/api/trial/staff/invite-batch',{
+  method:'POST',body:JSON.stringify({staff})
+ });
+ const container=$('tw-bulk-result');container.classList.remove('hide');
+ container.textContent=result.invitations.map(x=>
+  x.display_name+' | '+x.username+' | '+x.role+
+  '\nPRIVATE ONE-TIME TOKEN: '+x.activation_token+
+  '\nInitial activation within 7 days; thereafter 90-day account access.\n'
+ ).join('\n');
+ $('tw-bulk-input').value='';
+ notify('tw-staff-status',result.created+' named inactive accounts created. Distribute codes individually to identified staff.');
  await loadAccounts();
 });};
 $('tw-activate-save').onclick=()=>{void task('tw-activate-status',async()=>{
