@@ -178,6 +178,12 @@ var originalApply=applyRoleUI;
 applyRoleUI=function(role){originalApply(role);setRole();};
 var oldTab=tab;
 tab=async function(name){
+ if(activeTab==='crf'&&name!=='crf'){
+  try{await crfSaveDraft();}catch(e){show('tw-crf-status','Cannot leave CRF with unsaved changes: '+e.message,true);return;}
+ }
+ if(activeTab==='staff'&&name!=='staff'){
+  $('tw-invitation').textContent='';$('tw-invitation').classList.add('hide');
+ }
  if(['study','pcr','drug','staff','security','crf'].includes(name)){
   if(activeTab==='entry'){try{await saveDraftNow();}catch(e){show('msg','Draft not saved: '+e.message,true);return;}}
   activeTab=name;
