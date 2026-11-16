@@ -95,5 +95,238 @@ async function loadReview(){try{let rows=await api('/api/review-queue');$('revie
 async function submitReview(id,revision,decision){try{await api('/api/entries/'+id+'/review',{method:'POST',body:JSON.stringify({expected_revision:revision,decision,reason:$('reason-'+id).value})});await loadReview();await loadDashboard();if(selected)await loadRecord()}catch(e){show('msg',e.message,true)}}
 function tab(name){['dashboard','registry','review','entry','dose','due'].forEach(n=>{$(n).classList.toggle('hide',n!==name);$('btn'+n).classList.toggle('selected',n===name)});if(name==='dashboard')loadDashboard();if(name==='review')loadReview()}
 $('eventDate').value=new Date().toISOString().slice(0,10);$('eventPayload').value=JSON.stringify({ward:'Nephrology',unit:'Unit 1',consultant:'Example name'},null,2);
+
+/* Enhanced, grounded dashboard and private server autosave. This remains staging. */
+const oldChoose = choose;
+const oldLogout = logout;
+const studyMonths=[1,2,3,4,6,9,12];
+let activeTab='dashboard', activeKind=$('kind').value, draftRevision=null;
+let draftTimer=null, draftWriting=Promise.resolve(), lastSavedDraft=null;
+const quickForms={
+ visit:[
+  {key:'scheduled_month',label:'Scheduled month',type:'select',options:studyMonths.map(v=>[String(v),'Month '+v])},
+  {key:'visit_complete',label:'Visit status',type:'select',options:[['true','Completed'],['false','Not completed']]},
+  {key:'creatinine_mg_dl',label:'Serum creatinine (mg/dL)',type:'number',step:'0.01'},
+  {key:'clinical_notes',label:'Visit notes',type:'text',wide:true}
+ ],
+ lab:[
+  {key:'lab_test',label:'Test',type:'select',options:[['CMV PCR','CMV DNA PCR'],['Other','Other investigation']]},
+  {key:'lab_reference_id',label:'Laboratory sample/reference code',type:'text'},
+  {key:'cmv_pcr_status',label:'CMV PCR result status',type:'select',options:[['detected','Detected'],['not_detected','Not detected'],['below_quantification','Detected, below quantification'],['pending','Pending'],['invalid','Invalid']]},
+  {key:'cmv_iu_ml',label:'Quantified CMV DNA (IU/mL; if applicable)',type:'number',step:'any'},
+  {key:'remarks',label:'Laboratory remarks',type:'text',wide:true}
+ ],
+ pharmacy:[
+  {key:'dispense_code',label:'Dispensing slip/reference code',type:'text'},
+  {key:'tablets_dispensed',label:'Number of tablets issued',type:'number',step:'1'},
+  {key:'batch_number',label:'Batch/lot number',type:'text'},
+  {key:'dispensed_by',label:'Dispensed by (staff code)',type:'text'},
+  {key:'remarks',label:'Accountability remarks',type:'text',wide:true}
+ ]
+};
+function htmlText(value){return escapeHTML(value);}
+function safeNum(value){return Number(value||0).toLocaleString('en-IN');}
+function buildDashboard(data){
+ const review=data.review||{}, counts=[['Registered',data.patients,'Registry records'],['Study IDs',data.study_ids_assigned,'Not confirmed enrollment'],['Entries',data.entries,'Submitted records'],['Awaiting review',review.pending,'Current revisions'],['Verified',review.verified,'Current revisions'],['Needs correction',review.needs_correction,'Open review findings']];
+ const total=Number(data.entries)||0, verified=Number(review.verified)||0;
+ const fraction=total?Math.round(100*verified/total):0;
+ const kpis=counts.map(function(item,i){
+  return '<div class="dash-card dash-kpi"><span class="accent" style="background:'+['#436beb','#1dbaaa','#8493ac','#e5a33c','#27bba4','#ea6d69'][i]+'"></span><span class="num">'+safeNum(item[1])+'</span><div class="label">'+htmlText(item[0])+'</div><div class="explain">'+htmlText(item[2])+'</div></div>';
+ }).join('');
+ const modulePairs=Object.entries(data.by_kind||{}).sort((a,b)=>b[1]-a[1]);
+ const maximum=Math.max(1,...modulePairs.map(x=>x[1]));
+ const moduleChart=modulePairs.length?modulePairs.map(function(pair){
+  return '<div class="dash-bar"><span>'+htmlText(pair[0])+'</span><div class="dash-track"><div class="dash-fill" style="width:'+Math.round(100*pair[1]/maximum)+'%"></div></div><span class="dash-count">'+safeNum(pair[1])+'</span></div>';
+ }).join(''):'<p class="hint">No submitted synthetic entries yet.</p>';
+ const monthly=(data.monthly_entries||[]).slice(-8);
+ const monthlyMax=Math.max(1,...monthly.map(x=>x.count));
+ const bars=monthly.length?'<div class="dash-trend">'+monthly.map(function(m){
+  return '<div class="dash-trend-item"><span class="count">'+safeNum(m.count)+'</span><div class="bar" style="height:'+Math.max(3,Math.round(95*m.count/monthlyMax))+'%"></div></div>';
+ }).join('')+'</div><div class="dash-trend-labels">'+monthly.map(m=>'<span>'+htmlText(m.month.slice(5))+'/'+htmlText(m.month.slice(2,4))+'</span>').join('')+'</div>':'<p class="hint">The chart populates after synthetic entries are submitted.</p>';
+ const schedule=studyMonths.map(m=>'<div><strong>Month '+m+'</strong><small>CMV PCR target</small></div>').join('');
+ return '<div class="dash-top"><div class="dash-card dash-hero"><div class="dash-ring" style="--percent:'+fraction+'"><strong>'+fraction+'%</strong></div><div><b>Data verification</b><p>'+verified+' of '+total+' submitted records verified</p><p>Independent review; not recruitment progress</p></div></div>'+
+ '<div class="dash-card"><h3>Protocol PCR schedule</h3><p class="dash-note">Seven tests per enrolled participant · scheduled at months 1, 2, 3, 4, 6, 9 and 12. Completion is not inferred from this schedule.</p><div class="dash-sequence">'+schedule+'</div></div></div>'+
+ '<div class="dash-kpis">'+kpis+'</div>'+
+ '<div class="dash-bottom"><div class="dash-card"><h3>Submitted records by module</h3><p class="dash-note">Actual counts from the synthetic staging database</p>'+moduleChart+'</div>'+
+ '<div class="dash-card"><h3>Record entry trend</h3><p class="dash-note">Recorded event months · not screening or enrollment trend</p>'+bars+'</div></div>';
+}
+loadDashboard=async function(){
+ try{
+  const response=await api('/api/dashboard');
+  $('dashboardResults').innerHTML=buildDashboard(response);
+ }catch(err){
+  $('dashboardResults').textContent='Unable to load dashboard: '+err.message;
+ }
+};
+function setDraftStatus(message,isError){
+ const target=$('draftStatus');target.textContent=message;target.classList.toggle('err',!!isError);
+}
+function setFormPayload(payload){
+ const spec=quickForms[activeKind];
+ if(spec){
+  spec.forEach(function(f){
+   const el=document.querySelector('#quickForm [data-field="'+f.key+'"]');
+   if(el)el.value=payload[f.key]===undefined||payload[f.key]===null?'':String(payload[f.key]);
+  });
+ }else{
+  $('eventPayload').value=JSON.stringify(payload,null,2);
+ }
+}
+function buildFormPayload(){
+ const spec=quickForms[activeKind];
+ if(!spec){
+  const text=$('eventPayload').value.trim();
+  const payload=JSON.parse(text||'{}');
+  if(payload===null||Array.isArray(payload)||typeof payload!=='object')throw Error('Structured entry must be a JSON object.');
+  return payload;
+ }
+ const payload={};
+ spec.forEach(function(f){
+  const el=document.querySelector('#quickForm [data-field="'+f.key+'"]');
+  const raw=(el.value||'').trim();
+  if(!raw)return;
+  if(f.key==='visit_complete')payload[f.key]=raw==='true';
+  else if(f.type==='number'){
+   if(!Number.isFinite(Number(raw)))throw Error(f.label+' must be numeric');
+   if(f.key==='tablets_dispensed'&&(Number(raw)<0||!Number.isInteger(Number(raw))))throw Error('Tablet count must be a nonnegative integer');
+   if(f.key==='cmv_iu_ml'&&Number(raw)<0)throw Error('CMV IU/mL cannot be negative');
+   payload[f.key]=Number(raw);
+  } else payload[f.key]=raw;
+ });
+ return payload;
+}
+function renderQuickForm(){
+ const fields=quickForms[activeKind]||[];
+ $('quickForm').innerHTML=fields.map(function(f){
+  const klass=f.wide?' class="span-all"':'';
+  let control;
+  if(f.type==='select'){
+   control='<select data-field="'+f.key+'"><option value="">Select…</option>'+f.options.map(opt=>'<option value="'+htmlText(opt[0])+'">'+htmlText(opt[1])+'</option>').join('')+'</select>';
+  } else {
+   control='<input data-field="'+f.key+'" type="'+f.type+'" '+(f.step?'step="'+f.step+'" ':'')+'autocomplete="off">';
+  }
+  return '<label'+klass+'>'+htmlText(f.label)+control+'</label>';
+ }).join('');
+ $('quickForm').classList.toggle('hide',!fields.length);
+ $('advancedPayload').classList.toggle('hide',!!fields.length);
+}
+function getDraftData(){
+ if(!selected)throw Error('Select a patient first');
+ if(!$('eventDate').value)throw Error('Event date is required');
+ return {occurred_on:$('eventDate').value,payload:buildFormPayload()};
+}
+async function saveDraftNow(){
+ clearTimeout(draftTimer);
+ if(!selected||activeTab!=='entry')return;
+ let snapshot;
+ try{snapshot=getDraftData()}catch(err){setDraftStatus('Draft not saved: '+err.message,true);return;}
+ const context=selected+':'+activeKind;
+ const endpoint='/api/patients/'+encodeURIComponent(selected)+'/drafts/'+encodeURIComponent(activeKind);
+ const serialized=JSON.stringify(snapshot);
+ if(!Object.keys(snapshot.payload).length&&draftRevision===null)return;
+ if(serialized===lastSavedDraft)return;
+ setDraftStatus('Saving draft securely on the server…');
+ draftWriting=draftWriting.catch(()=>{}).then(async function(){
+  if(serialized===lastSavedDraft)return;
+  try{
+   const response=await api(endpoint,{method:'PUT',body:JSON.stringify({...snapshot,expected_revision:draftRevision})});
+   if(context!==selected+':'+activeKind)return;
+   draftRevision=response.revision;
+   lastSavedDraft=serialized;
+   setDraftStatus('Draft autosaved to server · revision '+response.revision+' · Not yet submitted');
+  }catch(err){
+   setDraftStatus('Draft could not be saved: '+err.message+'. Copy notes locally only if they contain no patient information.',true);
+  }
+ });
+ await draftWriting;
+}
+function scheduleDraft(){
+ clearTimeout(draftTimer);
+ if(!selected){setDraftStatus('Select a patient before entering data.');return;}
+ setDraftStatus('Unsaved changes · autosave pending…');
+ draftTimer=setTimeout(function(){void saveDraftNow();},1200);
+}
+async function restoreDraft(){
+ clearTimeout(draftTimer);
+ draftRevision=null;lastSavedDraft=null;
+ $('eventDate').value=new Date().toISOString().slice(0,10);
+ setFormPayload({});
+ if(!selected){setDraftStatus('Select a patient to start a draft.');return;}
+ try{
+  const response=await api('/api/patients/'+encodeURIComponent(selected)+'/drafts/'+encodeURIComponent(activeKind));
+  if(response.draft){
+   draftRevision=response.draft.revision;
+   setFormPayload(response.draft.payload||{});
+   $('eventDate').value=response.draft.occurred_on;
+   lastSavedDraft=JSON.stringify({occurred_on:response.draft.occurred_on,payload:response.draft.payload||{}});
+   setDraftStatus('Private draft restored from server · revision '+draftRevision);
+  }else setDraftStatus('No previous draft · changes will autosave to server.');
+ }catch(err){setDraftStatus('Could not load draft: '+err.message,true);}
+}
+choose=async function(id){
+ if(activeTab==='entry')await saveDraftNow();
+ await oldChoose(id);
+ if(activeTab==='entry')await restoreDraft();
+};
+async function kindChanged(){
+ await saveDraftNow();
+ activeKind=$('kind').value;
+ renderQuickForm();
+ await restoreDraft();
+}
+newEntry=async function(){
+ if(!selected){show('msg','Select a patient first.',true);return;}
+ await saveDraftNow();
+ let snapshot;
+ try{snapshot=getDraftData()}catch(err){show('msg',err.message,true);return;}
+ if(!Object.keys(snapshot.payload).length){show('msg','Enter at least one field before submitting.',true);return;}
+ try{
+  const result=await api('/api/patients/'+selected+'/entries',{method:'POST',body:JSON.stringify({kind:activeKind,...snapshot})});
+  let note='Entry submitted for independent review · '+result.id;
+  if(draftRevision!==null){
+   try{
+    await api('/api/patients/'+selected+'/drafts/'+activeKind+'?expected_revision='+draftRevision,{method:'DELETE'});
+   }catch(err){note+=' · Draft cleanup needs attention: '+err.message;}
+  }
+  draftRevision=null;lastSavedDraft=null;
+  setFormPayload({});
+  setDraftStatus('Entry submitted · no unsaved draft.');
+  show('msg',note);
+  await loadRecord();
+  await loadDashboard();
+ }catch(err){show('msg','Entry not submitted: '+err.message,true);}
+};
+tab=async function(name){
+ if(activeTab==='entry'&&name!=='entry')await saveDraftNow();
+ activeTab=name;
+ ['dashboard','registry','review','entry','dose','due'].forEach(function(n){
+  $(n).classList.toggle('hide',n!==name);
+  $('btn'+n).classList.toggle('selected',n===name);
+ });
+ $('workspace').querySelector('.grid').classList.toggle('hide',name==='dashboard');
+ if(name==='dashboard')await loadDashboard();
+ if(name==='review')await loadReview();
+ if(name==='entry')await restoreDraft();
+ if(name==='due')await loadDue();
+};
+logout=async function(){
+ if(activeTab==='entry')await saveDraftNow();
+ await oldLogout();
+};
+function initializeStudyUI(){
+ const workspace=$('workspace');
+ const grid=workspace.querySelector('.grid');
+ const dash=$('dashboard');
+ workspace.insertBefore(dash,grid);
+ grid.classList.add('hide');
+ renderQuickForm();
+ $('kind').addEventListener('change',function(){void kindChanged();});
+ $('eventDate').addEventListener('input',scheduleDraft);
+ $('eventPayload').addEventListener('input',scheduleDraft);
+ $('quickForm').addEventListener('input',scheduleDraft);
+ $('quickForm').addEventListener('change',scheduleDraft);
+ setDraftStatus('Select a patient to start a draft.');
+}
+initializeStudyUI();
 </script></body></html>
 
