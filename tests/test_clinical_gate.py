@@ -11,8 +11,9 @@ from app.clinical_gate import backup_fresh, restore_verified, startup_deficienci
 def clinical_env(tmp_path, at):
     signoff=tmp_path/"signed-release.txt"
     signoff.write_text("TEST-ONLY: NOT A REAL INSTITUTIONAL RELEASE\n")
+    from cryptography.fernet import Fernet
     key=tmp_path/"sealed.key"
-    key.write_text("TEST-ONLY-SYNTHETIC-KEY")
+    key.write_bytes(Fernet.generate_key())
     backup=tmp_path/"last_success"
     restore=tmp_path/"last_restore"
     stamp=at.strftime("%Y%m%dT%H%M%SZ")
