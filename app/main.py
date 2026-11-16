@@ -533,3 +533,6 @@ app.include_router(trial_router)
 
 from .trial_crf import router as crf_router
 app.include_router(crf_router)
+
+from .randomization import router as randomization_router
+app.include_router(randomization_router)
