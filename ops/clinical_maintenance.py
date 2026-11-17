@@ -217,15 +217,24 @@ def backup_and_restore(dc,force=False):
         if datetime.fromisoformat(json.loads(path.read_text())['created_at'])<cutoff:
             (export/(path.stem+'.tar')).unlink(missing_ok=True);path.unlink()
 
+def offsite_reference(claimed):
+    artifact=claimed.get('artifact_id')
+    release=claimed.get('release_id');asset=claimed.get('asset_id')
+    if type(artifact) is int and artifact>0 and release is None and asset is None:
+        return f'github-artifact:{REPO_ID}:{artifact}'
+    if artifact is None and type(release) is int and release>0 and type(asset) is int and asset>0:
+        return f'github-release:{REPO_ID}:{release}:{asset}'
+    return None
+
 def accept_receipts():
     for ack in sorted((PRIVATE/'ack').glob('*.json')):
         if ack.is_symlink() or not re.fullmatch(r'[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}',ack.stem):continue
         try:
             claimed=json.loads(ack.read_text());manifest=json.loads((PRIVATE/'export'/(ack.stem+'.json')).read_text())
-            artifact=claimed['artifact_id']
+            remote=offsite_reference(claimed)
             if (claimed['bundle_id']!=ack.stem or claimed['sha256']!=manifest['sha256']
-                or manifest.get('restore_verified') is not True or not isinstance(artifact,int) or artifact<=0):continue
-            receipt=f"{manifest['stamp']} {manifest['sha256']} github-artifact:{REPO_ID}:{artifact}\n".encode()
+                or manifest.get('restore_verified') is not True or remote is None):continue
+            receipt=f"{manifest['stamp']} {manifest['sha256']} {remote}\n".encode()
             state=PRIVATE/'backup-state'
             old=(state/'last_success').read_text().split()[0] if (state/'last_success').exists() else ''
             if manifest['stamp']>=old:

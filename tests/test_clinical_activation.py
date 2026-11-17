@@ -126,4 +126,8 @@ def test_ciphertext_readback_ack_is_scoped_and_does_not_issue_host_receipt(tmp_p
         assert c.post('/api/backup-channel/acknowledge',headers=headers,json=dict(payload,sha256='0'*64)).status_code==409
         assert c.post('/api/backup-channel/acknowledge',headers=headers,json=payload).status_code==200
         assert json.loads((ack/(ident+'.json')).read_text())['run_id']=='12345'
+        release={'bundle_id':ident,'sha256':digest,'release_id':91,'asset_id':93}
+        assert c.post('/api/backup-channel/acknowledge',headers=headers,json=dict(release,artifact_id=1234)).status_code==422
+        assert c.post('/api/backup-channel/acknowledge',headers=headers,json=release).status_code==200
+        assert json.loads((ack/(ident+'.json')).read_text())['asset_id']==93
         assert not (tmp_path/'last_success').exists()

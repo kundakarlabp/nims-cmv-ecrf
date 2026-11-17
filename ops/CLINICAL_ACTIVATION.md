@@ -29,12 +29,16 @@ The CI check tests this complete recovery process with its own disposable key.
 A private GitHub Actions workflow runs every three hours and after an approved
 release. Its short-lived OIDC identity is restricted to this exact private
 repository, owner ID, main branch and workflow. The service permits only
-ciphertext download and acknowledgment. After private artifact upload, GitHub
-downloads the artifact again and compares its SHA-256 before acknowledging it.
-Only then does the host issue an offsite receipt. Backups have two-day private
-artifact retention, twenty-four-hour local ciphertext retention, and a 32 MiB
-encrypted bundle limit. No paid resources are automatically enabled. Larger
-databases or exhausted Actions quota require a reviewed capacity adjustment.
+ciphertext download and acknowledgment. Encrypted recovery files are stored as
+assets in monthly **draft releases inside this private repository**, independently
+of the exhausted Actions artifact quota. They are downloaded again and their
+SHA-256 is compared before acknowledgment. Only then does the host issue a
+`github-release:<repository-id>:<release-id>:<asset-id>` receipt. Existing verified
+Actions artifact receipts remain readable for compatibility. No archive is
+committed into Git or published publicly. Monthly grouping stays below GitHub's
+1000-assets-per-release limit. Local ciphertext retention is twenty-four hours;
+the encrypted bundle limit is 32 MiB. No paid resources or ChatGPT scheduled
+tasks are enabled. Larger databases require a reviewed capacity adjustment.
 
 The first cutover waits for both an isolated restore and offsite readback. Once
 the clinical marker is set, every later deployment stays on the clinical stack,

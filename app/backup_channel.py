@@ -12,7 +12,7 @@ from functools import lru_cache
 import jwt
 from fastapi import APIRouter, Header, HTTPException, Response
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 router=APIRouter(prefix='/api/backup-channel',tags=['encrypted-backups'])
 ISSUER='https://token.actions.githubusercontent.com'
@@ -85,7 +85,18 @@ def download(bundle_id:str,authorization:str|None=Header(default=None)):
 class Acknowledgment(BaseModel):
     bundle_id:str=Field(pattern=r'^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}$')
     sha256:str=Field(pattern=r'^[0-9a-f]{64}$')
-    artifact_id:int=Field(gt=0)
+    artifact_id:int|None=Field(default=None,gt=0,strict=True)
+    release_id:int|None=Field(default=None,gt=0,strict=True)
+    asset_id:int|None=Field(default=None,gt=0,strict=True)
+
+    @model_validator(mode='after')
+    def exact_storage_reference(self):
+        artifact=self.artifact_id is not None
+        release=self.release_id is not None and self.asset_id is not None
+        if artifact==release or (artifact and (self.release_id is not None or self.asset_id is not None)):
+            raise ValueError('Supply exactly one verified offsite storage reference')
+        if not artifact and not release:raise ValueError('Complete release reference required')
+        return self
 
 @router.post('/acknowledge')
 def acknowledge(data:Acknowledgment,authorization:str|None=Header(default=None)):
@@ -96,7 +107,7 @@ def acknowledge(data:Acknowledgment,authorization:str|None=Header(default=None))
     if local['sha256']!=data.sha256 or local.get('restore_verified') is not True:
         raise HTTPException(409,'Backup verification mismatch')
     directory=Path(os.getenv('CLINICAL_BACKUP_ACK_DIR','/run/backup-ack'))
-    payload={**data.model_dump(),'run_id':str(claims['run_id'])}
+    payload={**data.model_dump(exclude_none=True),'run_id':str(claims['run_id'])}
     path=directory/(data.bundle_id+'.json')
     # An untrusted arbitrary filename cannot enter the host spool.
     temporary=directory/(data.bundle_id+'.tmp-'+os.urandom(8).hex())

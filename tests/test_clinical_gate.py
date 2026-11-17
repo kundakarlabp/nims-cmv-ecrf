@@ -127,4 +127,8 @@ def test_offsite_artifact_receipt_accepts_only_this_private_repository(tmp_path)
     assert backup_fresh(env,at)
     backup.write_text(prefix+'github-artifact:123:12345\n')
     assert not backup_fresh(env,at)
+    backup.write_text(prefix+'github-release:1455709378:91:93\n')
+    assert backup_fresh(env,at)
+    backup.write_text(prefix+'github-release:123:91:93\n')
+    assert not backup_fresh(env,at)
 
