@@ -90,7 +90,7 @@ def signed_workflow(monkeypatch,**overrides):
         get_signing_key_from_jwt=lambda token:SimpleNamespace(key=key.public_key())))
     now=datetime.now(timezone.utc)
     claims={'iss':channel.ISSUER,'aud':channel.AUDIENCE,'exp':now+timedelta(minutes=5),
-        'iat':now,'nbf':now,'jti':'ci-test-jti','sub':'repo:'+channel.REPO+':ref:refs/heads/main',
+        'iat':now,'nbf':now,'jti':'ci-test-jti','sub':channel.SUBJECT,
         'repository':channel.REPO,'repository_id':'1455709378','repository_owner_id':'213684388',
         'repository_visibility':'private','workflow_ref':channel.WORKFLOW,
         'ref':'refs/heads/main','event_name':'workflow_run','run_id':'12345',**overrides}
@@ -100,6 +100,8 @@ def signed_workflow(monkeypatch,**overrides):
     {'repository_id':'1'},{'repository_owner_id':'1'},{'ref':'refs/pull/1/merge'},
     {'workflow_ref':'different.yml'},{'event_name':'pull_request'},{'aud':'wrong'},
     {'repository_visibility':'public'},{'exp':datetime.now(timezone.utc)-timedelta(minutes=1)},
+    {'sub':'repo:'+channel.REPO+':ref:refs/heads/main'},
+    {'sub':channel.SUBJECT.replace('@1455709378','@1')},
 ])
 def test_ciphertext_channel_rejects_wrong_workflow_identity(monkeypatch,override):
     headers=signed_workflow(monkeypatch,**override)

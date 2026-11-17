@@ -19,6 +19,9 @@ ISSUER='https://token.actions.githubusercontent.com'
 AUDIENCE='nims-cmv-encrypted-backup'
 REPO='kundakarlabp/nims-cmv-ecrf'
 WORKFLOW=REPO+'/.github/workflows/clinical-backup.yml@refs/heads/main'
+# This repository was created after GitHub's 15 July 2026 immutable-subject
+# rollout. Bind the exact owner AND repository IDs in the signed subject.
+SUBJECT='repo:kundakarlabp@213684388/nims-cmv-ecrf@1455709378:ref:refs/heads/main'
 ID_RE=re.compile(r'^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}$')
 MAX_BUNDLE=32*1024*1024
 
@@ -33,7 +36,7 @@ def validate_claims(claims):
         claims.get('repository_visibility')=='private' and
         claims.get('workflow_ref')==WORKFLOW and
         claims.get('ref')=='refs/heads/main' and
-        claims.get('sub')=='repo:'+REPO+':ref:refs/heads/main' and
+        claims.get('sub')==SUBJECT and
         claims.get('event_name') in {'schedule','workflow_dispatch','workflow_run'} and
         str(claims.get('run_id','')).isdigit())
 
