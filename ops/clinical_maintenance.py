@@ -43,6 +43,7 @@ def run(args,*,data=None,check=True):
 def atomic(path,data,mode=0o600):
     path=Path(path);tmp=path.with_name(path.name+'.tmp-'+secrets.token_hex(6))
     fd=os.open(tmp,os.O_WRONLY|os.O_CREAT|os.O_EXCL,mode)
+    os.fchmod(fd,mode)
     with os.fdopen(fd,'wb') as out:out.write(data)
     os.replace(tmp,path)
 
@@ -98,6 +99,7 @@ def provision(dc):
         run(cc+['run','--rm','--no-deps','schema-bootstrap'])
     users=sql(dc,'SELECT count(*) FROM users;').strip()
     if users==b'0':
+        freeze_source_accounts(dc)
         # JSON data travels directly inside this host process, never a command
         # argument, report, artifact, plaintext file, or external API.
         tables=['users','trial_user_totp','trial_staff_access','trial_user_invitations']
@@ -124,13 +126,29 @@ def provision(dc):
         sql(dc,"SELECT setval(pg_get_serial_sequence('trial_user_invitations','id'), coalesce(max(id),1), count(*)>0) FROM trial_user_invitations;")
     atomic(PRIVATE/'provisioned',b'clinical schema and named accounts ready\n')
 
+def freeze_source_accounts(dc):
+    # Freeze both HTTP and database mutation paths before taking the account
+    # snapshot. Trigger DDL waits for in-flight writers to finish, then rejects
+    # later writes (including requests that passed the HTTP guard earlier).
+    public=ROOT/'ops/public-status';public.mkdir(exist_ok=True)
+    atomic(public/'account-migration.lock',b'Clinical account migration in progress\n',0o644)
+    statement="""
+    BEGIN;
+    CREATE OR REPLACE FUNCTION public.freeze_cmv_account_migration()
+    RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN RAISE EXCEPTION 'Clinical account migration in progress' USING ERRCODE='55000'; END $$;
+    """
+    for table in ('users','trial_user_totp','trial_staff_access','trial_user_invitations'):
+        statement+=f'CREATE OR REPLACE TRIGGER clinical_account_migration_freeze BEFORE INSERT OR UPDATE OR DELETE ON public.{table} FOR EACH ROW EXECUTE FUNCTION public.freeze_cmv_account_migration();\n'
+    sql(dc,statement+'COMMIT;','nims_ecrf',True)
+
 def ensure_crypto():
     try:
         from cryptography.fernet import Fernet
-        if shutil.which('age'):return Fernet
+        if shutil.which('age') and shutil.which('curl'):return Fernet
     except ImportError:pass
     run(['sudo','-n','apt-get','update','-qq'])
-    run(['sudo','-n','apt-get','install','-y','-qq','age','python3-cryptography'])
+    run(['sudo','-n','apt-get','install','-y','-qq','age','curl','python3-cryptography'])
     from cryptography.fernet import Fernet
     return Fernet
 
@@ -219,26 +237,32 @@ def cutover(dc,values):
     from app.clinical_gate import backup_fresh,restore_verified
     evidence={'CLINICAL_BACKUP_RECEIPT_PATH':str(PRIVATE/'backup-state/last_success'),
               'CLINICAL_RESTORE_RECEIPT_PATH':str(PRIVATE/'backup-state/last_restore')}
-    if not backup_fresh(evidence) or not restore_verified(evidence):return 'awaiting_offsite_readback'
     marker=STATE/'clinical-active'
-    if marker.exists():return 'clinical_active'
+    initial=not marker.exists()
+    writable=backup_fresh(evidence) and restore_verified(evidence)
+    if initial and not writable:return 'awaiting_offsite_readback'
     cc=clinical(dc)
     # Verify application and restricted DB before touching the public proxy.
     run(cc+['up','-d','--no-build','--wait','--wait-timeout','150','api'])
     status=json.loads(run(cc+['exec','-T','api','python','-c',
         "import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:8000/readyz').read().decode())"]))
-    if status.get('service')!='clinical' or status.get('clinical_entry_available') is not True:
+    if status.get('service')!='clinical' or (initial and status.get('clinical_entry_available') is not True):
         raise RuntimeError('Clinical readiness did not pass; staging retained')
     # Marker is permanent before the first public clinical write. Future
     # deployments and failures stay on this DB; no fallback to staging.
-    atomic(marker,b'dedicated clinical database; never restart staging API\n')
+    if initial:atomic(marker,b'dedicated clinical database; never restart staging API\n')
     run(staging(dc)+['stop','api','caddy'])
     try:
         run(cc+['up','-d','--no-build','--wait','--wait-timeout','120','caddy'])
     except RuntimeError:
         raise RuntimeError('Clinical proxy needs recovery; clinical DB retained, staging not reactivated')
     run(staging(dc)+['stop','db'])
-    return 'clinical_active'
+    # Verify the real TLS listener on this host without DNS/NAT hairpin routing.
+    domain=values['CLINICAL_SITE_DOMAIN']
+    public=json.loads(run(['curl','--fail','--silent','--show-error','--retry','4','--retry-connrefused','--retry-delay','2',
+        '--max-time','8','--resolve',domain+':443:127.0.0.1','https://'+domain+'/readyz']))
+    if public.get('service')!='clinical':raise RuntimeError('Clinical HTTPS listener not ready')
+    return 'clinical_active' if public.get('clinical_entry_available') is True else 'clinical_recovery_only'
 
 def main():
     os.chdir(ROOT);os.umask(0o077);STATE.mkdir(exist_ok=True)

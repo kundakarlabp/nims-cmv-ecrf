@@ -69,7 +69,8 @@ def prepare(private=PRIVATE_ROOT):
     for name,mode in [('export',0o755),('ack',0o700)]:
         directory=private/name
         if directory.is_symlink():raise RuntimeError('Private bind source cannot be a symlink')
-        if not directory.exists():directory.mkdir(mode=mode)
+        if not directory.exists():
+            directory.mkdir(mode=mode);directory.chmod(mode)
     return {'configuration_prepared':True,'allocation_key_prepared':True}
 
 

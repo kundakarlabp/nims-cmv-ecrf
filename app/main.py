@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 from fastapi import FastAPI, Depends, HTTPException, Response, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse,JSONResponse
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field, ConfigDict
 from sqlalchemy import create_engine, String, Integer, DateTime, ForeignKey, Date, JSON, Text, select, func, URL, UniqueConstraint
@@ -164,6 +164,19 @@ else:
                 conn.execute(sql_text(f'ALTER TABLE {table} ADD COLUMN {column} BOOLEAN NOT NULL DEFAULT false'))
 
 ROLES={'pi','admin','consultant','pg','scientist','nurse','technician','microbiology','pharmacy','monitor','randomization_custodian'}
+
+@app.middleware('http')
+async def account_migration_guard(request,call_next):
+    path=request.url.path
+    if (not CLINICAL_MODE and request.method not in {'GET','HEAD','OPTIONS'} and
+        (path=='/api/users' or path.startswith('/api/trial/staff/')) and
+        Path('/run/operations/account-migration.lock').is_file()):
+        return JSONResponse(status_code=503,content={'detail':
+            'Clinical account migration in progress. Account changes resume after clinical activation.'},
+            headers={'Cache-Control':'no-store, private'})
+    response=await call_next(request)
+    if path.startswith('/api/') or path=='/operations':response.headers['Cache-Control']='no-store, private'
+    return response
 WRITE_ROLES={
  'admission':{'pi','consultant','pg','scientist','nurse'},
  'visit':{'pi','consultant','pg','scientist','nurse'},

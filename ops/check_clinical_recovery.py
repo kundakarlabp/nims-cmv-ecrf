@@ -37,6 +37,7 @@ with SessionLocal() as s:
         fakehome=directory/'home';(fakehome/'.ssh').mkdir(parents=True)
         shutil.copy(key.with_suffix('.pub'),fakehome/'.ssh/authorized_keys')
         previous_home=os.environ.get('HOME');os.environ['HOME']=str(fakehome)
+        old_umask=os.umask(0o077)
         try:
             values=m.setup_paths()
             m.run(dc+['image','tag','nims-cmv-api','nims-cmv-clinical-api'])
@@ -61,11 +62,22 @@ with SessionLocal() as s:
             assert m.sql(dc,'SELECT count(*) FROM sessions;').strip()==b'0'
             assert m.sql(dc,"SELECT has_schema_privilege('nims_clinical_app','public','CREATE');").strip()==b'f'
             assert not (m.PRIVATE/'backup-state/last_success').exists()
+            assert archive.stat().st_mode & 0o777 == 0o644
+            # Actual API UID can read ciphertext/auth mounts under umask 077.
+            m.run(dc+['run','--rm','--network','none','--user','10001:65534',
+                '-v',str(m.PRIVATE/'export')+':/run/export:ro',
+                '-v',str(m.PRIVATE/'authorization.json')+':/run/authorization:ro',
+                'nims-cmv-clinical-api','python','-c',
+                "from pathlib import Path; import json; assert list(Path('/run/export').glob('*.tar')); [p.read_bytes() for p in Path('/run/export').glob('*')];json.loads(Path('/run/authorization').read_text())"])
+            try:m.sql(dc,"UPDATE users SET active=false WHERE username='ci-investigator';",'nims_ecrf',True)
+            except RuntimeError:pass
+            else:raise AssertionError('Staging account mutations were not frozen during migration')
             print('PASS: real clinical schema, named login/MFA migration, encrypted dump, isolated PostgreSQL restore, external SSH escrow recovery, no participant/session import.')
         finally:
             m.run(m.clinical(dc)+['down','-v'],check=False)
             (ROOT/'.env').unlink(missing_ok=True)
             if previous_home is None:os.environ.pop('HOME',None)
             else:os.environ['HOME']=previous_home
+            os.umask(old_umask)
 
 if __name__=='__main__':check()
