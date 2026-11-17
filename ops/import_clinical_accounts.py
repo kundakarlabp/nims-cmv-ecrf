@@ -21,7 +21,6 @@ with ENGINE.begin() as conn:
             # fields without Python coercion or concatenating values into SQL.
             conn.execute(text(f'INSERT INTO {table} SELECT (json_populate_record(NULL::{table},CAST(:record AS json))).*'),
                          {'record':json.dumps(filtered)})
-    conn.execute(text("SELECT setval(pg_get_serial_sequence('trial_user_invitations','id'), coalesce(max(id),1), count(*)>0) FROM trial_user_invitations"))
     owners=data['users'];owner=next(row for row in owners if row.get('pi_authorized'))
     # Retain explicit current access windows. Older active named accounts
     # predate that table; the owner's activation instruction authorizes their

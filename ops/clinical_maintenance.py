@@ -118,6 +118,10 @@ def provision(dc):
         payload=json.dumps(snapshot).encode()
         run(cc+['run','--rm','--no-deps','-T','admin-bootstrap',
                 'python','/srv/import_clinical_accounts.py'],data=payload)
+    if not (PRIVATE/'provisioned').exists() and not (STATE/'clinical-active').exists():
+        # Sequence reset is owner-only and only before initial activation.
+        # The restricted application role deliberately cannot call setval.
+        sql(dc,"SELECT setval(pg_get_serial_sequence('trial_user_invitations','id'), coalesce(max(id),1), count(*)>0) FROM trial_user_invitations;")
     atomic(PRIVATE/'provisioned',b'clinical schema and named accounts ready\n')
 
 def ensure_crypto():
