@@ -17,7 +17,8 @@ def test_health_verification_requires_correct_mode_source_and_commit():
     assert matches(data,sha,fingerprint)
     assert not matches(dict(data,app_commit='c'*40),sha,fingerprint,True)
     assert not matches(dict(data,build_fingerprint='d'*64),sha,fingerprint)
-    assert not matches(dict(data,service='clinical'),sha,fingerprint)
+    assert matches(dict(data,service='clinical'),sha,fingerprint)
+    assert not matches(dict(data,service='unknown'),sha,fingerprint)
     assert not matches(dict(data,ok=False),sha,fingerprint)
     assert not matches(dict(data,app_commit=None),sha,fingerprint)
     assert matches(dict(data,app_commit=None),sha,fingerprint,True)
@@ -40,3 +41,4 @@ def test_git_expected_identity_matches_files_and_bootstrap_only_first_commit(tmp
     later=git('rev-parse','HEAD')
     assert expected_fingerprint(later)==expected
     assert not is_identity_bootstrap(later)
+

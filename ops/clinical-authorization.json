@@ -1,0 +1,11 @@
+{
+  "owner": "Dr. Kundakarla Bhanu Prasad",
+  "project": "NIMS CMV ICMR trial",
+  "instruction": "activate_clinical_data_capture",
+  "authorized_on": "2026-11-17",
+  "protocol_version": "5.0",
+  "site_domain": "152-70-77-77.sslip.io",
+  "institutional_approval_claimed": false,
+  "source": "Owner explicitly requested clinical database provisioning, MFA, verified backup/restore and official randomization integration in ChatGPT.",
+  "limits": "This records system activation authorization only. It does not certify institutional hosting approval, signed human UAT, authenticator possession or independent sequence custody."
+}

@@ -35,7 +35,16 @@ target=${BASH_REMATCH[1]}
 }
 git merge-base --is-ancestor "$target" origin/main
 current=$(cat .deploy-state/current-commit 2>/dev/null || true)
-[[ "$current" != "$target" ]] || { echo "Already deployed: $target"; exit 0; }
+if [[ "$current" == "$target" ]]; then
+  if [[ -f ops/clinical_maintenance.py ]]; then
+    python3 ops/clinical_maintenance.py
+  fi
+  echo "Already deployed: $target"; exit 0
+fi
 echo "Deploying approved staging commit: $target"
 bash ops/deploy.sh "$target"
+if [[ -f ops/clinical_maintenance.py ]]; then
+  python3 ops/clinical_maintenance.py
+fi
+
 

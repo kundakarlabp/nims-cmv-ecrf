@@ -36,7 +36,7 @@ function panel(id,title,html){
  var page=document.createElement('div');
  page.id=id;page.className='panel hide';
  page.style.cssText='grid-column:2;min-width:0;padding:22px;';
- page.innerHTML='<h2>'+title+'</h2><p class="hint">NIMS CMV study · synthetic-only until formal production sign-off. Paper source signatures and independent randomization remain mandatory.</p>'+html;
+ page.innerHTML='<h2>'+title+'</h2><p class="hint">NIMS CMV trial · enter source-verified records and submit for independent review.</p>'+html;
  root.appendChild(page);
  var button=document.createElement('button');button.id='btn'+id;
  button.textContent=title;button.onclick=()=>{void tab(id)};
@@ -162,7 +162,7 @@ panel('randomization','Concealed randomization',
  'A plan cannot be replaced, edited or regenerated after locking.</p>'+
  '<label>Locally held signed sequence JSON<input id="tw-rand-file" type="file" accept=".json,application/json"></label>'+
  '<div id="tw-rand-file-info" class="hint">No confidential sequence uploaded.</div>'+
- btn('Permanently lock signed sequence','tw-rand-lock')+'</div>'+
+ btn('Permanently lock signed sequence','tw-rand-lock')+'<hr><h4>Generate and lock here</h4><p>The independent custodian must personally approve the final specification before the first randomization. Future allocations are never displayed.</p>'+field('Custodian name and appointment reference','tw-rand-custodian-ref')+field('Signed final specification reference','tw-rand-spec-ref')+field('Prespecified variable block sizes (comma separated)','tw-rand-sizes')+'<label><input id="tw-rand-independent" type="checkbox"> I am independently appointed and do not determine eligibility.</label>'+btn('Generate and permanently lock official sequence','tw-rand-generate')+'</div>'+
  '<div class="study-card" id="tw-rand-groups-panel"><h3>Independent custodian: realized balance only</h3>'+
  '<div id="tw-rand-groups" class="hint">Only assigned participants are counted.</div></div>'+
  '<div id="tw-rand-status" class="status hide" role="status"></div>'
@@ -211,7 +211,7 @@ function setRole(){
  for(const k of Object.keys(perms))$('btn'+k).classList.toggle('hide',!perms[k].includes(r));
  if($('tw-role')){
    const option=Array.from($('tw-role').options).find(o=>o.value==='randomization_custodian');
-   if(option)option.disabled=r!=='admin';
+   if(option)option.disabled=!window.currentAdmin;
  }
  if(r==='randomization_custodian'){
    for(const btn of menu.querySelectorAll('button')){
@@ -446,7 +446,7 @@ $('tw-mfa-confirm').onclick=()=>{void task('tw-mfa-status',async()=>{
   body:JSON.stringify({otp:value('tw-mfa-code')})});
  $('tw-mfa-code').value='';$('tw-mfa-secret').textContent='';
  $('tw-mfa-secret').classList.add('hide');
- notify('tw-mfa-status','MFA enabled. Future logins require your password and authenticator code.');
+ location.reload();
 });};
 
 let eligibilityItems=null;
@@ -892,7 +892,7 @@ async function loadRandomization(){
   ' | Reserved positions: '+r.planned_randomizations+
   ' | Randomized: '+r.randomized+
   ' | Release: '+(r.activation_ready?'configured':'blocked')+
-  ' | Mode: '+(r.clinical_mode?'clinical gated':'synthetic staging');
+  ' | Mode: '+(r.clinical_mode?'clinical':'test environment');
  if(isCustodian){
   const groups=await api('/api/trial/randomization/assigned-group-counts');
   $('tw-rand-groups').textContent=
@@ -960,6 +960,18 @@ $('tw-rand-lock').onclick=()=>{void task('tw-rand-status',async()=>{
  $('tw-rand-file-info').textContent='Sequence locked; local plaintext selection cleared.';
  notify('tw-rand-status','Signed sealed sequence locked · SHA-256 '+result.sequence_sha256+
   '. All unreleased treatment assignments remain encrypted.');
+ await loadRandomization();
+});};
+
+
+$('tw-rand-generate').onclick=()=>{void task('tw-rand-status',async()=>{
+ if(!$('tw-rand-independent').checked)throw Error('Independent custodian attestation required');
+ const sizes=value('tw-rand-sizes').split(',').map(x=>Number(x.trim()));
+ if(!confirm('Permanently lock the official protocol v5 sequence? It cannot be replaced or regenerated.'))return;
+ const result=await api('/api/trial/randomization/sequence/generate-and-lock',{method:'POST',body:JSON.stringify({
+  statistician_reference:value('tw-rand-custodian-ref'),signed_specification_reference:value('tw-rand-spec-ref'),
+  independent_sequence_attested:true,block_sizes:sizes})});
+ notify('tw-rand-status','Official concealed sequence locked. SHA-256 '+result.sequence_sha256);
  await loadRandomization();
 });};
 

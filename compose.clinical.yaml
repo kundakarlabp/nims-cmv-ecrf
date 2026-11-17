@@ -30,7 +30,7 @@ services:
   # The database refuses re-provisioning after tables exist.
   schema-bootstrap:
     profiles: [provision]
-    build: .
+    image: nims-cmv-clinical-api
     logging: *logging
     command: ["python", "/srv/clinical_schema_bootstrap.py"]
     environment:
@@ -50,7 +50,7 @@ services:
   # default, never part of clinical steady-state. Override its command for MFA.
   admin-bootstrap:
     profiles: [provision]
-    build: .
+    image: nims-cmv-clinical-api
     logging: *logging
     stdin_open: true
     tty: true
@@ -68,6 +68,7 @@ services:
     networks: [private]
 
   api:
+    image: nims-cmv-clinical-api
     build: .
     # Only the separately mounted allocation key uses this supplemental group.
     group_add: ["${CLINICAL_KEY_READER_GID:-65534}"]
@@ -93,14 +94,19 @@ services:
       CLINICAL_UAT_APPROVED: ${CLINICAL_UAT_APPROVED:-unverified}
       CLINICAL_GOLIVE_ATTESTATION_PATH: /run/clinical-release/release.txt
       CLINICAL_GOLIVE_SHA256: ${CLINICAL_GOLIVE_SHA256:-unverified}
+      CLINICAL_OWNER_AUTHORIZATION_PATH: /run/clinical-release/release.txt
       CLINICAL_BACKUP_RECEIPT_PATH: /run/clinical-backup/last_success
       CLINICAL_RESTORE_RECEIPT_PATH: /run/clinical-backup/last_restore
       RANDOMIZATION_FERNET_KEY_FILE: /run/clinical-secrets/fernet.key
+      RANDOMIZATION_ENABLED: "true"
       SITE_DOMAIN: ${CLINICAL_SITE_DOMAIN:-unconfigured.invalid}
     volumes:
       - ${CLINICAL_SIGNOFF_PATH:-/dev/null}:/run/clinical-release/release.txt:ro
       - ${CLINICAL_BACKUP_STATE_DIR:-./.unconfigured-clinical-backup-state}:/run/clinical-backup:ro
       - ${CLINICAL_RANDOMIZATION_KEY_PATH:-/dev/null}:/run/clinical-secrets/fernet.key:ro
+      - ${CLINICAL_BACKUP_EXPORT_DIR:-./.unconfigured-clinical-export}:/run/clinical-backups:ro
+      - ${CLINICAL_BACKUP_ACK_DIR:-./.unconfigured-clinical-ack}:/run/backup-ack
+      - ./ops/public-status:/run/operations:ro
     depends_on:
       db:
         condition: service_healthy
@@ -127,7 +133,12 @@ services:
 volumes:
   clinical_postgres_data:
   clinical_caddy_data:
+    external: true
+    name: nims-cmv_caddy_data
   clinical_caddy_config:
+    external: true
+    name: nims-cmv_caddy_config
 networks:
   private:
+
 

@@ -31,6 +31,8 @@ def read_host_status(path=Path('/run/operations/status.json'), at=None):
     commit=value.get('deployed_commit')
     result['deployed_commit']=commit if isinstance(commit,str) and SHA.fullmatch(commit) else None
     for key, allowed in {
+        'clinical_transition':{'awaiting_offsite_readback','clinical_active','maintenance_failed'},
+        'clinical_failed_step':{'preparation','database_provisioning','encrypted_backup_and_isolated_restore','offsite_receipt','clinical_cutover'},
         'last_update_attempt':{'running','success','failed'},
         'timer_active':{'active','inactive','failed','activating','deactivating'},
         'timer_enabled':{'enabled','disabled','static','masked'},
@@ -43,3 +45,4 @@ def read_host_status(path=Path('/run/operations/status.json'), at=None):
         field=value.get(key)
         result[key]=field if type(field) is int and 0 <= field <= 10**12 else None
     return result
+

@@ -1,0 +1,52 @@
+name: Encrypted clinical backup
+on:
+  schedule:
+    - cron: '17 */3 * * *'
+  workflow_dispatch:
+  workflow_run:
+    workflows: [Mark reviewed staging release]
+    types: [completed]
+permissions:
+  contents: read
+  id-token: write
+  actions: read
+concurrency:
+  group: encrypted-clinical-backup
+  cancel-in-progress: false
+jobs:
+  backup:
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 22
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Retrieve encrypted archive using scoped workflow identity
+        run: python3 ops/transfer_clinical_backup.py fetch
+      - name: Save encrypted archive off the VM
+        id: archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: clinical-encrypted-${{ github.run_id }}
+          path: /tmp/nims-encrypted/bundle.tar
+          retention-days: 2
+          if-no-files-found: error
+          compression-level: 0
+      - name: Read back exact encrypted artifact
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.archive.outputs.artifact-id }}
+          path: /tmp/nims-readback
+          merge-multiple: true
+      - name: Verify readback and acknowledge offsite copy
+        env:
+          CLINICAL_ARTIFACT_ID: ${{ steps.archive.outputs.artifact-id }}
+        run: python3 ops/transfer_clinical_backup.py acknowledge
+      - name: Confirm clinical entry availability through public health
+        run: python3 ops/transfer_clinical_backup.py verify

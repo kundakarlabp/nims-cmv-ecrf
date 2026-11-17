@@ -118,8 +118,16 @@ jobs:
         run: python3 ops/check_key_mount.py
       - run: bash ops/check_health.sh
       - run: curl --fail --retry 5 --retry-delay 2 http://localhost/readyz
+      - name: Exercise real clinical provisioning, encryption, restore and SSH escrow recovery
+        env:
+          CLINICAL_RECOVERY_CI: "true"
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq age python3-cryptography
+          python3 ops/check_clinical_recovery.py
       - if: failure()
         run: docker compose logs --tail=100
       - if: always()
         run: docker compose down -v
+
 

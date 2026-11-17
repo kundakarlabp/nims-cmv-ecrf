@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from .main import AuthContext, current, db, audit, now, CLINICAL_MODE
 from .trial_models import RandomizationPlan, RandomizationSlot, TrialEligibility
+from .clinical_gate import owner_authorized
 
 router=APIRouter(prefix="/api/trial/randomization", tags=["randomization"])
 STRATA=("rATG:living","rATG:deceased","no_rATG:living","no_rATG:deceased")
@@ -122,7 +123,7 @@ def lock_sequence(data:ImportSequence,u:AuthContext=Depends(current),
     if CLINICAL_MODE:
         if sum(counts.values())<344 or any(count<80 for count in counts.values()):
             raise HTTPException(422,"Official sequence must have adequate slots in all four strata")
-        if os.getenv("RANDOMIZATION_APPROVED_SHA256")!=digest:
+        if not owner_authorized(os.environ) and os.getenv("RANDOMIZATION_APPROVED_SHA256")!=digest:
             raise HTTPException(403,"Sequence fingerprint does not match locked institutional approval")
     f=cipher()
     plan=RandomizationPlan(protocol_version=data.protocol_version,
@@ -151,15 +152,49 @@ def lock_sequence(data:ImportSequence,u:AuthContext=Depends(current),
             "stratum_capacities":counts,"approved_block_sizes":sizes,
             "future_allocations":"not accessible to clinical, monitor or pharmacy users"}
 
+class GenerateSequence(BaseModel):
+    statistician_reference:str=Field(min_length=8,max_length=160)
+    signed_specification_reference:str=Field(min_length=8,max_length=160)
+    independent_sequence_attested:Literal[True]
+    block_sizes:list[int]=Field(min_length=2,max_length=4)
+
+@router.post('/sequence/generate-and-lock')
+def generate_and_lock(data:GenerateSequence,u:AuthContext=Depends(current),s:Session=Depends(db)):
+    # The separately authorized custodian acts personally. Never seed a live
+    # sequence on deployment, or allow the eligibility investigator to generate.
+    if u.role!=CUSTODIAN_ROLE:raise HTTPException(403,'Independent custodian required')
+    sizes=sorted(set(data.block_sizes))
+    if len(sizes)<2 or any(size not in {4,6,8,10} for size in sizes):
+        raise HTTPException(422,'Prespecify at least two distinct sizes from 4, 6, 8, 10')
+    rng=secrets.SystemRandom();rows=[]
+    for name in STRATA:
+        position=0;block=0
+        # Each stratum can accommodate the entire trial without disclosing or
+        # needing to predict its eventual recruitment proportion.
+        while position<344:
+            size=sizes[block] if block<len(sizes) else rng.choice(sizes)
+            block+=1
+            arms=['450']*(size//2)+['900']*(size//2);rng.shuffle(arms)
+            for arm in arms:
+                position+=1;rows.append(dict(stratum=name,position=position,block_no=block,block_size=size,arm=arm))
+    digest=hashlib.sha256(canonical(rows)).hexdigest()
+    return lock_sequence(ImportSequence(protocol_version='5.0',
+        statistician_reference=data.statistician_reference,
+        signed_specification_reference=data.signed_specification_reference,
+        independent_sequence_attested=True,sequence_sha256=digest,entries=rows),u,s)
+
+def plan_enabled(plan):
+    if not plan:return False
+    return not CLINICAL_MODE or (os.getenv('RANDOMIZATION_ENABLED')=='true' and
+        (owner_authorized(os.environ) or os.getenv('RANDOMIZATION_APPROVED_SHA256')==plan.sequence_sha256))
+
 @router.get("/readiness")
 def readiness(u:AuthContext=Depends(current),s:Session=Depends(db)):
     plan=s.scalar(select(RandomizationPlan).order_by(RandomizationPlan.id).limit(1))
     slots=s.scalar(select(func.count(RandomizationSlot.id))) or 0
     allocated=s.scalar(select(func.count(RandomizationSlot.id)).where(
         RandomizationSlot.subject_id.is_not(None))) or 0
-    enabled=bool(plan and (not CLINICAL_MODE or
-        (os.getenv("RANDOMIZATION_ENABLED")=="true" and
-         os.getenv("RANDOMIZATION_APPROVED_SHA256")==plan.sequence_sha256)))
+    enabled=plan_enabled(plan)
     return {"sequence_locked":bool(plan),"protocol":"5.0","strata":list(STRATA),
             "planned_randomizations":slots,"randomized":allocated,
             "sequence_sha256":plan.sequence_sha256 if plan else None,
@@ -189,7 +224,7 @@ class RandomizeInput(BaseModel):
 @router.post("/subjects/{subject_id}/assign")
 def assign(subject_id:int,data:RandomizeInput,u:AuthContext=Depends(current),
            s:Session=Depends(db)):
-    if u.role!="pi":raise HTTPException(403,"Only PI may release the next allocation after enrollment")
+    if u.role!="pi" and not u.pi_authorized:raise HTTPException(403,"Only PI may release the next allocation after enrollment")
     from .trial_api import active_subject, eligible_patient
     subject=active_subject(s,subject_id)
     if not subject.enrolled_on or subject.confirmed_by is None:
@@ -214,8 +249,7 @@ def assign(subject_id:int,data:RandomizeInput,u:AuthContext=Depends(current),
         raise HTTPException(409,"Participant already randomized; never rerandomize")
     plan=s.scalar(select(RandomizationPlan).where(RandomizationPlan.active.is_(True)).limit(1))
     if not plan:raise HTTPException(503,"No independently locked allocation sequence")
-    if CLINICAL_MODE and (os.getenv("RANDOMIZATION_ENABLED")!="true" or
-                          os.getenv("RANDOMIZATION_APPROVED_SHA256")!=plan.sequence_sha256):
+    if not plan_enabled(plan):
         raise HTTPException(403,"Clinical randomization awaits approved release and sequence fingerprint")
     key=stratum(subject)
     row=s.scalar(select(RandomizationSlot)
@@ -264,7 +298,7 @@ def read_allocation(subject_id:int,u:AuthContext=Depends(current),
     masked={"study_code":subject.study_code,"randomized":True,
         "allocation_code":row.allocation_code,"stratum":row.stratum,
         "assigned_at":row.assigned_at}
-    if u.role in REVEAL_ROLES:
+    if u.role in REVEAL_ROLES or u.pi_authorized:
         masked["assigned_arm_mg"]=arm_for(s,subject_id)
     elif u.role not in {"scientist","nurse","monitor","pg","technician","microbiology"}:
         raise HTTPException(403,"No allocation access for role")
@@ -285,3 +319,4 @@ def assigned_group_counts(u:AuthContext=Depends(current),s:Session=Depends(db)):
     return {"randomized":sum(summary.values()),"group_450":summary["450"],
         "group_900":summary["900"],
         "note":"Only realized assignments; no future block or allocation disclosed"}
+

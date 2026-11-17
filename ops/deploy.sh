@@ -22,8 +22,18 @@ chmod 600 .env
 git fetch origin main
 git merge-base --is-ancestor "$target" origin/main
 previous=$(git rev-parse HEAD)
+compose_args=()
+clinical_active=0
+if [[ -f .deploy-state/clinical-active ]]; then
+  clinical_active=1
+  compose_args=(--env-file "$HOME/.local/share/nims-cmv-clinical/clinical.env" -f compose.clinical.yaml)
+fi
 # Snapshot before a change; retain locally until encrypted offsite backup is configured.
-if "${docker_cmd[@]}" compose ps --status running --services | grep -qx db; then
+if (( clinical_active )); then
+  # Clinical predeployment recovery archives are encrypted, isolated-restore
+  # tested and written privately; never create an unencrypted patient dump.
+  python3 -c 'import ops.clinical_maintenance as m; m.backup_and_restore(m.docker(),force=True)'
+elif "${docker_cmd[@]}" compose ps --status running --services | grep -qx db; then
   umask 077
   mkdir -p backups
   dump="backups/predeploy-$(date -u +%Y%m%dT%H%M%SZ).dump"
@@ -44,9 +54,9 @@ rollback() {
     fi
     export APP_COMMIT="$previous"
     git checkout --detach "$previous" || true
-    "${docker_cmd[@]}" compose build --build-arg "APP_COMMIT=$previous" api &&
-      "${docker_cmd[@]}" compose up -d --wait --wait-timeout 180 &&
-      "${docker_cmd[@]}" compose up -d --force-recreate --no-deps caddy || true
+    "${docker_cmd[@]}" compose "${compose_args[@]}" build --build-arg "APP_COMMIT=$previous" api &&
+      "${docker_cmd[@]}" compose "${compose_args[@]}" up -d --wait --wait-timeout 180 &&
+      "${docker_cmd[@]}" compose "${compose_args[@]}" up -d --force-recreate --no-deps caddy || true
   fi
   echo 'Inspect the containers and backup before retrying. No database restore was attempted.' >&2
   exit "$code"
@@ -58,16 +68,20 @@ export APP_COMMIT="$target"
 if [[ -f ops/prepare_clinical.py ]]; then
   python3 ops/prepare_clinical.py || echo 'Private clinical preparation needs review' >&2
 fi
+if [[ -f ops/clinical_maintenance.py ]]; then
+  python3 ops/clinical_maintenance.py --prepare
+fi
 # Fixed read-only host checks, published separately from private configuration.
 python3 ops/operations_status.py || echo 'Host status report unavailable' >&2
-"${docker_cmd[@]}" compose config --quiet
-"${docker_cmd[@]}" compose build --pull --build-arg "APP_COMMIT=$target" api
-"${docker_cmd[@]}" compose up -d --wait --wait-timeout 180
-"${docker_cmd[@]}" compose up -d --force-recreate --no-deps caddy
+"${docker_cmd[@]}" compose "${compose_args[@]}" config --quiet
+"${docker_cmd[@]}" compose "${compose_args[@]}" build --pull --build-arg "APP_COMMIT=$target" api
+"${docker_cmd[@]}" compose "${compose_args[@]}" up -d --wait --wait-timeout 180
+"${docker_cmd[@]}" compose "${compose_args[@]}" up -d --force-recreate --no-deps caddy
 bash ops/check_health.sh
 trap - ERR
 printf '%s\n' "$target" > .deploy-state/current-commit
 python3 ops/operations_status.py --attempt-result success || echo 'Host status report unavailable' >&2
 echo 'Containers ready. Verify public HTTPS/login before accepting deployment.'
+
 
 
