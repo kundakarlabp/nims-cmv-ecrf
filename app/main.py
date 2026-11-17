@@ -273,6 +273,40 @@ def system_mode(response:Response,u:AuthContext=Depends(current)):
             'message':('Clinical database authorized and operational' if writable else
               'Staging only: real patient identifiers must not be entered' if not CLINICAL_MODE else
               'Clinical write temporarily paused: backup/restore proof is overdue')}
+@app.get('/operations')
+def operations_page(u:AuthContext=Depends(current)):
+    if u.role!='admin': raise HTTPException(403,'System administrator required')
+    return FileResponse(Path(__file__).parent/'operations.html',
+                        headers={'Cache-Control':'no-store, private, max-age=0'})
+
+@app.get('/api/system/operations')
+def operations_status(response:Response,u:AuthContext=Depends(current)):
+    if u.role!='admin': raise HTTPException(403,'System administrator required')
+    from .operations import read_host_status, SHA
+    response.headers['Cache-Control']='no-store, private, max-age=0'
+    database='unavailable'
+    try:
+        with ENGINE.connect() as connection:
+            connection.execute(select(1))
+        database='reachable'
+    except SQLAlchemyError:
+        pass
+    commit=os.getenv('APP_COMMIT','')
+    # Evaluate the current container's configuration, not an unseen clinical
+    # deployment. Return reason codes only, never env values, keys or paths.
+    clinical_configuration=dict(os.environ,CLINICAL_DATA_ENABLED='true')
+    return {
+        'checked_at':now().isoformat(),
+        'app_commit':commit if SHA.fullmatch(commit) else None,
+        'database':database,
+        'mode':'clinical' if CLINICAL_MODE else 'synthetic',
+        'clinical_registration_enabled':bool(CLINICAL_MODE and backup_fresh() and restore_verified()),
+        'current_container_release_deficiencies':startup_deficiencies(clinical_configuration),
+        'host':read_host_status(),
+        'update_channel':'CI-approved GitHub staging releases',
+        'host_command_execution':False,
+    }
+
 @app.post('/api/login')
 def login(data:LoginInput,response:Response,s:Session=Depends(db)):
     username=data.username.strip().lower()
@@ -609,3 +643,4 @@ app.include_router(crf_router)
 
 from .randomization import router as randomization_router
 app.include_router(randomization_router)
+

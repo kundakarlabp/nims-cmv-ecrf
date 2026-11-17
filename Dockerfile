@@ -1,4 +1,6 @@
 FROM python:3.12-slim
+ARG APP_COMMIT=unknown
+ENV APP_COMMIT=${APP_COMMIT}
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /srv
 COPY requirements.txt .
@@ -10,3 +12,4 @@ RUN chmod -R a+rX /srv/app && chmod a+r /srv/bootstrap_admin.py /srv/clinical_sc
 USER appuser
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2", "--proxy-headers", "--forwarded-allow-ips", "*"]
+
