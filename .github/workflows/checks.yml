@@ -94,7 +94,7 @@ jobs:
           CLINICAL_RANDOMIZATION_KEY_PATH: /tmp/ci-fernet.key
           CLINICAL_SITE_DOMAIN: clinical-ci.example.in
         run: |
-          docker compose -f compose.clinical.yaml config --format json > /tmp/clinical-compose.json
+          docker compose --profile provision -f compose.clinical.yaml config --format json > /tmp/clinical-compose.json
           python - <<'PY'
           import json
           c=json.load(open('/tmp/clinical-compose.json'))
