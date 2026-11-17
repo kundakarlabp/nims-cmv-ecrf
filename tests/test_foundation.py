@@ -590,10 +590,12 @@ def test_pcr_anchor_and_eligibility_exclusion_review():
 
 def test_crf_v3_schema_contains_all_remaining_signed_sections():
     from app.crf_schema import CRF_FORMS, validate_payload
-    assert list(CRF_FORMS)==[
+    assert list(CRF_FORMS)[:10]==[
         'C_baseline','D_adherence','E_followup','F_unscheduled_pcr',
         'G_cmv_event','H_adverse_event','I_clinical_outcome',
         'J_deviation','K_resource_cost','L_final_status']
+    assert all(CRF_FORMS[k]['supplementary'] for k in (
+        'M_medication','N_laboratory','O_infection','P_transplant'))
     assert len(CRF_FORMS['E_followup']['fields']) >= 17
     assert validate_payload('E_followup',{
         'scheduled_month':'3','actual_visit_on':'2026-10-30',
@@ -607,6 +609,73 @@ def test_crf_v3_schema_contains_all_remaining_signed_sections():
     with pytest.raises(ValueError,match='IEC'):
         validate_payload('H_adverse_event',{'ae_term':'neutropenia',
             'onset_on':'2026-10-30','serious':'yes'})
+
+
+def test_longitudinal_source_record_context_blinding_and_cursor():
+    from app.trial_models import TrialCRFEntry
+    from datetime import date
+    with TestClient(app) as admin:
+        h=auth(admin);pid,sid=setup_synthetic_trial(admin,h)
+        for username,role in [('coursepi','pi'),('coursenurse','nurse'),('coursemonitor','monitor')]:
+            assert admin.post('/api/users',headers=h,json=dict(username=username,
+                display_name='Synthetic '+role,role=role,password='SyntheticCoursePassword123!')).status_code==200
+    with TestClient(app) as pi:
+        h=auth(pi,'coursepi','SyntheticCoursePassword123!')
+        assert pi.post(f'/api/trial/subjects/{sid}/enroll',headers=h,json={
+            'enrolled_on':'2026-10-03','pcr_anchor_on':'2026-10-01',
+            'pcr_anchor_basis':'transplant_date','protocol_reference':'protocol-v5',
+            'reviewed_eligibility_and_consent':True,'approved_visit_anchor':True}).status_code==200
+        # Baseline clinical measurements must be recordable before allocation.
+        r=pi.post(f'/api/trial/crf/subjects/{sid}/entries',headers=h,json={
+            'section':'C_baseline','occurred_on':'2026-10-02',
+            'payload':{'serum_creatinine_mg_dl':1.4}})
+        assert r.status_code==200,r.text
+        context=pi.get(f'/api/trial/crf/patients/{pid}/context').json()
+        assert context['subject']['id']==sid and context['allocation']['randomized'] is False
+    with TestClient(app) as nurse:
+        h=auth(nurse,'coursenurse','SyntheticCoursePassword123!')
+        body={'section':'M_medication','occurred_on':'2026-10-02','payload':{
+            'start_on':'2026-10-02','drug':'mycophenolate_sodium','indication':'maintenance',
+            'record_type':'administered','dose_per_administration':360,'dose_unit':'mg',
+            'frequency':'twice_daily','route':'oral','source_reference':'TEST-SOURCE-001'}}
+        r=nurse.post(f'/api/trial/crf/subjects/{sid}/entries',headers=h,json=body)
+        assert r.status_code==200,r.text
+        mismatch=dict(body,occurred_on='2026-10-03')
+        assert nurse.post(f'/api/trial/crf/subjects/{sid}/entries',headers=h,json=mismatch).status_code==422
+        result=nurse.get(f'/api/trial/crf/subjects/{sid}/timeline').json()
+        assert len(result['entries'])==1 and result['entries'][0]['payload']==body['payload']
+        uid=result['entries'][0]['created_by']
+        # More than a page on the same clinical date: no records lost or repeated.
+        with SessionLocal() as s:
+            for i in range(102):
+                s.add(TrialCRFEntry(subject_id=sid,section='N_laboratory',
+                    occurrence_key=f'TEST-LAB-{i}',occurred_on=date(2026,10,4),
+                    payload={'sample_on':'2026-10-04','context':'inpatient',
+                             'source_reference':f'TEST-{i}','creatinine_mg_dl':1.3},
+                    created_by=uid,updated_by=uid))
+            s.commit()
+        first=nurse.get(f'/api/trial/crf/subjects/{sid}/timeline').json()
+        second=nurse.get(f'/api/trial/crf/subjects/{sid}/timeline',params=first['next_cursor']).json()
+        assert len(first['entries'])==100 and len(second['entries'])==3
+        assert not set(x['id'] for x in first['entries']) & set(x['id'] for x in second['entries'])
+        assert second['next_cursor'] is None
+    with TestClient(app) as monitor:
+        auth(monitor,'coursemonitor','SyntheticCoursePassword123!')
+        assert monitor.get(f'/api/trial/crf/subjects/{sid}/timeline').json()['entries']==[]
+        assert 'M_medication' not in monitor.get('/api/trial/crf/schema').json()['forms']
+        assert monitor.get(f'/api/trial/crf/subjects/{sid}/entries?section=M_medication').status_code==403
+
+
+def test_official_new_sequence_requires_prior_allocation_reconciliation(monkeypatch):
+    from app import randomization as r
+    from types import SimpleNamespace
+    from fastapi import HTTPException
+    monkeypatch.setattr(r,'CLINICAL_MODE',True)
+    with pytest.raises(HTTPException,match='') as error:
+        r.generate_and_lock(r.GenerateSequence(statistician_reference='TEST-INDEPENDENT',
+            signed_specification_reference='TEST-SPECIFICATION',independent_sequence_attested=True,
+            block_sizes=[4,6]),SimpleNamespace(role='randomization_custodian'),None)
+    assert error.value.status_code==422 and 'Reconcile' in error.value.detail
 
 
 def test_structured_crf_autosave_submission_and_independent_review():
@@ -1105,3 +1174,4 @@ def test_clinical_mode_api_no_cache_and_html_script_freshness():
         assert result.json()['mode']=='synthetic'
         assert result.json()['clinical_registration_enabled'] is False
         assert 'no-store' in result.headers.get('cache-control','')
+

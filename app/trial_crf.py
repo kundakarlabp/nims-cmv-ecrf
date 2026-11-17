@@ -4,12 +4,12 @@ from datetime import date
 from typing import Any, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import select, update, delete
+from sqlalchemy import select, update, delete, and_, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from .main import AuthContext, current, db, audit, as_dict, now
 from .trial_api import find_subject, role
-from .trial_models import TrialCRFEntry, TrialCRFDraft, TrialCRFReview, PCRRecord, DrugDispense
+from .trial_models import TrialCRFEntry, TrialCRFDraft, TrialCRFReview, PCRRecord, DrugDispense, TrialSubject
 from .crf_schema import CRF_FORMS, CRF_VERSION, PROTOCOL_VERSION, validate_payload
 
 router=APIRouter(prefix="/api/trial/crf",tags=["trial-crf-v3"])
@@ -23,7 +23,11 @@ FORM_EDITOR={
  "I_clinical_outcome":{"pi","consultant","scientist","nurse","pg"},
  "J_deviation":{"pi","consultant","scientist"},
  "K_resource_cost":{"pi","scientist","pharmacy"},
- "L_final_status":{"pi","consultant","scientist"}
+ "L_final_status":{"pi","consultant","scientist"},
+ "M_medication":{"pi","consultant","scientist","nurse","pg"},
+ "N_laboratory":{"pi","consultant","scientist","nurse","pg","microbiology","technician"},
+ "O_infection":{"pi","consultant","scientist","nurse","pg"},
+ "P_transplant":{"pi","consultant","scientist","nurse","pg"}
 }
 BLINDED_FORM_SECTIONS={"G_cmv_event","H_adverse_event","I_clinical_outcome","L_final_status"}
 REVIEWERS={"pi","consultant","scientist","monitor"}
@@ -57,7 +61,7 @@ def validate_crf(section,payload,partial=False):
 def enforce_record_date(subject,event_on,section):
     if event_on>date.today():raise HTTPException(422,"Future event date prohibited")
     # Baseline might precede transplantation; subsequent follow-up cannot.
-    if section not in {"C_baseline"} and subject.pcr_anchor_on and event_on<subject.pcr_anchor_on:
+    if section not in {"C_baseline","M_medication","N_laboratory","P_transplant"} and subject.pcr_anchor_on and event_on<subject.pcr_anchor_on:
         raise HTTPException(422,"Clinical event cannot precede transplantation")
 
 def enrich_from_sources(s,subject,section,payload):
@@ -66,7 +70,9 @@ def enrich_from_sources(s,subject,section,payload):
         from .randomization import allocation_for, arm_for
         slot=allocation_for(s,subject.id)
         if not slot:
-            raise HTTPException(409,"Cannot finalize baseline randomization fields before an independently locked allocation")
+            if any(key in result for key in ("allocation_code","assigned_nominal_arm","randomization_on")):
+                raise HTTPException(422,"No released allocation; manual treatment assignment prohibited")
+            return result  # Baseline measurements can be captured before allocation.
         locked={"allocation_code":slot.allocation_code,
                 "assigned_nominal_arm":arm_for(s,subject.id)+" mg OD",
                 "randomization_on":slot.assigned_at.date().isoformat()}
@@ -95,6 +101,11 @@ def enrich_from_sources(s,subject,section,payload):
             "quantity_issued":slip.quantity_issued,"issued_on":slip.issued_on.isoformat()}
     return result
 
+def enforce_source_date(section,payload,event_on):
+    primary={"M_medication":"start_on","N_laboratory":"sample_on","O_infection":"onset_on"}.get(section)
+    if primary and payload.get(primary) and payload[primary]!=event_on.isoformat():
+        raise HTTPException(422,"Timeline date must equal the source start/sample/onset date")
+
 def occurrence_for(section,payload,requested=None):
     kind=CRF_FORMS[section]["repeat"]
     if kind=="single":return "MAIN"
@@ -116,7 +127,7 @@ def crf_schema(u:AuthContext=Depends(current)):
         for key in ("allocation_code","assigned_nominal_arm","randomization_on"):
             permitted["C_baseline"]["fields"].pop(key,None)
     return {"crf_version":CRF_VERSION,"protocol_version":PROTOCOL_VERSION,
-        "forms":permitted,"notice":"CRF v3.0 approved-form mapping; randomization and dosing are separate controlled functions"}
+        "forms":permitted,"notice":"CRF v3.0 C–L with supplementary dated source-detail logs M–P; no additional mandatory tests or treatment changes"}
 
 @router.get("/subjects/{subject_id}/entries")
 def list_forms(subject_id:int,section:str|None=None,
@@ -130,6 +141,44 @@ def list_forms(subject_id:int,section:str|None=None,
         "entries":[visible_entry(e,review_state(s,e)) for e in rows
                 if u.role in FORM_EDITOR[e.section] or ('pi' in FORM_EDITOR[e.section] and u.pi_authorized) or
                    (u.role=="monitor" and e.section in BLINDED_FORM_SECTIONS)]}
+
+@router.get("/patients/{patient_id}/context")
+def patient_context(patient_id:str,u:AuthContext=Depends(current),s:Session=Depends(db)):
+    role(u,{"pi","consultant","scientist","nurse","pg","pharmacy","monitor","microbiology","technician"})
+    from .trial_api import eligible_patient, subject_view
+    from .randomization import read_allocation
+    patient=eligible_patient(s,patient_id)
+    subject=s.scalar(select(TrialSubject).where(TrialSubject.patient_id==patient.id))
+    if not subject:return {"subject":None,"patient_id":patient.id,"transplant_on":patient.transplant_date}
+    return {"subject":subject_view(subject),"patient_id":patient.id,"transplant_on":patient.transplant_date,
+            "allocation":read_allocation(subject.id,u,s)}
+
+@router.get("/subjects/{subject_id}/timeline")
+def clinical_timeline(subject_id:int,before_on:date|None=None,before_id:int|None=None,
+                      u:AuthContext=Depends(current),s:Session=Depends(db)):
+    role(u,{"pi","consultant","scientist","nurse","pg","pharmacy","monitor","microbiology","technician"})
+    subject=find_subject(s,subject_id)
+    if (before_on is None)!=(before_id is None):raise HTTPException(422,"Both timeline cursor fields required")
+    permitted=[key for key in CRF_FORMS if u.role in FORM_EDITOR[key] or
+               ('pi' in FORM_EDITOR[key] and u.pi_authorized) or
+               (u.role=="monitor" and key in BLINDED_FORM_SECTIONS)]
+    query=select(TrialCRFEntry).where(TrialCRFEntry.subject_id==subject.id,
+                                    TrialCRFEntry.section.in_(permitted))
+    if before_on is not None:
+        query=query.where(or_(TrialCRFEntry.occurred_on<before_on,and_(
+            TrialCRFEntry.occurred_on==before_on,TrialCRFEntry.id<before_id)))
+    rows=s.scalars(query.order_by(TrialCRFEntry.occurred_on.desc(),TrialCRFEntry.id.desc()).limit(101)).all()
+    page=rows[:100]
+    return {"study_code":subject.study_code,"entries":[dict(
+        visible_entry(row,review_state(s,row)),title=CRF_FORMS[row.section]["title"],
+        fields=CRF_FORMS[row.section]["fields"]) for row in page],
+        "next_cursor": {"before_on":page[-1].occurred_on,"before_id":page[-1].id} if len(rows)>100 else None,
+        "note":"Source records ordered by clinical date. Missing entries do not establish absence of an event or drug exposure."}
+
+@router.get("/subjects/{subject_id}/context")
+def subject_context(subject_id:int,u:AuthContext=Depends(current),s:Session=Depends(db)):
+    subject=find_subject(s,subject_id)
+    return patient_context(subject.patient_id,u,s)
 
 class CRFDraftInput(BaseModel):
     occurred_on:date
@@ -152,6 +201,7 @@ def save_draft(subject_id:int,section:str,data:CRFDraftInput,
     allow_write(u,section);subject=find_subject(s,subject_id)
     enforce_record_date(subject,data.occurred_on,section)
     checked=validate_crf(section,data.payload,partial=True)
+    enforce_source_date(section,checked,data.occurred_on)
     if len(str(checked))>25000:raise HTTPException(413,"Draft too large")
     # Occurrence keys for draft forms: MAIN, M01 etc, or NEW for event work.
     if data.occurrence_key not in ("MAIN","NEW") and not (
@@ -204,6 +254,7 @@ def submit_crf(subject_id:int,data:CRFSubmitIn,
     if not subject.enrolled_on:raise HTTPException(409,"Screening not enrolled")
     enforce_record_date(subject,data.occurred_on,data.section)
     checked=validate_crf(data.section,data.payload)
+    enforce_source_date(data.section,checked,data.occurred_on)
     key=occurrence_for(data.section,checked)
     checked=enrich_from_sources(s,subject,data.section,checked)
     if len(str(checked))>25000:raise HTTPException(413,"Form exceeds allowed size")
@@ -235,6 +286,7 @@ def edit_crf(entry_id:int,data:CRFEditIn,
     allow_write(u,row.section);subject=find_subject(s,row.subject_id)
     if row.revision!=data.expected_revision:raise HTTPException(409,"Revision conflict")
     checked=validate_crf(row.section,data.payload)
+    enforce_source_date(row.section,checked,data.occurred_on)
     if occurrence_for(row.section,checked)!=row.occurrence_key and CRF_FORMS[row.section]["repeat"]!="event":
         raise HTTPException(422,"Cannot change a submitted visit month or form identity")
     enforce_record_date(subject,data.occurred_on,row.section)
