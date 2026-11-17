@@ -236,9 +236,18 @@ class LoginInput(BaseModel):
     otp:str|None=Field(default=None,min_length=6,max_length=6,pattern=r'^[0-9]{6}$')
 
 @app.get('/')
-def home(): return FileResponse(Path(__file__).parent/'ui.html')
+def home():
+    # A stale script must never retain a clinical/staging permission UI across
+    # deployments. No patient data is cached in a shared or private browser.
+    return FileResponse(Path(__file__).parent/'ui.html',
+                        headers={'Cache-Control':'no-store, max-age=0',
+                                 'Pragma':'no-cache'})
 @app.get('/study_ui.js')
-def study_script(): return FileResponse(Path(__file__).parent/'study_ui.js',media_type='application/javascript')
+def study_script():
+    return FileResponse(Path(__file__).parent/'study_ui.js',
+                        media_type='application/javascript',
+                        headers={'Cache-Control':'no-store, max-age=0',
+                                 'Pragma':'no-cache'})
 
 @app.get('/healthz')
 def health(): return {'ok':True,'service':'clinical' if CLINICAL_MODE else 'staging'}
@@ -252,7 +261,9 @@ def ready():
     return {'ok':True,'service':'clinical' if CLINICAL_MODE else 'staging',
             'database':'reachable'}
 @app.get('/api/system/mode')
-def system_mode(u:AuthContext=Depends(current)):
+def system_mode(response:Response,u:AuthContext=Depends(current)):
+    # Authenticated per-request current mode; never cache or infer from page URL.
+    response.headers['Cache-Control']='no-store, private, max-age=0'
     writable=bool(CLINICAL_MODE and backup_fresh() and restore_verified())
     return {'mode':'clinical' if CLINICAL_MODE else 'synthetic',
             'clinical_registration_enabled':writable,
