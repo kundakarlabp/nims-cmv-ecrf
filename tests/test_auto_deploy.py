@@ -82,15 +82,21 @@ def test_failed_container_start_restores_previous_commit(tmp_path):
     docker = bin_dir / "docker"
     docker.write_text(
         '#!/bin/bash\n'
+        'printf "%s\\n" "$*" >> "$COMMAND_LOG"\n'
         'if [[ "$1 $2" == "compose up" && $(cat release-state) == bad ]]; then exit 1; fi\n'
         'exit 0\n'
     )
     docker.chmod(0o755)
     result = subprocess.run(["bash", "ops/deploy.sh", target], cwd=work,
-                            env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"},
+                            env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}",
+                                 "COMMAND_LOG":str(tmp_path/'docker-commands.log')},
                             text=True, capture_output=True)
     assert result.returncode != 0
     assert run("git", "rev-parse", "HEAD", cwd=work) == previous
     assert (work / ".deploy-state/previous-commit").read_text().strip() == previous
     assert not (work / ".deploy-state/current-commit").exists()
+    commands=(tmp_path/'docker-commands.log').read_text()
+    assert f'--build-arg APP_COMMIT={target}' in commands
+    assert f'--build-arg APP_COMMIT={previous}' in commands
+
 

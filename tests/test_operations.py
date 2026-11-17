@@ -127,3 +127,15 @@ def test_failed_fetch_publishes_completed_failure(tmp_path):
     assert result.returncode==42
     data=read_host_status(tmp_path/'ops/public-status/status.json')
     assert data['fresh'] and data['last_update_attempt']=='failed'
+
+
+def test_backup_configuration_probe_returns_only_presence(tmp_path):
+    from ops.operations_status import backup_configuration_present
+    config=tmp_path/'rclone.conf'
+    assert backup_configuration_present(config) is False
+    config.write_text('[ecrfcrypt]\ntype = drive\npassword = PRIVATE\n')
+    assert backup_configuration_present(config) is False
+    config.write_text('[ecrfcrypt]\ntype = crypt\nremote = PRIVATE\npassword = PRIVATE\n')
+    assert backup_configuration_present(config) is True
+    config.write_text('RCLONE_ENCRYPT_V0:\nPRIVATE')
+    assert backup_configuration_present(config) is None
