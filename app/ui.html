@@ -88,7 +88,8 @@ async function verifyDataEntryMode(){
       typeof result.clinical_registration_enabled!=='boolean'){
    throw Error('Server returned an invalid data-entry mode response');
  }
- const clinical=result.mode==='clinical'&&result.clinical_registration_enabled===true;
+ const isClinical=result.mode==='clinical';
+ const clinical=isClinical&&result.clinical_registration_enabled===true;
  lastVerifiedDataMode=result;
  if($('environmentStatus'))$('environmentStatus').textContent=clinical?
    'NIMS CMV Clinical EDC · approved clinical database':
@@ -103,9 +104,9 @@ async function verifyDataEntryMode(){
       'STAGING / TEST DATA ONLY. Do not type real patient names or hospital CR numbers here.';
   $('registrationModeStatus').classList.toggle('err',!clinical);
  }
- if($('saveRegistrationBtn'))$('saveRegistrationBtn').textContent=clinical?
+ if($('saveRegistrationBtn'))$('saveRegistrationBtn').textContent=isClinical?
    'Save clinical registration':'Save synthetic test record';
- if($('registrationHint'))$('registrationHint').textContent=clinical?
+ if($('registrationHint'))$('registrationHint').textContent=isClinical?
    'Use verified clinical source information. Protocol consent and PI eligibility review remain separate mandatory steps.':
    'Not a clinical entry system. Use TEST- registration numbers and Synthetic test names only.';
  if($('dashEnvironmentWarning'))$('dashEnvironmentWarning').textContent=clinical?
@@ -113,7 +114,7 @@ async function verifyDataEntryMode(){
    result.mode==='clinical'?
      'Clinical writes paused · backup or restore verification is overdue.':
      'SYNTHETIC STAGING ONLY · test records are not clinical trial recruitment.';
- document.title=clinical?'NIMS CMV · Clinical EDC':'NIMS CMV · Synthetic Staging';
+ document.title=isClinical?'NIMS CMV · Clinical EDC':'NIMS CMV · Synthetic Staging';
  return result;
 }
 async function login(){

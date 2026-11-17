@@ -573,7 +573,7 @@ def dashboard(u:AuthContext=Depends(current),s:Session=Depends(db)):
             'study_ids_assigned':s.scalar(select(func.count(Patient.id)).where(Patient.study_id.is_not(None))),
             'entries':len(rows),'review':counts,'by_kind':by_kind,
             'monthly_entries':[{'month':m,'count':monthly[m]} for m in sorted(monthly)[-12:]],
-            'scope':'staging synthetic data only'}
+            'scope':'clinical study database' if CLINICAL_MODE else 'staging synthetic data only'}
 
 @app.get('/api/review-queue')
 def review_queue(u:AuthContext=Depends(current),s:Session=Depends(db)):
@@ -639,6 +639,17 @@ def due(u:AuthContext=Depends(current),s:Session=Depends(db)):
     # Final protocol worklists must anchor to verified enrollment/randomization date.
     from zoneinfo import ZoneInfo
     today=datetime.now(ZoneInfo('Asia/Kolkata')).date()
+    if CLINICAL_MODE:
+        # Use the actual approved enrollment-generated PCR schedule. Generic
+        # visit entries never imply that a protocol PCR has been completed.
+        rows=s.execute(select(PCRRecord,TrialSubject).join(TrialSubject,
+            TrialSubject.id==PCRRecord.subject_id).where(
+            TrialSubject.status=='enrolled',PCRRecord.status!='verified')
+            .order_by(PCRRecord.target_on,PCRRecord.id)).all()
+        return [{'study_id':subject.study_code,'scheduled_month':record.scheduled_month,
+            'target_on':record.target_on,'days_until':(record.target_on-today).days,
+            'status':record.status,'specimen_code':record.specimen_code,
+            'anchor_basis':subject.pcr_anchor_basis} for record,subject in rows]
     records=[]
     completed=set()
     for visit in s.scalars(select(Entry).where(Entry.kind=='visit')).all():

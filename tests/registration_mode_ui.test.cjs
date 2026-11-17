@@ -78,6 +78,7 @@ test('clinical mode with stale recovery proof cannot register real patients',asy
  const t=screen({mode:{mode:'clinical',clinical_registration_enabled:false}});
  await t.context.performRegistration();
  assert.deepEqual(t.calls.map(x=>x.url),['/api/system/mode']);
+ assert.equal(t.context.document.title,'NIMS CMV · Clinical EDC');
 });
 
 test('network failure never falls back to an unverified cached mode',async()=>{
@@ -93,3 +94,4 @@ test('invalid API mode response fails closed',async()=>{
  assert.deepEqual(t.calls.map(x=>x.url),['/api/system/mode']);
  assert.match(t.notices.at(-1).message,/invalid data-entry mode/i);
 });
+
