@@ -65,6 +65,8 @@ jobs:
           PY
           node --check /tmp/nims-cmv-inline.js
           node --check app/study_ui.js
+      - name: Test actual registration-mode JavaScript behavior
+        run: node --test tests/registration_mode_ui.test.cjs
       - run: bash -n ops/*.sh
   containers:
     runs-on: ubuntu-latest
