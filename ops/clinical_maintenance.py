@@ -95,7 +95,7 @@ def provision(dc):
     if not installed:
         count=sql(dc,"SELECT count(*) FROM information_schema.tables WHERE table_schema='public';").strip()
         if count!=b'0':raise RuntimeError('Existing unrecognized clinical database; no overwrite attempted')
-        run(cc+['run','--rm','--no-deps','--no-build','schema-bootstrap'])
+        run(cc+['run','--rm','--no-deps','schema-bootstrap'])
     users=sql(dc,'SELECT count(*) FROM users;').strip()
     if users==b'0':
         # JSON data travels directly inside this host process, never a command
@@ -116,7 +116,7 @@ def provision(dc):
         for name in list(snapshot):
             if name!='users':snapshot[name]=[r for r in snapshot[name] if r.get('user_id') in ids]
         payload=json.dumps(snapshot).encode()
-        run(cc+['run','--rm','--no-deps','--no-build','-T','admin-bootstrap',
+        run(cc+['run','--rm','--no-deps','-T','admin-bootstrap',
                 'python','/srv/import_clinical_accounts.py'],data=payload)
     atomic(PRIVATE/'provisioned',b'clinical schema and named accounts ready\n')
 
