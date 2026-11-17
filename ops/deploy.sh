@@ -37,6 +37,7 @@ rollback() {
   trap - ERR
   if (( switched )); then
     echo 'Deployment failed. Restoring the previous application commit.' >&2
+    export APP_COMMIT="$previous"
     git checkout --detach "$previous" || true
     "${docker_cmd[@]}" compose build api &&
       "${docker_cmd[@]}" compose up -d --wait --wait-timeout 180 &&
@@ -48,6 +49,9 @@ rollback() {
 trap rollback ERR
 git checkout --detach "$target"
 switched=1
+export APP_COMMIT="$target"
+# Fixed read-only host checks, published separately from private configuration.
+python3 ops/operations_status.py || echo 'Host status report unavailable' >&2
 "${docker_cmd[@]}" compose config --quiet
 "${docker_cmd[@]}" compose build --pull api
 "${docker_cmd[@]}" compose up -d --wait --wait-timeout 180
@@ -55,5 +59,7 @@ switched=1
 bash ops/check_health.sh
 trap - ERR
 printf '%s\n' "$target" > .deploy-state/current-commit
+python3 ops/operations_status.py || echo 'Host status report unavailable' >&2
 echo 'Containers ready. Verify public HTTPS/login before accepting deployment.'
+
 

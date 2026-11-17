@@ -22,7 +22,10 @@ services:
       retries: 10
     networks: [private]
   api:
-    build: .
+    build:
+      context: .
+      args:
+        APP_COMMIT: ${APP_COMMIT:-unknown}
     restart: unless-stopped
     logging: *logging
     init: true
@@ -42,6 +45,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    volumes:
+      - ./ops/public-status:/run/operations:ro
     networks: [private]
   caddy:
     image: caddy:2
@@ -66,3 +71,4 @@ volumes:
   caddy_config:
 networks:
   private:
+

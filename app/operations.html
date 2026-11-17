@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NIMS CMV · System operations</title>
+<style>body{font:16px system-ui;color:#18384b;background:#f3f7f9;margin:0}main{max-width:900px;margin:24px auto;padding:24px;background:white;border-radius:12px}h1{font-size:24px}button,a{margin-right:16px}button{padding:10px;border:0;background:#176478;color:white;border-radius:6px}table{width:100%;border-collapse:collapse;margin:20px 0}th,td{text-align:left;padding:12px;border-bottom:1px solid #ddd;overflow-wrap:anywhere}th{width:42%}#notice{padding:12px;background:#edf5f8}li{margin:8px 0}</style></head>
+<body><main><a href="/">Return to study workspace</a><h1>System operations</h1>
+<p>Administrator view of deployment and recovery checks. No patient records, credentials or raw server logs are included.</p>
+<button id="refresh">Refresh status</button><p id="notice" role="status">Checking server…</p>
+<table><tbody id="results"></tbody></table>
+<h2>Current container: clinical configuration checks</h2>
+<p>This evaluates this running container, not a separate clinical server. Passing configuration checks alone does not validate the trial workflow.</p><ul id="checks"></ul>
+<h2>How updates reach the server</h2><p>Tested changes are merged in GitHub and an explicit release is marked. The existing VM timer pulls approved staging releases. A fresh host report and matching deployed commit confirm the connection. This page does not run shell commands or activate clinical mode.</p>
+</main><script>
+const label=value=>value===null||value===undefined?'Not reported':typeof value==='boolean'?(value?'Yes':'No'):String(value);
+async function refresh(){
+ const notice=document.getElementById('notice');notice.textContent='Checking server…';
+ const results=document.getElementById('results');results.replaceChildren();
+ const checks=document.getElementById('checks');checks.replaceChildren();
+ try{
+  const response=await fetch('/api/system/operations',{credentials:'same-origin',cache:'no-store'});
+  if(!response.ok)throw new Error(response.status===401?'Sign in to the study workspace first.':response.status===403?'System administrator access required.':'Status unavailable.');
+  const data=await response.json(),host=data.host||{};
+  const rows=[['Checked at',data.checked_at],['Application commit',data.app_commit],['Database',data.database],['Data mode',data.mode],['Clinical registration enabled',data.clinical_registration_enabled],['Host report available',host.available],['Host report fresh (15 minutes)',host.fresh],['Host report time',host.recorded_at],['Last completed deployment',host.deployed_commit],['GitHub pull timer',host.timer_active],['Timer enabled at boot',host.timer_enabled],['Last deployment service result',host.last_deploy_result],['Disk free (MB)',host.disk_free_mb],['Host memory available (MB)',host.memory_available_mb]];
+  for(const [key,value] of rows){const row=document.createElement('tr'),heading=document.createElement('th'),cell=document.createElement('td');heading.textContent=key;cell.textContent=label(value);row.append(heading,cell);results.append(row);}
+  for(const code of data.current_container_release_deficiencies){const item=document.createElement('li');item.textContent=code.replaceAll('_',' ');checks.append(item);}
+  if(!data.current_container_release_deficiencies.length){const item=document.createElement('li');item.textContent='No configuration deficiency reported; independent clinical workflow verification remains required.';checks.append(item);}
+  notice.textContent=host.fresh?'Live server report received.':'Application reachable. Host timer connection is not yet confirmed; missing or stale host evidence must be checked.';
+ }catch(error){notice.textContent=error.message;}
+}
+document.getElementById('refresh').addEventListener('click',refresh);refresh();
+</script></body></html>

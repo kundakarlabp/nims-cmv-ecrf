@@ -409,6 +409,8 @@ const roleWrites={
  pharmacy:['pi','scientist','pharmacy']
 };
 function applyRoleUI(role){
+ if(!$('operationsLink')){const a=document.createElement('a');a.id='operationsLink';a.href='/operations';a.textContent='System operations';a.style.padding='10px';$('workspace').querySelector('.tabs').append(a);}
+ $('operationsLink').classList.toggle('hide',role!=='admin');
  const full=role==='admin';
  const canRegister=full||['pi','consultant','scientist'].includes(role);
  $('registerPanel').classList.toggle('hide',!canRegister);
@@ -447,4 +449,5 @@ function initializeStudyUI(){
 }
 initializeStudyUI();
 </script><script src="/study_ui.js?v=20261117-mode-guard-v2" defer></script></body></html>
+
 

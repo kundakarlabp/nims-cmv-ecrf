@@ -1,0 +1,89 @@
+"""No patient records or server credentials are used by these checks."""
+import json
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app.operations import read_host_status
+from app.main import app, current, AuthContext
+
+
+def test_operations_requires_session_and_admin_role():
+    with TestClient(app) as client:
+        assert client.get('/api/system/operations').status_code == 401
+        assert client.get('/operations').status_code == 401
+        try:
+            app.dependency_overrides[current] = lambda: AuthContext(
+                user_id='test', role='pg', name='Test', csrf_hash='test')
+            assert client.get('/api/system/operations').status_code == 403
+            assert client.get('/operations').status_code == 403
+            app.dependency_overrides[current] = lambda: AuthContext(
+                user_id='test', role='admin', name='Test', csrf_hash='test')
+            response = client.get('/api/system/operations')
+            assert response.status_code == 200
+            assert 'no-store' in response.headers['cache-control']
+            assert response.json()['database'] == 'reachable'
+            assert response.json()['mode'] == 'synthetic'
+            assert response.json()['clinical_registration_enabled'] is False
+            assert client.get('/operations').status_code == 200
+            # The endpoint accepts no remote command or filesystem parameter.
+            assert client.post('/api/system/operations', json={'command':'id'}).status_code == 405
+        finally:
+            app.dependency_overrides.pop(current, None)
+
+
+def test_host_status_filters_secrets_and_rejects_stale_receipts(tmp_path):
+    at = datetime(2026, 11, 17, 12, tzinfo=timezone.utc)
+    report = tmp_path/'status.json'
+    report.write_text(json.dumps({
+        'recorded_at':at.isoformat(), 'deployed_commit':'a'*40,
+        'timer_active':'active', 'timer_enabled':'enabled',
+        'last_deploy_result':'success', 'disk_free_mb':1234,
+        'memory_available_mb':321, 'password':'NEVER-EXPOSE-ME',
+        'logs':['PRIVATE'], 'environment':{'secret':'PRIVATE'}}))
+    data = read_host_status(report, at)
+    assert data['fresh'] is True
+    assert data['deployed_commit'] == 'a'*40
+    assert 'NEVER-EXPOSE-ME' not in json.dumps(data)
+    assert 'PRIVATE' not in json.dumps(data)
+    assert read_host_status(report, at+timedelta(minutes=16))['fresh'] is False
+    assert read_host_status(report, at-timedelta(minutes=1))['fresh'] is False
+
+
+@pytest.mark.parametrize('body', ['not json', '[]', '{"recorded_at":null}', 'x'*17000])
+def test_unreadable_or_invalid_report_does_not_break_operations(tmp_path, body):
+    report=tmp_path/'status.json'
+    report.write_text(body)
+    assert read_host_status(report)['available'] is False
+    assert read_host_status(tmp_path/'missing')['available'] is False
+
+
+def test_invalid_host_fields_do_not_appear_as_commands_or_html(tmp_path):
+    report=tmp_path/'status.json'
+    report.write_text(json.dumps({'recorded_at':datetime.now(timezone.utc).isoformat(),
+        'deployed_commit':'not-a-sha', 'timer_active':'<script>secret</script>',
+        'disk_free_mb':-1, 'memory_available_mb':True}))
+    data=read_host_status(report)
+    assert data['deployed_commit'] is None
+    assert data['timer_active'] == 'unknown'
+    assert data['disk_free_mb'] is None
+    assert data['memory_available_mb'] is None
+
+
+def test_host_publisher_is_atomic_readable_and_never_collects_environment(tmp_path, monkeypatch):
+    from ops import operations_status as publisher
+    state=tmp_path/'.deploy-state'
+    state.mkdir()
+    (state/'current-commit').write_text('b'*40)
+    monkeypatch.setenv('POSTGRES_PASSWORD','PRIVATE-NEVER-COLLECT')
+    monkeypatch.setattr(publisher,'systemctl',lambda *args: 'active' if args[0]=='is-active' else 'enabled' if args[0]=='is-enabled' else 'success')
+    publisher.write_status(tmp_path)
+    report=tmp_path/'ops/public-status/status.json'
+    assert report.stat().st_mode & 0o004
+    assert report.parent.stat().st_mode & 0o005
+    data=read_host_status(report)
+    assert data['fresh'] and data['deployed_commit']=='b'*40
+    assert 'PRIVATE-NEVER-COLLECT' not in report.read_text()
+    assert not list(report.parent.glob('.status-*'))
