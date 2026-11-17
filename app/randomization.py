@@ -172,7 +172,7 @@ def generate_and_lock(data:GenerateSequence,u:AuthContext=Depends(current),s:Ses
         # Each stratum can accommodate the entire trial without disclosing or
         # needing to predict its eventual recruitment proportion.
         while position<344:
-            size=sizes[block] if block<len(sizes) else rng.choice(sizes)
+            size=rng.choice(sizes)
             block+=1
             arms=['450']*(size//2)+['900']*(size//2);rng.shuffle(arms)
             for arm in arms:
@@ -247,8 +247,11 @@ def assign(subject_id:int,data:RandomizeInput,u:AuthContext=Depends(current),
         raise HTTPException(422,"Fresh signed, complete eligibility review required")
     if allocation_for(s,subject_id):
         raise HTTPException(409,"Participant already randomized; never rerandomize")
-    plan=s.scalar(select(RandomizationPlan).where(RandomizationPlan.active.is_(True)).limit(1))
+    plan=s.scalar(select(RandomizationPlan).where(RandomizationPlan.active.is_(True)).limit(1).with_for_update())
     if not plan:raise HTTPException(503,"No independently locked allocation sequence")
+    allocated=s.scalar(select(func.count(RandomizationSlot.id)).where(
+        RandomizationSlot.subject_id.is_not(None))) or 0
+    if allocated>=344:raise HTTPException(409,'Protocol recruitment target reached; no further allocation allowed')
     if not plan_enabled(plan):
         raise HTTPException(403,"Clinical randomization awaits approved release and sequence fingerprint")
     key=stratum(subject)

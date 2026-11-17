@@ -14,6 +14,9 @@ ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT))
 from ops import clinical_maintenance as m
 
 def check():
+    if (ROOT/'.env').exists():raise SystemExit('CI check refuses an existing private environment file')
+    (ROOT/'.env').write_text('POSTGRES_PASSWORD='+os.environ['POSTGRES_PASSWORD']+'\nSITE_DOMAIN=http://localhost\n')
+    (ROOT/'.env').chmod(0o600)
     with tempfile.TemporaryDirectory(prefix='clinical-recovery-ci-') as td:
         directory=Path(td);m.PRIVATE=directory/'private';m.STATE=directory/'state';m.STATE.mkdir()
         # Create only disposable named login fixtures in the staging container.
@@ -59,6 +62,7 @@ with SessionLocal() as s:
             print('PASS: real clinical schema, named login/MFA migration, encrypted dump, isolated PostgreSQL restore, external SSH escrow recovery, no participant/session import.')
         finally:
             m.run(m.clinical(dc)+['down','-v'],check=False)
+            (ROOT/'.env').unlink(missing_ok=True)
             if previous_home is None:os.environ.pop('HOME',None)
             else:os.environ['HOME']=previous_home
 

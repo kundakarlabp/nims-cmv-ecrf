@@ -29,7 +29,7 @@ def identity():
     return {'Authorization':'Bearer '+token,'Accept':'application/json'}
 
 def fetch():
-    deadline=time.monotonic()+600
+    deadline=time.monotonic()+900
     while True:
         try:
             metadata=json.loads(read(BASE+'/api/backup-channel/latest',identity()))
