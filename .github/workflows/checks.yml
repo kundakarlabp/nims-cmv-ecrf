@@ -39,6 +39,11 @@ jobs:
       - run: python -m pip install -r requirements-dev.txt
       - run: python -m pip check
       - run: python -m pytest -q
+      - name: Run disposable clinical database bootstrap and real-mode smoke test
+        if: matrix.database == 'postgres'
+        env:
+          CLINICAL_BOOTSTRAP_CI: "true"
+        run: python -m pytest -q tests/test_clinical_provisioning.py
       - name: Compile operator-only clinical setup utilities
         run: python -m py_compile ops/clinical_schema_bootstrap.py ops/clinical_admin_mfa.py app/clinical_gate.py
       - name: Check inline dashboard JavaScript syntax
@@ -89,7 +94,7 @@ jobs:
           CLINICAL_RANDOMIZATION_KEY_PATH: /tmp/ci-fernet.key
           CLINICAL_SITE_DOMAIN: clinical-ci.example.in
         run: |
-          docker compose -f compose.yaml -f compose.clinical.yaml config --format json > /tmp/clinical-compose.json
+          docker compose --profile provision -f compose.clinical.yaml config --format json > /tmp/clinical-compose.json
           python - <<'PY'
           import json
           c=json.load(open('/tmp/clinical-compose.json'))
@@ -103,7 +108,10 @@ jobs:
           mounts=[v for v in db['volumes'] if v['target']=='/var/lib/postgresql/data']
           assert len(mounts)==1,mounts
           assert 'clinical_postgres_data' in mounts[0]['source']
-          print('Isolated clinical configuration validated without starting services')
+          assert 'schema-bootstrap' in c['services']
+          assert 'admin-bootstrap' in c['services']
+          assert 'nims_ecrf' not in str(c)
+          print('Standalone clinical services and bootstrap profiles validated without launching')
           PY
       - run: docker compose up -d --build --wait --wait-timeout 180
       - run: bash ops/check_health.sh

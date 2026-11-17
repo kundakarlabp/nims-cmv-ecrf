@@ -70,7 +70,7 @@ def startup_deficiencies(env=None,at=None):
     if env.get("DATABASE_URL","").lower().startswith("sqlite"):
         issues.append("SQLite_not_permitted_for_clinical")
     domain=env.get("SITE_DOMAIN","").strip().lower()
-    if not domain or any(x in domain for x in (
+    if not domain or domain.endswith((".invalid",".test",".localhost")) or any(x in domain for x in (
         "localhost","sslip.io","nip.io","YOUR_OWN_DOMAIN","example.org"
     )):
         issues.append("institutionally_approved_domain_required")
