@@ -666,9 +666,11 @@ async function crfRestoreDraft(){
  if(!crfCanEdit()){$('tw-crf-draft-status').textContent='Read-only review access';return;}
  if(!n('tw-crf-subject')||!value('tw-crf-section'))return;
  const key=crfKey();
- const r=await api('/api/trial/crf/subjects/'+n('tw-crf-subject')+
-  '/drafts/'+encodeURIComponent(value('tw-crf-section'))+
+ const subjectId=n('tw-crf-subject'),section=value('tw-crf-section');
+ const r=await api('/api/trial/crf/subjects/'+subjectId+
+  '/drafts/'+encodeURIComponent(section)+
   '?occurrence_key='+encodeURIComponent(key));
+ if(subjectId!==n('tw-crf-subject')||section!==value('tw-crf-section')||key!==crfKey())return;
  crfDraftKey=key;
  if(r.draft){
   crfSetValues(r.draft.payload);
@@ -728,6 +730,7 @@ async function loadCrfEntries(){
  const subject=n('tw-crf-subject');
  if(!subject){$('tw-crf-entries').textContent='Select a study participant';return;}
  const records=(await api('/api/trial/crf/subjects/'+subject+'/entries')).entries;
+ if(subject!==n('tw-crf-subject'))return;
  $('tw-crf-entries').innerHTML='<div style="overflow-x:auto"><table><thead><tr>'+
   '<th>Section</th><th>Event</th><th>Occurrence</th><th>Status</th><th>Revision</th><th>Action</th>'+
   '</tr></thead><tbody>'+
@@ -1074,7 +1077,7 @@ async function selectParticipantSubject(id){
 }
 $('tw-context-subject').onchange=()=>{void task('tw-context-error',async()=>{
  const previous=participantSubject;
- try{if(activeTab==='crf')await crfSaveDraft();}
+ try{if(activeTab==='crf')await crfSaveDraft();if(activeTab==='entry')await saveDraftNow();}
  catch(e){$('tw-context-subject').value=previous?String(previous):'';throw e;}
  await selectParticipantSubject(n('tw-context-subject'));
  if(activeTab==='crf'){crfRender();await populateCrfLinkedIdentifiers();await crfRestoreDraft();await loadCrfEntries();}

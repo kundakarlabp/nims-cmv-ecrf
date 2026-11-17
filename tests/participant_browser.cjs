@@ -20,7 +20,7 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
  const browser=await chromium.launch({headless:true,executablePath});
  try{
   const page=await browser.newPage({viewport:{width:1280,height:900}});
-  const errors=[],writes=[],drafts=new Map();let blinded=false;
+  const errors=[],writes=[],drafts=new Map();let blinded=false,holdOldDraft=false,releaseOldDraft=null;
   page.on('pageerror',e=>errors.push(e.message));
   await page.route('http://cmv-ui.test/**',async route=>{
    const url=new URL(route.request().url());const p=url.pathname;
@@ -40,7 +40,11 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
     const key=p+'?occurrence_key=NEW';
     if(method==='PUT'){const body=route.request().postDataJSON();writes.push({p,body});
       const revision=(drafts.get(key)?.revision||0)+1;drafts.set(key,{...body,revision});result={revision};}
-    else result={draft:drafts.get(key)||null};
+    else {result={draft:drafts.get(key)||null};
+     if(holdOldDraft&&p.includes('/subjects/1/')){
+      holdOldDraft=false;await new Promise(resolve=>{releaseOldDraft=resolve;});
+     }
+    }
    }else if(p.endsWith('/entries'))result={entries:[]};
    else if(p.endsWith('/timeline'))result={entries:[],next_cursor:null,note:'Synthetic test timeline'};
    return route.fulfill({contentType:'application/json',body:JSON.stringify(result)});
@@ -71,13 +75,25 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   await page.evaluate(async()=>{await choose('TEST-P-1');});
   assert.match(await page.textContent('#tw-context-allocation'),/450 mg/);
   assert.equal(await page.inputValue('#twcrf-source_reference'),'TEST-SOURCE-ALPHA');
+  // A delayed old participant draft response must not overwrite the next one.
+  await page.selectOption('#tw-context-subject','2');
+  await page.waitForFunction(()=>$('tw-crf-subject').value==='2'&&$('twcrf-source_reference').value==='');
+  holdOldDraft=true;
+  await page.selectOption('#tw-context-subject','1');
+  for(let i=0;i<100&&!releaseOldDraft;i++)await new Promise(resolve=>setTimeout(resolve,20));
+  assert.ok(releaseOldDraft,'Held old-participant draft request must start');
+  await page.selectOption('#tw-context-subject','2');
+  await page.waitForFunction(()=>$('tw-crf-subject').value==='2'&&$('tw-context-allocation').textContent.includes('900 mg'));
+  releaseOldDraft();
+  await page.waitForTimeout(150);
+  assert.equal(await page.inputValue('#twcrf-source_reference'),'');
   await page.evaluate(async()=>{await tab('course');});
-  assert.match(await page.textContent('#tw-context-allocation'),/450 mg/);
+  assert.match(await page.textContent('#tw-context-allocation'),/900 mg/);
   await page.setViewportSize({width:390,height:844});
   assert.equal(await page.locator('#tw-participant-context').evaluate(el=>getComputedStyle(el).gridColumnStart),'1');
   blinded=true;
   await page.evaluate(()=>{$('currentRole').textContent='monitor';applyRoleUI('monitor');});
-  await page.selectOption('#tw-context-subject','2');
+  await page.selectOption('#tw-context-subject','1');
   await page.waitForFunction(()=>$('tw-context-allocation').textContent.includes('concealed'));
   assert.doesNotMatch(await page.textContent('#tw-context-allocation'),/450|900/);
   assert.deepEqual(errors,[]);
