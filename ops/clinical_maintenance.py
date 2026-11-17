@@ -34,6 +34,9 @@ def run(args,*,data=None,check=True):
     result=subprocess.run(list(map(str,args)),input=data,stdout=subprocess.PIPE,
                           stderr=subprocess.PIPE,timeout=420)
     if check and result.returncode:
+        if os.environ.get('GITHUB_ACTIONS')=='true' and os.environ.get('CLINICAL_RECOVERY_CI')=='true':
+            # This guarded path contains disposable CI databases/keys only.
+            sys.stderr.write(result.stderr.decode(errors='replace')[-6000:])
         raise RuntimeError('Host maintenance command failed: '+Path(str(args[0])).name)
     return result.stdout
 
