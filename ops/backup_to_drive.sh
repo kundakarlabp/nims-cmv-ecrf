@@ -24,7 +24,7 @@ case "$scope" in
     [[ "$BACKUP_STATUS_DIR" = /* ]] || {
       echo "Clinical receipt directory must be an absolute path" >&2; exit 4;
     }
-    compose=(docker compose --env-file "$CLINICAL_ENV_FILE" -f compose.yaml -f compose.clinical.yaml)
+    compose=(docker compose --env-file "$CLINICAL_ENV_FILE" -f compose.clinical.yaml)
     db_expected=nims_cmv_clinical
     archive_prefix=nims-cmv-clinical
     ;;
