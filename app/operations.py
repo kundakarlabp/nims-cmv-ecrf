@@ -27,6 +27,7 @@ def read_host_status(path=Path('/run/operations/status.json'), at=None):
     commit=value.get('deployed_commit')
     result['deployed_commit']=commit if isinstance(commit,str) and SHA.fullmatch(commit) else None
     for key, allowed in {
+        'last_update_attempt':{'running','success','failed'},
         'timer_active':{'active','inactive','failed','activating','deactivating'},
         'timer_enabled':{'enabled','disabled','static','masked'},
         'last_deploy_result':{'success','exit-code','timeout','signal','core-dump',

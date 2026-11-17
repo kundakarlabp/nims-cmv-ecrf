@@ -87,3 +87,43 @@ def test_host_publisher_is_atomic_readable_and_never_collects_environment(tmp_pa
     assert data['fresh'] and data['deployed_commit']=='b'*40
     assert 'PRIVATE-NEVER-COLLECT' not in report.read_text()
     assert not list(report.parent.glob('.status-*'))
+
+
+def test_generated_receipt_remains_ignored_after_rollback(tmp_path, monkeypatch):
+    import subprocess
+    from ops import operations_status as publisher
+    def git(*args):
+        return subprocess.run(['git',*args],cwd=tmp_path,check=True,capture_output=True,text=True).stdout.strip()
+    git('init');git('config','user.email','test@example.invalid');git('config','user.name','Test')
+    (tmp_path/'base').write_text('base')
+    git('add','base');git('commit','-m','base')
+    previous=git('rev-parse','HEAD')
+    directory=tmp_path/'ops/public-status';directory.mkdir(parents=True)
+    (directory/'.gitignore').write_text('*\n!.gitignore\n')
+    git('add','ops/public-status/.gitignore');git('commit','-m','feature')
+    monkeypatch.setattr(publisher,'systemctl',lambda *args:'unknown')
+    publisher.write_status(tmp_path,attempt_result='failed')
+    git('checkout','--detach',previous)
+    assert git('status','--porcelain') == ''
+    data=read_host_status(directory/'status.json')
+    assert data['last_update_attempt']=='failed'
+
+
+def test_failed_fetch_publishes_completed_failure(tmp_path):
+    import shutil
+    import subprocess
+    import os
+    root=Path(__file__).resolve().parents[1]
+    (tmp_path/'ops').mkdir()
+    for file in ('auto_deploy.sh','operations_status.py'):
+        shutil.copy(root/'ops'/file,tmp_path/'ops'/file)
+    bindir=tmp_path/'bin';bindir.mkdir()
+    fake=bindir/'git'
+    fake.write_text('#!/bin/sh\nexit 42\n')
+    fake.chmod(0o755)
+    env=dict(os.environ,PATH=str(bindir)+os.pathsep+os.environ['PATH'])
+    result=subprocess.run(['bash',str(tmp_path/'ops/auto_deploy.sh')],
+        env=env,capture_output=True,text=True,timeout=20)
+    assert result.returncode==42
+    data=read_host_status(tmp_path/'ops/public-status/status.json')
+    assert data['fresh'] and data['last_update_attempt']=='failed'

@@ -21,6 +21,7 @@ def test_approved_release_is_idempotent_and_rejects_mismatched_tag(tmp_path):
     run("git", "config", "user.name", "Test", cwd=work)
     (work / "ops").mkdir()
     shutil.copy(ROOT / "ops/auto_deploy.sh", work / "ops/auto_deploy.sh")
+    shutil.copy(ROOT / "ops/operations_status.py", work / "ops/operations_status.py")
     (work / "ops/deploy.sh").write_text(
         '#!/bin/bash\nmkdir -p .deploy-state\nprintf "%s\\n" "$1" >> executions.log\n'
         'printf "%s\\n" "$1" > .deploy-state/current-commit\n'

@@ -37,6 +37,11 @@ rollback() {
   trap - ERR
   if (( switched )); then
     echo 'Deployment failed. Restoring the previous application commit.' >&2
+    # Preserve explicit failure evidence even when the previous revision
+    # predates the publisher and the operations page.
+    if [[ -f ops/operations_status.py ]]; then
+      python3 ops/operations_status.py --attempt-result failed || echo 'Host status report unavailable' >&2
+    fi
     export APP_COMMIT="$previous"
     git checkout --detach "$previous" || true
     "${docker_cmd[@]}" compose build api &&
@@ -59,7 +64,7 @@ python3 ops/operations_status.py || echo 'Host status report unavailable' >&2
 bash ops/check_health.sh
 trap - ERR
 printf '%s\n' "$target" > .deploy-state/current-commit
-python3 ops/operations_status.py || echo 'Host status report unavailable' >&2
+python3 ops/operations_status.py --attempt-result success || echo 'Host status report unavailable' >&2
 echo 'Containers ready. Verify public HTTPS/login before accepting deployment.'
 
 
