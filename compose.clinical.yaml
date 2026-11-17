@@ -1,25 +1,89 @@
-# Separate clinical deployment, NEVER used by the staging auto-deploy timer.
-# Neutral placeholders allow DB-only provisioning/backup before approvals.
-# API startup itself refuses unsigned/invalid release evidence (fail-closed).
-# Use only after signed governance/UAT, approved institutional hostname,
-# clinical DB provision/migrations and independently verified recovery.
+# Fully independent clinical stack: NEVER combine with compose.yaml staging.
+# Neutral defaults permit DB-only provisioning; clinical API startup fails
+# closed until institutional release, verified backups and key are present.
 name: nims-cmv-clinical
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    logging: *logging
     environment:
       POSTGRES_DB: nims_cmv_clinical
       POSTGRES_USER: nims_clinical_owner
-      POSTGRES_PASSWORD: ${CLINICAL_DB_OWNER_PASSWORD:?Clinical owner password required}
+      POSTGRES_PASSWORD: ${CLINICAL_DB_OWNER_PASSWORD:?Set clinical DB owner password}
     volumes:
       - clinical_postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U nims_clinical_owner -d nims_cmv_clinical"]
-  api:
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [private]
+
+  # Run this ONE time with --profile provision run --rm schema-bootstrap.
+  # The database refuses re-provisioning after tables exist.
+  schema-bootstrap:
+    profiles: [provision]
+    build: .
+    logging: *logging
+    command: ["python", "/srv/clinical_schema_bootstrap.py"]
+    environment:
+      DB_HOST: db
+      DB_NAME: nims_cmv_clinical
+      DB_USER: nims_clinical_owner
+      POSTGRES_PASSWORD: ${CLINICAL_DB_OWNER_PASSWORD:?Set clinical DB owner password}
+      CLINICAL_DB_APP_PASSWORD: ${CLINICAL_DB_APP_PASSWORD:?Set a distinct clinical app password}
+      CLINICAL_SCHEMA_BOOTSTRAP: "true"
+      CLINICAL_DATA_ENABLED: "false"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [private]
+
+  # Interactive CLI for initial staff-admin creation and MFA; disabled by
+  # default, never part of clinical steady-state. Override its command for MFA.
+  admin-bootstrap:
+    profiles: [provision]
+    build: .
+    logging: *logging
+    stdin_open: true
+    tty: true
+    command: ["python", "/srv/bootstrap_admin.py"]
     environment:
       DB_HOST: db
       DB_NAME: nims_cmv_clinical
       DB_USER: nims_clinical_app
-      POSTGRES_PASSWORD: ${CLINICAL_DB_APP_PASSWORD:?Separate restricted app password required}
+      POSTGRES_PASSWORD: ${CLINICAL_DB_APP_PASSWORD:?Set clinical app password}
+      CLINICAL_SCHEMA_BOOTSTRAP: "true"
+      CLINICAL_DATA_ENABLED: "false"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [private]
+
+  api:
+    build: .
+    restart: unless-stopped
+    init: true
+    logging: *logging
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    environment:
+      DB_HOST: db
+      DB_NAME: nims_cmv_clinical
+      DB_USER: nims_clinical_app
+      POSTGRES_PASSWORD: ${CLINICAL_DB_APP_PASSWORD:?Set clinical app password}
+      SESSION_HOURS: "12"
       CLINICAL_DATA_ENABLED: "true"
       MFA_REQUIRED: "true"
       COOKIE_SECURE: "true"
@@ -35,8 +99,32 @@ services:
       - ${CLINICAL_SIGNOFF_PATH:-/dev/null}:/run/clinical-release/release.txt:ro
       - ${CLINICAL_BACKUP_STATE_DIR:-./.unconfigured-clinical-backup-state}:/run/clinical-backup:ro
       - ${CLINICAL_RANDOMIZATION_KEY_PATH:-/dev/null}:/run/clinical-secrets/fernet.key:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [private]
+
   caddy:
+    image: caddy:2
+    restart: unless-stopped
+    logging: *logging
     environment:
       SITE_DOMAIN: ${CLINICAL_SITE_DOMAIN:-unconfigured.invalid}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - clinical_caddy_data:/data
+      - clinical_caddy_config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+    networks: [private]
+
 volumes:
   clinical_postgres_data:
+  clinical_caddy_data:
+  clinical_caddy_config:
+networks:
+  private:
