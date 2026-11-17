@@ -21,7 +21,21 @@ A new Compose override called compose.clinical.yaml provisions a separate projec
 2. Start ONLY the new clinical PostgreSQL container while its API is stopped. On an empty database, use a separate protected bootstrap environment file to run python /srv/clinical_schema_bootstrap.py as the **database owner**, with CLINICAL_SCHEMA_BOOTSTRAP=true, CLINICAL_DATA_ENABLED=false, and the separately supplied app-role password. The script refuses any existing tables, records a model schema fingerprint, creates a restricted app role and protects the audit table from UPDATE/DELETE.
 3. Under the **application** DB role in explicit bootstrap mode, run python /srv/bootstrap_admin.py, then python /srv/clinical_admin_mfa.py interactively to configure the initial admin authenticator. Do not transmit passwords or OTP setup codes through ChatGPT.
 4. Set up and escrow the randomization Fernet key. The independent statistician/custodian prepares the signed allocation sequence; never import a synthetic test sequence as the official assignment list.
-5. Configure approved encrypted cloud backup credentials on the VM (never in Git), run ops/backup_to_drive.sh and then ops/restore_check.sh on a disposable restore database. Ensure .backup-state/last_success is within eight hours and last_restore within thirty days. The mounted evidence must be readable by API UID 10001 and protected from modification by that user.
+5. Configure the approved encrypted cloud destination on the VM (never in Git). Clinical backups **must** use BACKUP_SCOPE=clinical, a protected absolute CLINICAL_ENV_FILE, an institutional ecrfcrypt: BACKUP_REMOTE, and a separate absolute BACKUP_STATUS_DIR, not staging defaults. Use the following operations after verifying the new database and source data authorization:
+
+   ```bash
+   cd /home/ubuntu/nims-cmv
+   export BACKUP_SCOPE=clinical
+   export CLINICAL_ENV_FILE=/secure/private/nims-cmv-clinical.env
+   export RCLONE_CONFIG=/secure/private/rclone.conf
+   export BACKUP_REMOTE=ecrfcrypt:approved-nims-cmv-clinical
+   export BACKUP_STATUS_DIR=/secure/state/nims-cmv-clinical
+   bash ops/backup_to_drive.sh
+   STAMP=$(awk '{print $1}' "$BACKUP_STATUS_DIR/last_success")
+   bash ops/restore_check.sh "$STAMP" nims_restoretrial
+   ```
+
+   Replace example paths with actual protected paths on the authorized host. A successful backup now proves crypt-backend type and decrypted SHA-256 roundtrip. Restore verifies a **separate disposable database** and cleans it up before creating a receipt. Check actual app-readable receipts, at most eight hours old for last_success and thirty days for last_restore. Receipt files contain only timestamp/hash/crypt reference and are mode 0644 within a 0755 directory mounted READ ONLY for API UID 10001. They do not contain patient data or cloud secrets. Keep a second independent encrypted copy and escrow the key.
 6. Record the actual signed release document; calculate its SHA-256. Set institutional and UAT release flags to verified ONLY after approval. The clinical app then checks all release conditions, schema fingerprint and absence of DDL privileges at startup. It refuses startup if these checks fail.
 7. Use the authenticated /api/system/mode endpoint to confirm mode=clinical and clinical_registration_enabled=true. Independently validate registration, enrollment, PCR, pharmacy, randomization, audit and recovery with authorized nonpatient test vectors. Only then commence enrolling real study participants.
 
