@@ -1,0 +1,37 @@
+name: Read public service status
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/public-health.yml
+permissions:
+  contents: read
+jobs:
+  status:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Read only the fixed public readiness endpoint
+        run: |
+          python3 - <<'PY'
+          import json
+          import urllib.request
+          import urllib.error
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self,*args,**kwargs):return None
+          fields=('ok','service','database','app_commit','build_fingerprint',
+                  'clinical_entry_available','clinical_transition','clinical_failed_step')
+          request=urllib.request.Request('https://152-70-77-77.sslip.io/readyz',
+              headers={'Accept':'application/json','Cache-Control':'no-cache'})
+          try:
+              with urllib.request.build_opener(NoRedirect).open(request,timeout=15) as response:
+                  raw=response.read(8193)
+                  if len(raw)>8192:raise ValueError('Oversized status')
+                  data=json.loads(raw)
+              if not isinstance(data,dict):raise ValueError('Invalid status')
+              print(json.dumps({field:data.get(field) for field in fields},sort_keys=True))
+          except urllib.error.HTTPError as error:
+              raise SystemExit('Public readiness returned HTTP '+str(error.code))
+          except (OSError,ValueError):
+              raise SystemExit('Public readiness unavailable; no response body disclosed')
+          PY
