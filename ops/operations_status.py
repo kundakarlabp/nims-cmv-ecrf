@@ -21,8 +21,24 @@ def systemctl(*args):
         return 'unknown'
 
 
-def write_status(root=ROOT):
+def write_status(root=ROOT, attempt_result='running'):
     root=Path(root)
+    # Persist outside tracked files so rollback to a pre-feature revision
+    # cannot make generated receipts dirty the checkout and block retries.
+    try:
+        gitdir=subprocess.run(['git','rev-parse','--git-path','info/exclude'],
+            cwd=root,capture_output=True,text=True,timeout=5,check=True).stdout.strip()
+        excluded=Path(gitdir)
+        if not excluded.is_absolute(): excluded=root/excluded
+        pattern='/ops/public-status/'
+        existing=excluded.read_text() if excluded.exists() else ''
+        if pattern not in existing.splitlines():
+            excluded.parent.mkdir(parents=True,exist_ok=True)
+            with excluded.open('a') as ignore: ignore.write('\n'+pattern+'\n')
+    except (OSError,subprocess.SubprocessError):
+        # Do not publish inside a Git checkout unless rollback-safe ignore
+        # has been installed. Non-Git test roots have no checkout to dirty.
+        if (root/'.git').exists(): raise
     directory=root/'ops/public-status'
     directory.mkdir(parents=True, exist_ok=True)
     directory.chmod(0o755)
@@ -38,6 +54,7 @@ def write_status(root=ROOT):
     except (OSError, ValueError, IndexError):
         pass
     receipt={
+        'last_update_attempt':attempt_result,
         'recorded_at':datetime.now(timezone.utc).isoformat(),
         'deployed_commit':commit if re.fullmatch(r'[0-9a-f]{40}',commit) else None,
         'timer_active':systemctl('is-active','nims-cmv-auto-deploy.timer'),
@@ -60,4 +77,9 @@ def write_status(root=ROOT):
 
 
 if __name__ == '__main__':
-    write_status()
+    import argparse
+    parser=argparse.ArgumentParser()
+    parser.add_argument('--root',type=Path,default=ROOT)
+    parser.add_argument('--attempt-result',choices=['running','success','failed'],default='running')
+    args=parser.parse_args()
+    write_status(root=args.root,attempt_result=args.attempt_result)
