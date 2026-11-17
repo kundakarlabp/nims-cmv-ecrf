@@ -112,6 +112,17 @@ def release_enabled(env=None,at=None):
     env=os.environ if env is None else env
     return env.get("CLINICAL_DATA_ENABLED","false").lower()=="true" and not startup_deficiencies(env,at)
 
+def runtime_startup_deficiencies(env=None,at=None):
+    env=os.environ if env is None else env
+    issues=startup_deficiencies(env,at)
+    # Initial host cutover independently requires fresh offsite/restore proof.
+    # After a reboot the scoped ciphertext service must remain reachable to
+    # repair stale proof; request-time guards continue to freeze clinical writes.
+    if env.get('CLINICAL_RECOVERY_SERVICE')=='true' and owner_authorized(env):
+        issues=[issue for issue in issues if issue not in {
+            'encrypted_offsite_backup_not_verified','recent_isolated_restore_not_verified'}]
+    return issues
+
 
 def metadata_fingerprint(metadata):
     """Stable structural fingerprint for the reviewed, one-time clinical baseline."""

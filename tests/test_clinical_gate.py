@@ -110,6 +110,13 @@ def test_explicit_owner_activation_keeps_technical_gates_and_does_not_claim_inst
     assert startup_deficiencies(dict(env,SITE_DOMAIN='another.sslip.io'),at)
     assert startup_deficiencies(dict(env,CLINICAL_GOLIVE_SHA256='0'*64),at)
     assert not backup_fresh(env,at+timedelta(hours=9))
+    from app.clinical_gate import runtime_startup_deficiencies
+    later=at+timedelta(days=31)
+    assert runtime_startup_deficiencies(env,later)
+    recovery=dict(env,CLINICAL_RECOVERY_SERVICE='true')
+    assert runtime_startup_deficiencies(recovery,later)==[]
+    assert runtime_startup_deficiencies(dict(recovery,MFA_REQUIRED='false'),later)==['mandatory_MFA_disabled']
+    assert runtime_startup_deficiencies(dict(recovery,CLINICAL_GOLIVE_SHA256='0'*64),later)
 
 def test_offsite_artifact_receipt_accepts_only_this_private_repository(tmp_path):
     at=datetime(2026,11,17,12,0,tzinfo=timezone.utc)

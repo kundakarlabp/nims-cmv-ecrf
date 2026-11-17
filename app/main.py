@@ -16,7 +16,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError, VerificationError
 import pyotp
-from .clinical_gate import startup_deficiencies, backup_fresh, restore_verified, metadata_fingerprint
+from .clinical_gate import startup_deficiencies, runtime_startup_deficiencies, backup_fresh, restore_verified, metadata_fingerprint
 from .build_identity import build_fingerprint
 
 DATABASE_URL=os.getenv('DATABASE_URL','')
@@ -123,7 +123,7 @@ CLINICAL_MODE=os.getenv('CLINICAL_DATA_ENABLED','false').lower()=='true'
 if CLINICAL_MODE:
     # A clinic sign-off must be tied to the exact approved file; DB and recovery
     # must be independently provisioned before this process may start.
-    missing=startup_deficiencies()
+    missing=runtime_startup_deficiencies()
     if missing:
         raise RuntimeError('Clinical startup BLOCKED: '+', '.join(missing))
     from sqlalchemy import inspect, text as sql_text
