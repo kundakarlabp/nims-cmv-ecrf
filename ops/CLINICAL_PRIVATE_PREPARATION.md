@@ -3,7 +3,10 @@
 Reviewed deployments and subsequent pull-timer cycles run
 ops/prepare_clinical.py on the VM as its existing deployment user. It prepares
 ~/.local/share/nims-cmv-clinical/clinical.env and allocation.key privately,
-with a mode-0700 directory and mode-0600 files, outside the Git checkout.
+with a mode-0700 directory and mode-0600 environment file, outside Git.
+The key alone is mode 0640; its host group ID is recorded in the private env
+and added as an API supplemental group. The key is bind-mounted read-only,
+without exposing its private parent or the password file to the container.
 Owner/app DB passwords are independently generated; the 32-byte allocation
 encryption key does not generate or approve a randomization sequence.
 

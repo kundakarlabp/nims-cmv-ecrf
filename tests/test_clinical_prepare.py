@@ -15,12 +15,13 @@ def test_prepare_is_private_idempotent_and_does_not_activate_clinical_mode(tmp_p
     original=config.read_bytes(),key.read_bytes()
     assert len(base64.urlsafe_b64decode(key.read_bytes().strip()))==32
     assert config.stat().st_mode & 0o777 == 0o600
-    assert key.stat().st_mode & 0o777 == 0o600
+    assert key.stat().st_mode & 0o777 == 0o640
     assert private.stat().st_mode & 0o777 == 0o700
     lines=dict(line.split('=',1) for line in config.read_text().splitlines())
     assert lines['CLINICAL_DB_OWNER_PASSWORD']!=lines['CLINICAL_DB_APP_PASSWORD']
     assert lines['CLINICAL_INSTITUTIONAL_APPROVAL']=='unverified'
     assert lines['CLINICAL_UAT_APPROVED']=='unverified'
+    assert lines['CLINICAL_KEY_READER_GID']==str(key.stat().st_gid)
     assert 'CLINICAL_DATA_ENABLED' not in lines
     assert prepare(private)==result
     assert (config.read_bytes(),key.read_bytes())==original

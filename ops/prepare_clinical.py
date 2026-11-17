@@ -12,17 +12,18 @@ import secrets
 PRIVATE_ROOT=Path.home()/'.local/share/nims-cmv-clinical'
 
 
-def create_once(path, content):
+def create_once(path, content, mode=0o600):
     # O_EXCL prevents accidental credential rotation on repeated deployments.
     try:
-        fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+        fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,mode)
     except FileExistsError:
         if Path(path).is_symlink() or not Path(path).is_file():
             raise RuntimeError('Private configuration target must be a regular file')
-        os.chmod(path,0o600)
+        os.chmod(path,mode)
         return
     with os.fdopen(fd,'wb') as output:
         output.write(content)
+    os.chmod(path,mode)
 
 
 def prepare(private=PRIVATE_ROOT):
@@ -33,7 +34,9 @@ def prepare(private=PRIVATE_ROOT):
     private.chmod(0o700)
     key=private/'allocation.key'
     config=private/'clinical.env'
-    create_once(key,base64.urlsafe_b64encode(secrets.token_bytes(32))+b'\n')
+    # The private parent remains owner-only. Only this file's group is made
+    # readable inside the API's read-only bind mount via group_add.
+    create_once(key,base64.urlsafe_b64encode(secrets.token_bytes(32))+b'\n',0o640)
     # These are configuration placeholders, never claims of approval or UAT.
     fields={
         'CLINICAL_DB_OWNER_PASSWORD':secrets.token_urlsafe(40),
@@ -44,6 +47,7 @@ def prepare(private=PRIVATE_ROOT):
         'CLINICAL_SIGNOFF_PATH':'/dev/null',
         'CLINICAL_BACKUP_STATE_DIR':str(private/'backup-state'),
         'CLINICAL_RANDOMIZATION_KEY_PATH':str(key),
+        'CLINICAL_KEY_READER_GID':str(key.stat().st_gid),
     }
     create_once(config,(''.join(k+'='+v+'\n' for k,v in fields.items())).encode())
     try:
@@ -52,7 +56,8 @@ def prepare(private=PRIVATE_ROOT):
                     if line and not line.startswith('#') and '=' in line)
         passwords=[values.get(name,'') for name in
                    ('CLINICAL_DB_OWNER_PASSWORD','CLINICAL_DB_APP_PASSWORD')]
-        if len(decoded)!=32 or min(map(len,passwords))<20 or passwords[0]==passwords[1]:
+        if (len(decoded)!=32 or min(map(len,passwords))<20 or passwords[0]==passwords[1]
+            or values.get('CLINICAL_KEY_READER_GID')!=str(key.stat().st_gid)):
             raise ValueError('Incomplete configuration')
     except (ValueError,UnicodeError) as error:
         raise RuntimeError('Existing private clinical configuration needs review; nothing was rotated') from error
