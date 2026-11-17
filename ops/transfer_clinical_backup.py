@@ -1,5 +1,7 @@
 """GitHub-hosted ciphertext transfer. No clinical login or decryption key."""
 import hashlib
+import base64
+from datetime import datetime,timezone
 import json
 import os
 from pathlib import Path
@@ -11,6 +13,7 @@ from urllib.error import HTTPError,URLError
 BASE='https://152-70-77-77.sslip.io'
 AUD='nims-cmv-encrypted-backup'
 MAX=32*1024*1024
+scope_reported=False
 
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self,*args,**kwargs):return None
@@ -22,10 +25,20 @@ def read(url,headers=None,data=None,limit=16384):
         return result
 
 def identity():
+    global scope_reported
     url=os.environ['ACTIONS_ID_TOKEN_REQUEST_URL']+'&audience='+AUD
     raw=read(url,{'Authorization':'Bearer '+os.environ['ACTIONS_ID_TOKEN_REQUEST_TOKEN']})
     token=json.loads(raw)['value']
     print('::add-mask::'+token)
+    if not scope_reported:
+        # Diagnostic scope only, not a trust decision. Never print the token,
+        # signature or any credential. The server still verifies signed JWTs.
+        payload=token.split('.')[1]
+        claims=json.loads(base64.urlsafe_b64decode(payload+'='*((-len(payload))%4)))
+        allowed=('iss','aud','sub','event_name','repository_id','repository_owner_id',
+                 'repository_visibility','workflow_ref','ref','iat','nbf','exp')
+        print('Workflow identity scope: '+json.dumps({k:claims.get(k) for k in allowed},sort_keys=True))
+        scope_reported=True
     return {'Authorization':'Bearer '+token,'Accept':'application/json'}
 
 def fetch():
@@ -41,7 +54,14 @@ def fetch():
             (root/'metadata.json').write_text(json.dumps(metadata))
             print('Retrieved encrypted archive; isolated database restore was verified on the host.')
             return
-        except (HTTPError,URLError,TimeoutError):
+        except HTTPError as error:
+            if error.code in (401,403):
+                print('Server HTTP date: '+str(error.headers.get('Date','unavailable')))
+                print('Runner UTC: '+datetime.now(timezone.utc).isoformat())
+                raise SystemExit('Backup workflow identity rejected with HTTP '+str(error.code)+'. No error body or credential disclosed.')
+            if time.monotonic()>=deadline:raise SystemExit('Encrypted backup preparation timed out; HTTP '+str(error.code))
+            time.sleep(15)
+        except (URLError,TimeoutError):
             if time.monotonic()>=deadline:
                 try:
                     public=json.loads(read(BASE+'/readyz'))
