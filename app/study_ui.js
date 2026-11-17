@@ -269,7 +269,16 @@ async function loadRegistry(){
  fill('tw-patient',people,'id',p=>(p.study_id||p.cr_number||'')+' · '+(p.name||''));
 }
 async function loadSubjects(){
- studySubjects=await api('/api/trial/subjects');
+ const gathered=[];let before=null;
+ for(let page=0;page<100;page++){
+  const records=await api('/api/trial/subjects?limit=200'+(before?'&before_id='+before:''));
+  gathered.push(...records);
+  if(records.length<200)break;
+  const next=records[records.length-1].id;
+  if(before!==null&&next>=before)throw Error('Participant paging cursor did not advance');
+  before=next;
+ }
+ studySubjects=gathered;
  fill('tw-screened',studySubjects.filter(x=>x.status==='screened'),'id',x=>x.screening_code);
  fill('tw-checklist-subject',studySubjects.filter(x=>x.status==='screened'),'id',x=>x.screening_code);
  var active=studySubjects.filter(x=>x.enrolled_on);
@@ -1021,6 +1030,7 @@ function clearParticipant(){
  participantRequest++;participantSubject=null;participantContext=null;timelineCursor=null;
  selected=null;
  $('currentPatient').textContent='None';$('records').textContent='Select a participant.';$('entryList').textContent='';
+ $('doseResult').textContent='';$('arm').disabled=false;
  $('tw-context-subject').value='';$('tw-context-allocation').textContent='No participant selected.';
  $('tw-context-detail').textContent='';$('tw-course-records').textContent='';
  for(const id of ['tw-pcr-subject','tw-drug-subject','tw-crf-subject','tw-rand-subject'])$(id).value='';
@@ -1029,6 +1039,9 @@ function renderParticipant(context){
  participantContext=context;participantSubject=context.subject?.id||null;
  $('tw-context-subject').value=participantSubject?String(participantSubject):'';
  const a=context.allocation||{};
+ $('doseResult').textContent='';
+ $('arm').disabled=!!a.assigned_arm_mg;
+ if(a.assigned_arm_mg)$('arm').value=a.assigned_arm_mg;
  $('tw-context-allocation').textContent=!context.subject?'Registry record not yet screened':
   (context.subject.study_code||context.subject.screening_code)+' · '+
   (a.randomized?(a.assigned_arm_mg?'Allocated '+a.assigned_arm_mg+' mg OD nominal arm':'Allocation concealed for this role')+

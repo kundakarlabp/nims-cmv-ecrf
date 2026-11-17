@@ -616,6 +616,20 @@ def test_longitudinal_source_record_context_blinding_and_cursor():
     from datetime import date
     with TestClient(app) as admin:
         h=auth(admin);pid,sid=setup_synthetic_trial(admin,h)
+        other_patient=admin.post('/api/patients',headers=h,json={
+            'name':'Synthetic second participant','cr_number':'TEST-COURSE-OTHER',
+            'transplant_date':'2026-10-01'}).json()['id']
+        from app.trial_models import TrialSubject
+        with SessionLocal() as s:
+            author=s.get(TrialSubject,sid).created_by
+            other=TrialSubject(patient_id=other_patient,screening_code='TEST-SCREEN-OTHER',
+                screening_on=date(2026,10,2),donor_cmv_igg='positive',recipient_cmv_igg='positive',
+                donor_type='living',created_by=author,status='screened')
+            s.add(other);s.commit();other_id=other.id
+        page=admin.get('/api/trial/subjects?limit=1').json()
+        assert page[0]['id']==other_id
+        earlier=admin.get(f'/api/trial/subjects?limit=1&before_id={other_id}').json()
+        assert earlier[0]['id']==sid
         for username,role in [('coursepi','pi'),('coursenurse','nurse'),('coursemonitor','monitor')]:
             assert admin.post('/api/users',headers=h,json=dict(username=username,
                 display_name='Synthetic '+role,role=role,password='SyntheticCoursePassword123!')).status_code==200
@@ -671,7 +685,7 @@ def test_official_new_sequence_requires_prior_allocation_reconciliation(monkeypa
     from types import SimpleNamespace
     from fastapi import HTTPException
     monkeypatch.setattr(r,'CLINICAL_MODE',True)
-    with pytest.raises(HTTPException,match='') as error:
+    with pytest.raises(HTTPException) as error:
         r.generate_and_lock(r.GenerateSequence(statistician_reference='TEST-INDEPENDENT',
             signed_specification_reference='TEST-SPECIFICATION',independent_sequence_attested=True,
             block_sizes=[4,6]),SimpleNamespace(role='randomization_custodian'),None)

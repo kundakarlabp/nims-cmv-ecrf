@@ -162,9 +162,10 @@ def restricted_screening(subject_id:int,u:AuthContext=Depends(current),s:Session
         "scope":"Restricted source-link metadata; never show in monitoring or lab pharmacy views"}
 
 @router.get("/subjects")
-def subjects(q:str="",limit:int=50,u:AuthContext=Depends(current),s:Session=Depends(db)):
+def subjects(q:str="",limit:int=50,before_id:int|None=None,u:AuthContext=Depends(current),s:Session=Depends(db)):
     limit=max(1,min(limit,200))
     statement=select(TrialSubject).order_by(TrialSubject.id.desc())
+    if before_id is not None:statement=statement.where(TrialSubject.id<before_id)
     if q.strip():
         term="%"+q.strip()+"%"
         statement=statement.where(TrialSubject.study_code.ilike(term) |
