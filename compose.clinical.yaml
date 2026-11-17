@@ -1,4 +1,6 @@
 # Separate clinical deployment, NEVER used by the staging auto-deploy timer.
+# Neutral placeholders allow DB-only provisioning/backup before approvals.
+# API startup itself refuses unsigned/invalid release evidence (fail-closed).
 # Use only after signed governance/UAT, approved institutional hostname,
 # clinical DB provision/migrations and independently verified recovery.
 name: nims-cmv-clinical
@@ -24,17 +26,17 @@ services:
       CLINICAL_INSTITUTIONAL_APPROVAL: ${CLINICAL_INSTITUTIONAL_APPROVAL:-unverified}
       CLINICAL_UAT_APPROVED: ${CLINICAL_UAT_APPROVED:-unverified}
       CLINICAL_GOLIVE_ATTESTATION_PATH: /run/clinical-release/release.txt
-      CLINICAL_GOLIVE_SHA256: ${CLINICAL_GOLIVE_SHA256:?Signed release SHA256 required}
+      CLINICAL_GOLIVE_SHA256: ${CLINICAL_GOLIVE_SHA256:-unverified}
       CLINICAL_BACKUP_RECEIPT_PATH: /run/clinical-backup/last_success
       CLINICAL_RESTORE_RECEIPT_PATH: /run/clinical-backup/last_restore
       RANDOMIZATION_FERNET_KEY_FILE: /run/clinical-secrets/fernet.key
-      SITE_DOMAIN: ${CLINICAL_SITE_DOMAIN:?Approved institutional clinical domain required}
+      SITE_DOMAIN: ${CLINICAL_SITE_DOMAIN:-unconfigured.invalid}
     volumes:
-      - ${CLINICAL_SIGNOFF_PATH:?Read-only signed release file required}:/run/clinical-release/release.txt:ro
-      - ${CLINICAL_BACKUP_STATE_DIR:?Verified backup and restore receipts required}:/run/clinical-backup:ro
-      - ${CLINICAL_RANDOMIZATION_KEY_PATH:?Escrowed independent randomization key required}:/run/clinical-secrets/fernet.key:ro
+      - ${CLINICAL_SIGNOFF_PATH:-/dev/null}:/run/clinical-release/release.txt:ro
+      - ${CLINICAL_BACKUP_STATE_DIR:-./.unconfigured-clinical-backup-state}:/run/clinical-backup:ro
+      - ${CLINICAL_RANDOMIZATION_KEY_PATH:-/dev/null}:/run/clinical-secrets/fernet.key:ro
   caddy:
     environment:
-      SITE_DOMAIN: ${CLINICAL_SITE_DOMAIN:?Approved institutional clinical domain required}
+      SITE_DOMAIN: ${CLINICAL_SITE_DOMAIN:-unconfigured.invalid}
 volumes:
   clinical_postgres_data:
