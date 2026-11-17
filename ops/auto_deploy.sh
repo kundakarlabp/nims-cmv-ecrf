@@ -17,6 +17,9 @@ publish_completed_attempt() {
   exit "$code"
 }
 trap publish_completed_attempt EXIT
+if [[ -f ops/prepare_clinical.py ]]; then
+  python3 ops/prepare_clinical.py || echo 'Private clinical preparation needs review' >&2
+fi
 # Refresh a small allowlisted report even when no release is pending. Do not
 # include logs, environment values, database contents, or credential files.
 "${publisher[@]}" --attempt-result running || echo 'Host status report unavailable' >&2

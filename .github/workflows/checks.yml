@@ -114,9 +114,12 @@ jobs:
           print('Standalone clinical services and bootstrap profiles validated without launching')
           PY
       - run: docker compose up -d --build --wait --wait-timeout 180
+      - name: Verify clinical key access with actual unprivileged container UID
+        run: python3 ops/check_key_mount.py
       - run: bash ops/check_health.sh
       - run: curl --fail --retry 5 --retry-delay 2 http://localhost/readyz
       - if: failure()
         run: docker compose logs --tail=100
       - if: always()
         run: docker compose down -v
+

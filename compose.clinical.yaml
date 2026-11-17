@@ -69,6 +69,8 @@ services:
 
   api:
     build: .
+    # Only the separately mounted allocation key uses this supplemental group.
+    group_add: ["${CLINICAL_KEY_READER_GID:-65534}"]
     restart: unless-stopped
     init: true
     logging: *logging
@@ -128,3 +130,4 @@ volumes:
   clinical_caddy_config:
 networks:
   private:
+

@@ -24,6 +24,10 @@ def read_host_status(path=Path('/run/operations/status.json'), at=None):
     except (OSError, ValueError, TypeError, KeyError):
         return unavailable
     result={'available':True, 'fresh':fresh, 'recorded_at':stamp.isoformat()}
+    for key in ('clinical_private_configuration_present','backup_tool_installed',
+                'encrypted_backup_configuration_present'):
+        value_for_key=value.get(key)
+        result[key]=value_for_key if type(value_for_key) is bool else None
     commit=value.get('deployed_commit')
     result['deployed_commit']=commit if isinstance(commit,str) and SHA.fullmatch(commit) else None
     for key, allowed in {

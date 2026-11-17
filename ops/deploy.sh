@@ -44,7 +44,7 @@ rollback() {
     fi
     export APP_COMMIT="$previous"
     git checkout --detach "$previous" || true
-    "${docker_cmd[@]}" compose build api &&
+    "${docker_cmd[@]}" compose build --build-arg "APP_COMMIT=$previous" api &&
       "${docker_cmd[@]}" compose up -d --wait --wait-timeout 180 &&
       "${docker_cmd[@]}" compose up -d --force-recreate --no-deps caddy || true
   fi
@@ -55,10 +55,13 @@ trap rollback ERR
 git checkout --detach "$target"
 switched=1
 export APP_COMMIT="$target"
+if [[ -f ops/prepare_clinical.py ]]; then
+  python3 ops/prepare_clinical.py || echo 'Private clinical preparation needs review' >&2
+fi
 # Fixed read-only host checks, published separately from private configuration.
 python3 ops/operations_status.py || echo 'Host status report unavailable' >&2
 "${docker_cmd[@]}" compose config --quiet
-"${docker_cmd[@]}" compose build --pull api
+"${docker_cmd[@]}" compose build --pull --build-arg "APP_COMMIT=$target" api
 "${docker_cmd[@]}" compose up -d --wait --wait-timeout 180
 "${docker_cmd[@]}" compose up -d --force-recreate --no-deps caddy
 bash ops/check_health.sh

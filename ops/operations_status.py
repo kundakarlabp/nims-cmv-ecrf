@@ -8,8 +8,24 @@ import re
 import shutil
 import subprocess
 import tempfile
+import configparser
 
 ROOT=Path(__file__).resolve().parents[1]
+
+
+def backup_configuration_present(path):
+    """Inspect only the named backup config; expose no configuration values."""
+    try:
+        parser=configparser.ConfigParser(interpolation=None)
+        with Path(path).open() as source:
+            parser.read_file(source)
+        return (parser.get('ecrfcrypt','type',fallback='')=='crypt'
+                and bool(parser.get('ecrfcrypt','remote',fallback=''))
+                and bool(parser.get('ecrfcrypt','password',fallback='')))
+    except FileNotFoundError:
+        return False
+    except (OSError,UnicodeError,configparser.Error):
+        return None
 
 
 def systemctl(*args):
@@ -54,6 +70,10 @@ def write_status(root=ROOT, attempt_result='running'):
     except (OSError, ValueError, IndexError):
         pass
     receipt={
+        'clinical_private_configuration_present':(Path.home()/'.local/share/nims-cmv-clinical/clinical.env').is_file(),
+        'backup_tool_installed':shutil.which('rclone') is not None,
+        'encrypted_backup_configuration_present':backup_configuration_present(
+            os.environ.get('RCLONE_CONFIG',str(Path.home()/'.config/rclone/rclone.conf'))),
         'last_update_attempt':attempt_result,
         'recorded_at':datetime.now(timezone.utc).isoformat(),
         'deployed_commit':commit if re.fullmatch(r'[0-9a-f]{40}',commit) else None,
