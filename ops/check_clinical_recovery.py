@@ -28,6 +28,7 @@ with SessionLocal() as s:
  u=User(username='ci-investigator',display_name='CI ONLY Bhanu Prasad fixture',role='admin',password_hash=PH.hash('DisposableCIOnlyLongPassword123!'));s.add(u);s.flush()
  s.add(UserTotp(user_id=u.id,secret=pyotp.random_base32(),enabled=True))
  s.add(StaffAccess(user_id=u.id,expires_at=datetime.now(timezone.utc)+timedelta(days=90)));s.commit()
+ s.add(User(username='ci-nurse',display_name='CI ONLY named nurse fixture',role='nurse',password_hash=PH.hash('DisposableCIOnlyNursePassword123!')));s.commit()
 """
         dc=m.docker();m.run(m.staging(dc)+['exec','-T','api','python','-c',source])
         # Never depend on a developer/owner SSH private key in CI.
@@ -56,6 +57,7 @@ with SessionLocal() as s:
             assert m.sql(dc,'SELECT count(*) FROM patients;').strip()==b'0'
             assert m.sql(dc,'SELECT count(*) FROM users WHERE pi_authorized;').strip()==b'1'
             assert m.sql(dc,'SELECT count(*) FROM trial_user_totp WHERE enabled;').strip()==b'1'
+            assert m.sql(dc,'SELECT count(*) FROM trial_staff_access;').strip()==b'2'
             assert m.sql(dc,'SELECT count(*) FROM sessions;').strip()==b'0'
             assert m.sql(dc,"SELECT has_schema_privilege('nims_clinical_app','public','CREATE');").strip()==b'f'
             assert not (m.PRIVATE/'backup-state/last_success').exists()
