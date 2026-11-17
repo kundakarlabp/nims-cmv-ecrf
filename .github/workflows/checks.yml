@@ -94,7 +94,7 @@ jobs:
           CLINICAL_RANDOMIZATION_KEY_PATH: /tmp/ci-fernet.key
           CLINICAL_SITE_DOMAIN: clinical-ci.example.in
         run: |
-          docker compose -f compose.yaml -f compose.clinical.yaml config --format json > /tmp/clinical-compose.json
+          docker compose -f compose.clinical.yaml config --format json > /tmp/clinical-compose.json
           python - <<'PY'
           import json
           c=json.load(open('/tmp/clinical-compose.json'))
@@ -108,7 +108,10 @@ jobs:
           mounts=[v for v in db['volumes'] if v['target']=='/var/lib/postgresql/data']
           assert len(mounts)==1,mounts
           assert 'clinical_postgres_data' in mounts[0]['source']
-          print('Isolated clinical configuration validated without starting services')
+          assert 'schema-bootstrap' in c['services']
+          assert 'admin-bootstrap' in c['services']
+          assert 'nims_ecrf' not in str(c)
+          print('Standalone clinical services and bootstrap profiles validated without launching')
           PY
       - run: docker compose up -d --build --wait --wait-timeout 180
       - run: bash ops/check_health.sh
