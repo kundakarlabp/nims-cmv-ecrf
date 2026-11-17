@@ -1039,6 +1039,9 @@ function clearParticipant(){
  for(const id of ['tw-pcr-subject','tw-drug-subject','tw-crf-subject','tw-rand-subject'])$(id).value='';
 }
 function renderParticipant(context){
+ if(context.patient_id!==participantContext?.patient_id){
+  for(const id of ['age','weight','creatinine','sex'])$(id).value='';
+ }
  participantContext=context;participantSubject=context.subject?.id||null;
  $('tw-context-subject').value=participantSubject?String(participantSubject):'';
  const a=context.allocation||{};

@@ -59,6 +59,9 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   await page.selectOption('#tw-context-subject','1');
   await page.waitForFunction(()=>$('tw-context-allocation').textContent.includes('450 mg'));
   assert.equal(await page.evaluate(()=>selected),'TEST-P-1');
+  assert.equal(await page.inputValue('#arm'),'450');
+  assert.equal(await page.isDisabled('#arm'),true);
+  await page.evaluate(()=>{$('age').value='70';$('weight').value='80';$('creatinine').value='1.6';});
   await page.evaluate(async()=>{await tab('crf');});
   await page.fill('#twcrf-start_on','2026-10-04');
   await page.fill('#twcrf-source_reference','TEST-SOURCE-ALPHA');
@@ -67,6 +70,8 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   await page.selectOption('#tw-context-subject','2');
   await page.waitForFunction(()=>$('tw-context-allocation').textContent.includes('900 mg'));
   assert.equal(await page.evaluate(()=>selected),'TEST-P-2');
+  assert.equal(await page.inputValue('#arm'),'900');
+  assert.equal(await page.inputValue('#creatinine'),'');
   assert.ok(writes.some(x=>x.p.includes('/subjects/1/')&&x.body.payload.source_reference==='TEST-SOURCE-ALPHA'));
   assert.ok(!writes.some(x=>x.p.includes('/subjects/2/')&&x.body.payload.source_reference==='TEST-SOURCE-ALPHA'));
   assert.equal(await page.inputValue('#twcrf-source_reference'),'');
