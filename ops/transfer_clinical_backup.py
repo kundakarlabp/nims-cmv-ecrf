@@ -57,6 +57,34 @@ def github_json(path,data=None):
     try:return json.loads(read(API+path,headers,body,limit=1024*1024))
     except HTTPError as error:raise SystemExit('Private recovery storage API returned HTTP '+str(error.code))
 
+def find_private_release(tag):
+    # Request metadata only. REST release listings embed every retained asset;
+    # their response size otherwise grows with backup history.
+    query='''query($cursor:String){repository(owner:"kundakarlabp",name:"nims-cmv-ecrf"){
+        releases(first:100,after:$cursor){nodes{databaseId tagName isDraft}
+        pageInfo{endCursor hasNextPage}}}}'''
+    cursor=None
+    for _ in range(100):
+        payload=json.dumps({'query':query,'variables':{'cursor':cursor}}).encode()
+        headers={**github_headers(),'Content-Type':'application/json'}
+        try:
+            result=json.loads(read('https://api.github.com/graphql',headers,payload,limit=262144))
+            if result.get('errors'):raise ValueError('Discovery failed')
+            connection=result['data']['repository']['releases']
+            matches=[r for r in connection['nodes'] if r['tagName']==tag]
+            if len(matches)>1:raise ValueError('Ambiguous recovery release')
+            if matches:
+                value=matches[0]
+                return {'id':value['databaseId'],'tag_name':value['tagName'],'draft':value['isDraft']}
+            page=connection['pageInfo']
+            if not page['hasNextPage']:return None
+            next_cursor=page['endCursor']
+            if not next_cursor or next_cursor==cursor:raise ValueError('Invalid pagination')
+            cursor=next_cursor
+        except (HTTPError,URLError,TimeoutError,KeyError,TypeError,ValueError):
+            raise SystemExit('Private recovery release metadata discovery failed; no response body disclosed')
+    raise SystemExit('Recovery release discovery exceeded its bounded page limit')
+
 def download_release_asset(asset_id):
     headers={**github_headers(),'Accept':'application/octet-stream'}
     try:return read(API+'/releases/assets/'+str(asset_id),headers,limit=MAX)
@@ -85,10 +113,7 @@ def store_release():
     # Draft releases do not publish notifications or source-code releases.
     month=datetime.fromisoformat(metadata['created_at']).strftime('%Y-%m')
     tag='cmv-encrypted-recovery-'+month
-    releases=github_json('/releases?per_page=100')
-    matching=[r for r in releases if r.get('tag_name')==tag]
-    if len(matching)>1:raise SystemExit('Ambiguous private recovery release')
-    release=matching[0] if matching else github_json('/releases',{
+    release=find_private_release(tag) or github_json('/releases',{
         'tag_name':tag,'target_commitish':'main','name':'Private encrypted CMV recovery '+month,
         'body':'Encrypted operational recovery archives only. Database and allocation keys are never included in plaintext.',
         'draft':True,'prerelease':True})

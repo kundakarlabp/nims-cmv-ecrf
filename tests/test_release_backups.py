@@ -24,6 +24,7 @@ def test_private_release_upload_requires_readback_and_is_idempotent(tmp_path,mon
         if '/assets?' in path:return assets
         raise AssertionError(path)
     monkeypatch.setattr(transfer,'github_json',github)
+    monkeypatch.setattr(transfer,'find_private_release',lambda tag:release)
     monkeypatch.setenv('GITHUB_TOKEN','CI-FAKE-TOKEN')
     def read(url,headers=None,data=None,**kw):
         assert url.startswith('https://uploads.github.com/repos/'+transfer.REPO+'/releases/91/assets?name=clinical-')
@@ -69,3 +70,20 @@ def test_remote_receipts_describe_the_actual_storage_kind():
     for invalid in ({'release_id':91},{'asset_id':93},{'release_id':True,'asset_id':93},
                     {'release_id':91,'asset_id':-1},{'release_id':91,'asset_id':93,'artifact_id':94}):
         assert offsite_reference(invalid) is None
+
+def test_release_discovery_paginates_metadata_without_embedded_assets(monkeypatch):
+    monkeypatch.setenv('GITHUB_TOKEN','CI-FAKE-TOKEN');seen=[]
+    def read(url,headers=None,data=None,limit=None):
+        assert url=='https://api.github.com/graphql' and limit==262144
+        request=json.loads(data);assert 'releaseAssets' not in request['query']
+        cursor=request['variables']['cursor'];seen.append(cursor)
+        if cursor is None:
+            value={'nodes':[{'databaseId':10,'tagName':'unrelated','isDraft':False}],
+                   'pageInfo':{'hasNextPage':True,'endCursor':'next-page'}}
+        else:
+            value={'nodes':[{'databaseId':91,'tagName':'cmv-encrypted-recovery-2026-11','isDraft':True}],
+                   'pageInfo':{'hasNextPage':False,'endCursor':'final'}}
+        return json.dumps({'data':{'repository':{'releases':value}}}).encode()
+    monkeypatch.setattr(transfer,'read',read)
+    assert transfer.find_private_release('cmv-encrypted-recovery-2026-11')['id']==91
+    assert seen==[None,'next-page']
