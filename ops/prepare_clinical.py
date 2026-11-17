@@ -63,9 +63,17 @@ def prepare(private=PRIVATE_ROOT):
         raise RuntimeError('Existing private clinical configuration needs review; nothing was rotated') from error
     (private/'backup-state').mkdir(exist_ok=True)
     (private/'backup-state').chmod(0o755)
+    # Older deployment launchers already call this helper before Compose.
+    # Create bind sources as the deployment owner, preventing Docker from
+    # creating root-owned directories during the first feature rollout.
+    for name,mode in [('export',0o755),('ack',0o700)]:
+        directory=private/name
+        if directory.is_symlink():raise RuntimeError('Private bind source cannot be a symlink')
+        if not directory.exists():directory.mkdir(mode=mode)
     return {'configuration_prepared':True,'allocation_key_prepared':True}
 
 
 if __name__=='__main__':
     prepare()
     print('Private clinical configuration prepared; clinical activation is unchanged.')
+
