@@ -39,6 +39,11 @@ jobs:
       - run: python -m pip install -r requirements-dev.txt
       - run: python -m pip check
       - run: python -m pytest -q
+      - name: Run disposable clinical database bootstrap and real-mode smoke test
+        if: matrix.database == 'postgres'
+        env:
+          CLINICAL_BOOTSTRAP_CI: "true"
+        run: python -m pytest -q tests/test_clinical_provisioning.py
       - name: Compile operator-only clinical setup utilities
         run: python -m py_compile ops/clinical_schema_bootstrap.py ops/clinical_admin_mfa.py app/clinical_gate.py
       - name: Check inline dashboard JavaScript syntax
