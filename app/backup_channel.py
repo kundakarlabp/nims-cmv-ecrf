@@ -98,6 +98,7 @@ def acknowledge(data:Acknowledgment,authorization:str|None=Header(default=None))
     # An untrusted arbitrary filename cannot enter the host spool.
     temporary=directory/(data.bundle_id+'.tmp-'+os.urandom(8).hex())
     fd=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o640)
+    os.fchmod(fd,0o640)
     with os.fdopen(fd,'w') as out:json.dump(payload,out)
     os.replace(temporary,path)
     return {'acknowledged':True,'clinical_activation':'host verifies the receipt before cutover'}
