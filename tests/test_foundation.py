@@ -1088,3 +1088,20 @@ def test_server_reports_synthetic_mode_and_blocks_real_patient_data():
             'cr_number':'REAL-CR-NOT-ALLOWED',
             'name':'Not A Synthetic Test Subject'})
         assert real.status_code==403
+
+
+def test_clinical_mode_api_no_cache_and_html_script_freshness():
+    with TestClient(app) as c:
+        assert c.get('/').status_code==200
+        page=c.get('/')
+        assert 'no-store' in page.headers.get('cache-control','')
+        assert '/study_ui.js?v=' in page.text
+        script=c.get('/study_ui.js')
+        assert script.status_code==200
+        assert 'no-store' in script.headers.get('cache-control','')
+        h=auth(c)
+        result=c.get('/api/system/mode')
+        assert result.status_code==200
+        assert result.json()['mode']=='synthetic'
+        assert result.json()['clinical_registration_enabled'] is False
+        assert 'no-store' in result.headers.get('cache-control','')
