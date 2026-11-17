@@ -92,3 +92,39 @@ def test_placeholder_domain_stays_blocked_even_when_db_setup_defaults_apply(tmp_
     env=clinical_env(tmp_path,at)
     env["SITE_DOMAIN"]="unconfigured.invalid"
     assert "institutionally_approved_domain_required" in startup_deficiencies(env,at)
+
+def test_explicit_owner_activation_keeps_technical_gates_and_does_not_claim_institutional_signature(tmp_path):
+    import json
+    at=datetime(2026,11,17,12,0,tzinfo=timezone.utc)
+    env=clinical_env(tmp_path,at)
+    document=Path(__file__).resolve().parents[1]/'ops/clinical-authorization.json'
+    raw=document.read_bytes();authorization=json.loads(raw)
+    assert authorization['institutional_approval_claimed'] is False
+    env.update(CLINICAL_OWNER_AUTHORIZATION_PATH=str(document),
+        CLINICAL_GOLIVE_SHA256=hashlib.sha256(raw).hexdigest(),
+        CLINICAL_INSTITUTIONAL_APPROVAL='unverified',CLINICAL_UAT_APPROVED='unverified',
+        SITE_DOMAIN=authorization['site_domain'])
+    assert startup_deficiencies(env,at)==[]
+    assert startup_deficiencies(dict(env,MFA_REQUIRED='false'),at)==['mandatory_MFA_disabled']
+    assert 'dedicated_clinical_database_missing' in startup_deficiencies(dict(env,DB_NAME='nims_ecrf'),at)
+    assert startup_deficiencies(dict(env,SITE_DOMAIN='another.sslip.io'),at)
+    assert startup_deficiencies(dict(env,CLINICAL_GOLIVE_SHA256='0'*64),at)
+    assert not backup_fresh(env,at+timedelta(hours=9))
+    from app.clinical_gate import runtime_startup_deficiencies
+    later=at+timedelta(days=31)
+    assert runtime_startup_deficiencies(env,later)
+    recovery=dict(env,CLINICAL_RECOVERY_SERVICE='true')
+    assert runtime_startup_deficiencies(recovery,later)==[]
+    assert runtime_startup_deficiencies(dict(recovery,MFA_REQUIRED='false'),later)==['mandatory_MFA_disabled']
+    assert runtime_startup_deficiencies(dict(recovery,CLINICAL_GOLIVE_SHA256='0'*64),later)
+
+def test_offsite_artifact_receipt_accepts_only_this_private_repository(tmp_path):
+    at=datetime(2026,11,17,12,0,tzinfo=timezone.utc)
+    env=clinical_env(tmp_path,at)
+    backup=Path(env['CLINICAL_BACKUP_RECEIPT_PATH'])
+    prefix=at.strftime('%Y%m%dT%H%M%SZ')+' '+('0'*64)+' '
+    backup.write_text(prefix+'github-artifact:1455709378:12345\n')
+    assert backup_fresh(env,at)
+    backup.write_text(prefix+'github-artifact:123:12345\n')
+    assert not backup_fresh(env,at)
+

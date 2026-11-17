@@ -16,7 +16,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError, VerificationError
 import pyotp
-from .clinical_gate import startup_deficiencies, backup_fresh, restore_verified, metadata_fingerprint
+from .clinical_gate import startup_deficiencies, runtime_startup_deficiencies, backup_fresh, restore_verified, metadata_fingerprint
 from .build_identity import build_fingerprint
 
 DATABASE_URL=os.getenv('DATABASE_URL','')
@@ -41,6 +41,7 @@ class User(Base):
     username: Mapped[str]=mapped_column(String(100),unique=True,nullable=False)
     display_name: Mapped[str]=mapped_column(String(150),nullable=False)
     role: Mapped[str]=mapped_column(String(40),nullable=False)
+    pi_authorized: Mapped[bool]=mapped_column(default=False,nullable=False)
     password_hash: Mapped[str]=mapped_column(Text,nullable=False)
     active: Mapped[bool]=mapped_column(default=True,nullable=False)
     created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=now)
@@ -50,6 +51,7 @@ class LoginSession(Base):
     user_id: Mapped[str]=mapped_column(ForeignKey('users.id'),index=True)
     csrf_hash: Mapped[str]=mapped_column(String(64),nullable=False)
     expires_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),nullable=False)
+    mfa_verified: Mapped[bool]=mapped_column(default=False,nullable=False)
 class Patient(Base):
     __tablename__='patients'
     id: Mapped[str]=mapped_column(String(36),primary_key=True,default=uid)
@@ -121,7 +123,7 @@ CLINICAL_MODE=os.getenv('CLINICAL_DATA_ENABLED','false').lower()=='true'
 if CLINICAL_MODE:
     # A clinic sign-off must be tied to the exact approved file; DB and recovery
     # must be independently provisioned before this process may start.
-    missing=startup_deficiencies()
+    missing=runtime_startup_deficiencies()
     if missing:
         raise RuntimeError('Clinical startup BLOCKED: '+', '.join(missing))
     from sqlalchemy import inspect, text as sql_text
@@ -153,6 +155,13 @@ elif os.getenv('CLINICAL_SCHEMA_BOOTSTRAP','false').lower()=='true':
     pass
 else:
     Base.metadata.create_all(bind=ENGINE)  # Synthetic staging only
+    # Additive compatibility migration for existing staging accounts only.
+    # Clinical schemas are provisioned explicitly and never altered by the API.
+    from sqlalchemy import inspect, text as sql_text
+    with ENGINE.begin() as conn:
+        for table,column in [('users','pi_authorized'),('sessions','mfa_verified')]:
+            if column not in {c['name'] for c in inspect(conn).get_columns(table)}:
+                conn.execute(sql_text(f'ALTER TABLE {table} ADD COLUMN {column} BOOLEAN NOT NULL DEFAULT false'))
 
 ROLES={'pi','admin','consultant','pg','scientist','nurse','technician','microbiology','pharmacy','monitor','randomization_custodian'}
 WRITE_ROLES={
@@ -178,6 +187,8 @@ class AuthContext(BaseModel):
     role: str
     name: str
     csrf_hash: str
+    pi_authorized: bool=False
+    session_hash: str=''
     model_config=ConfigDict(frozen=True)
 
 def current(request:Request,s:Session=Depends(db)) -> AuthContext:
@@ -187,6 +198,10 @@ def current(request:Request,s:Session=Depends(db)) -> AuthContext:
     if not active or active.expires_at.replace(tzinfo=UTC)<now(): raise HTTPException(401,'Session expired')
     user=s.get(User,active.user_id)
     if not user or not user.active: raise HTTPException(401,'Account disabled')
+    if os.getenv('MFA_REQUIRED','false').lower()=='true' and not active.mfa_verified:
+        allowed={'/api/me','/api/logout','/api/trial/staff/mfa-setup','/api/trial/staff/mfa-confirm'}
+        if request.url.path not in allowed:
+            raise HTTPException(403,'Complete your authenticator setup to access the clinical workspace')
     access=s.get(StaffAccess,user.id)
     if access and access.expires_at.replace(tzinfo=UTC)<=now():
         raise HTTPException(403,'Account access expired; contact the study administrator')
@@ -214,7 +229,8 @@ def current(request:Request,s:Session=Depends(db)) -> AuthContext:
         supplied=request.headers.get('x-csrf-token','')
         if not supplied or not secrets.compare_digest(sha(supplied),active.csrf_hash):
             raise HTTPException(403,'Missing or invalid CSRF token')
-    return AuthContext(user_id=user.id,role=user.role,name=user.display_name,csrf_hash=active.csrf_hash)
+    return AuthContext(user_id=user.id,role=user.role,name=user.display_name,csrf_hash=active.csrf_hash,
+                       pi_authorized=user.pi_authorized,session_hash=active.token_hash)
 
 def audit(s:Session,u:AuthContext,action:str,entity_type:str,entity_id:str,patient_id:str|None,old:dict|None,new:dict|None,reason:str):
     s.add(Audit(actor_id=u.user_id,action=action,entity_type=entity_type,entity_id=entity_id,patient_id=patient_id,old_record=jsonable_encoder(old),new_record=jsonable_encoder(new),reason=reason))
@@ -225,7 +241,7 @@ def permission(u,kind):
 
 REVIEW_ROLES={'pi','consultant','scientist','monitor'}
 def review_permission(u):
-    if u.role not in REVIEW_ROLES: raise HTTPException(403,'Reviewer role required')
+    if u.role not in REVIEW_ROLES and not u.pi_authorized: raise HTTPException(403,'Reviewer role required')
 
 def review_state(s:Session,e:Entry):
     r=s.scalar(select(EntryReview).where(EntryReview.entry_id==e.id,EntryReview.entry_revision==e.revision))
@@ -253,10 +269,13 @@ def study_script():
 @app.get('/healthz')
 def health():
     from .operations import SHA
+    from .operations import read_host_status
     commit=os.getenv('APP_COMMIT','')
     return {'ok':True,'service':'clinical' if CLINICAL_MODE else 'staging',
             'app_commit':commit if SHA.fullmatch(commit) else None,
-            'build_fingerprint':build_fingerprint()}
+            'build_fingerprint':build_fingerprint(),
+            'clinical_transition':read_host_status().get('clinical_transition','unknown'),
+            'clinical_failed_step':read_host_status().get('clinical_failed_step','unknown')}
 @app.get('/readyz')
 def ready():
     try:
@@ -264,7 +283,8 @@ def ready():
             connection.execute(select(1))
     except SQLAlchemyError:
         raise HTTPException(503,'Service temporarily unavailable')
-    return {**health(),'database':'reachable'}
+    return {**health(),'database':'reachable',
+            'clinical_entry_available':bool(CLINICAL_MODE and backup_fresh() and restore_verified())}
 @app.get('/api/system/mode')
 def system_mode(response:Response,u:AuthContext=Depends(current)):
     # Authenticated per-request current mode; never cache or infer from page URL.
@@ -332,8 +352,7 @@ def login(data:LoginInput,response:Response,s:Session=Depends(db)):
     mfa=s.get(UserTotp,u.id) if password_ok else None
     otp_ok=bool(password_ok and (not mfa or not mfa.enabled or
         (data.otp and pyotp.TOTP(mfa.secret).verify(data.otp,valid_window=1))))
-    if password_ok and os.getenv('MFA_REQUIRED','false').lower()=='true' and (not mfa or not mfa.enabled):
-        raise HTTPException(403,'Authenticator enrollment required before clinical access')
+    setup_required=bool(password_ok and os.getenv('MFA_REQUIRED','false').lower()=='true' and (not mfa or not mfa.enabled))
     if not password_ok or not otp_ok:
         # Per-username persistent lockout. Deploy IP-based rate limiting at the
         # TLS reverse proxy as a separate production control.
@@ -346,20 +365,23 @@ def login(data:LoginInput,response:Response,s:Session=Depends(db)):
                 throttle.locked_until=now()+timedelta(minutes=15)
             s.commit()
         raise HTTPException(401,'Invalid credentials or authenticator code')
-    if throttle:
+    if throttle and not setup_required:
         throttle.failures=0
         throttle.locked_until=None
     token=secrets.token_urlsafe(48);csrf=secrets.token_urlsafe(32)
-    expiry=now()+timedelta(hours=SESSION_HOURS)
-    s.add(LoginSession(token_hash=sha(token),user_id=u.id,csrf_hash=sha(csrf),expires_at=expiry))
+    seconds=600 if setup_required else SESSION_HOURS*3600
+    expiry=now()+timedelta(seconds=seconds)
+    s.add(LoginSession(token_hash=sha(token),user_id=u.id,csrf_hash=sha(csrf),expires_at=expiry,
+                       mfa_verified=bool(mfa and mfa.enabled and otp_ok)))
     s.commit()
-    response.set_cookie('nims_session',token,max_age=SESSION_HOURS*3600,
+    response.set_cookie('nims_session',token,max_age=seconds,
         httponly=True,secure=COOKIE_SECURE,samesite='strict',path='/')
     return {'username':u.username,'role':u.role,'display_name':u.display_name,
-            'csrf_token':csrf,'mfa_enabled':bool(mfa and mfa.enabled)}
+            'csrf_token':csrf,'mfa_enabled':bool(mfa and mfa.enabled),
+            'mfa_setup_required':setup_required,'pi_authorized':u.pi_authorized}
 @app.get('/api/me')
 def me(u:AuthContext=Depends(current)):
-    return {'user_id':u.user_id,'role':u.role,'display_name':u.name}
+    return {'user_id':u.user_id,'role':u.role,'display_name':u.name,'pi_authorized':u.pi_authorized}
 @app.post('/api/logout')
 def logout(request:Request,response:Response,u:AuthContext=Depends(current),s:Session=Depends(db)):
     token=request.cookies.get('nims_session')
@@ -551,7 +573,7 @@ def dashboard(u:AuthContext=Depends(current),s:Session=Depends(db)):
             'study_ids_assigned':s.scalar(select(func.count(Patient.id)).where(Patient.study_id.is_not(None))),
             'entries':len(rows),'review':counts,'by_kind':by_kind,
             'monthly_entries':[{'month':m,'count':monthly[m]} for m in sorted(monthly)[-12:]],
-            'scope':'staging synthetic data only'}
+            'scope':'clinical study database' if CLINICAL_MODE else 'staging synthetic data only'}
 
 @app.get('/api/review-queue')
 def review_queue(u:AuthContext=Depends(current),s:Session=Depends(db)):
@@ -617,6 +639,17 @@ def due(u:AuthContext=Depends(current),s:Session=Depends(db)):
     # Final protocol worklists must anchor to verified enrollment/randomization date.
     from zoneinfo import ZoneInfo
     today=datetime.now(ZoneInfo('Asia/Kolkata')).date()
+    if CLINICAL_MODE:
+        # Use the actual approved enrollment-generated PCR schedule. Generic
+        # visit entries never imply that a protocol PCR has been completed.
+        rows=s.execute(select(PCRRecord,TrialSubject).join(TrialSubject,
+            TrialSubject.id==PCRRecord.subject_id).where(
+            TrialSubject.status=='enrolled',PCRRecord.status!='verified')
+            .order_by(PCRRecord.target_on,PCRRecord.id)).all()
+        return [{'study_id':subject.study_code,'scheduled_month':record.scheduled_month,
+            'target_on':record.target_on,'days_until':(record.target_on-today).days,
+            'status':record.status,'specimen_code':record.specimen_code,
+            'anchor_basis':subject.pcr_anchor_basis} for record,subject in rows]
     records=[]
     completed=set()
     for visit in s.scalars(select(Entry).where(Entry.kind=='visit')).all():
@@ -648,4 +681,8 @@ app.include_router(crf_router)
 
 from .randomization import router as randomization_router
 app.include_router(randomization_router)
+
+from .backup_channel import router as backup_router
+app.include_router(backup_router)
+
 

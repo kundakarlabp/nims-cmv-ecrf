@@ -35,7 +35,7 @@ PHARMACISTS={"pharmacy"}
 MANAGERS={"pi","admin"}
 
 def role(u, allowed):
-    if u.role not in allowed:
+    if u.role not in allowed and not ('pi' in allowed and u.pi_authorized):
         raise HTTPException(403,"The account lacks permission for this task")
 
 def eligible_patient(s, patient_id):
@@ -805,7 +805,7 @@ def overview(u:AuthContext=Depends(current),s:Session=Depends(db)):
                                "tablets_not_yet_reconciled":issued-returned},
         "randomization":"sealed sequence module; future allocations are never shown",
         "data_mode":"synthetic_staging" if os.getenv("CLINICAL_DATA_ENABLED","false").lower()!="true"
-            else "clinical_requested_not_validated"}
+            else "clinical"}
 
 
 @router.post("/staff/mfa-setup")
@@ -832,12 +832,25 @@ class MfaConfirmIn(BaseModel):
 
 @router.post("/staff/mfa-confirm")
 def mfa_confirm(data:MfaConfirmIn,u:AuthContext=Depends(current),s:Session=Depends(db)):
+    user=s.get(User,u.user_id)
+    throttle=s.get(LoginThrottle,user.username)
+    if throttle and throttle.locked_until and throttle.locked_until.replace(tzinfo=now().tzinfo)>now():
+        raise HTTPException(429,'Authenticator attempts temporarily locked for 15 minutes')
     record=s.get(UserTotp,u.user_id)
     if not record or record.enabled:
         raise HTTPException(409,"MFA setup missing or already enabled")
     if not pyotp.TOTP(record.secret).verify(data.otp,valid_window=1):
+        if not throttle:
+            throttle=LoginThrottle(username=user.username,failures=0);s.add(throttle)
+        throttle.failures+=1
+        if throttle.failures>=5:throttle.locked_until=now()+timedelta(minutes=15)
+        s.commit()
         raise HTTPException(422,"Authenticator code incorrect")
     record.enabled=True;record.confirmed_at=now()
+    if throttle:throttle.failures=0;throttle.locked_until=None
+    # Revoke all password-only/setup sessions. The owner signs in again with
+    # both factors; enrollment never upgrades another open session.
+    s.execute(delete(LoginSession).where(LoginSession.user_id==u.user_id))
     audit(s,u,"mfa_enabled","user",u.user_id,None,None,
         {"enabled":True,"confirmed_at":record.confirmed_at},
         "Account owner confirmed authenticator enrollment")
@@ -981,3 +994,4 @@ def change_password(data:PasswordChangeIn,u:AuthContext=Depends(current),
     s.commit()
     return {"password_changed":True,"sessions_revoked":True,
             "notice":"Log in again with your new private password"}
+

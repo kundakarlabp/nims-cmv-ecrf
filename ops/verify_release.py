@@ -49,7 +49,7 @@ def fetch_status(url):
 
 
 def matches(data,target,fingerprint,bootstrap=False):
-    if not isinstance(data,dict) or data.get('ok') is not True or data.get('service')!='staging':return False
+    if not isinstance(data,dict) or data.get('ok') is not True or data.get('service') not in {'staging','clinical'}:return False
     if data.get('build_fingerprint')!=fingerprint:return False
     return data.get('app_commit')==target or (bootstrap and data.get('app_commit') is None)
 
@@ -84,3 +84,4 @@ def main():
 
 
 if __name__=='__main__':raise SystemExit(main())
+

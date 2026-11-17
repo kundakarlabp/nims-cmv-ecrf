@@ -30,7 +30,7 @@ REVIEWERS={"pi","consultant","scientist","monitor"}
 
 def allow_read(u,section):
     if section not in CRF_FORMS:raise HTTPException(404,"Unknown CRF form")
-    if u.role not in FORM_EDITOR[section] and not (u.role=="monitor" and section in BLINDED_FORM_SECTIONS):
+    if u.role not in FORM_EDITOR[section] and not ('pi' in FORM_EDITOR[section] and u.pi_authorized) and not (u.role=="monitor" and section in BLINDED_FORM_SECTIONS):
         raise HTTPException(403,"Section not available for this delegated role")
 
 def allow_write(u,section):
@@ -111,7 +111,7 @@ def occurrence_for(section,payload,requested=None):
 def crf_schema(u:AuthContext=Depends(current)):
     # Never render treatment-arm fields as editable CRF inputs.
     permitted={k:dict(v,fields=dict(v["fields"])) for k,v in CRF_FORMS.items()
-              if u.role in FORM_EDITOR[k] or (u.role=="monitor" and k in BLINDED_FORM_SECTIONS)}
+              if u.role in FORM_EDITOR[k] or ('pi' in FORM_EDITOR[k] and u.pi_authorized) or (u.role=="monitor" and k in BLINDED_FORM_SECTIONS)}
     if "C_baseline" in permitted:
         for key in ("allocation_code","assigned_nominal_arm","randomization_on"):
             permitted["C_baseline"]["fields"].pop(key,None)
@@ -128,7 +128,7 @@ def list_forms(subject_id:int,section:str|None=None,
     rows=s.scalars(st.order_by(TrialCRFEntry.updated_at.desc()).limit(400)).all()
     return {"study_code":subject.study_code,
         "entries":[visible_entry(e,review_state(s,e)) for e in rows
-                if u.role in FORM_EDITOR[e.section] or
+                if u.role in FORM_EDITOR[e.section] or ('pi' in FORM_EDITOR[e.section] and u.pi_authorized) or
                    (u.role=="monitor" and e.section in BLINDED_FORM_SECTIONS)]}
 
 class CRFDraftInput(BaseModel):
@@ -283,7 +283,7 @@ def crf_review_queue(u:AuthContext=Depends(current),s:Session=Depends(db)):
     rows=s.scalars(select(TrialCRFEntry).order_by(
          TrialCRFEntry.updated_at.desc()).limit(300)).all()
     return [visible_entry(e,review_state(s,e)) for e in rows
-            if (u.role in FORM_EDITOR[e.section] or
+            if (u.role in FORM_EDITOR[e.section] or ('pi' in FORM_EDITOR[e.section] and u.pi_authorized) or
                (u.role=="monitor" and e.section in BLINDED_FORM_SECTIONS))
               and u.user_id not in (e.created_by,e.updated_by)]
 
@@ -300,3 +300,4 @@ def crf_completeness(u:AuthContext=Depends(current),s:Session=Depends(db)):
         if r in slots[m]:slots[m][r]+=1
     return {"visit_completion":slots,
         "denominator_note":"Enrollment denominator must be read from trial overview and follow-up eligibility; does not infer missing PCR result"}
+

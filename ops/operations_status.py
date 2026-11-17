@@ -84,6 +84,11 @@ def write_status(root=ROOT, attempt_result='running'):
         'disk_free_mb':shutil.disk_usage(root).free//(1024*1024),
         'memory_available_mb':memory,
     }
+    try:
+        clinical=json.loads((root/'.deploy-state/clinical-maintenance.json').read_text())
+        receipt['clinical_transition']=clinical.get('phase')
+        receipt['clinical_failed_step']=clinical.get('failed_step')
+    except (OSError,ValueError,TypeError):pass
     fd, temporary=tempfile.mkstemp(prefix='.status-',dir=directory)
     try:
         with os.fdopen(fd,'w') as output:
@@ -103,3 +108,4 @@ if __name__ == '__main__':
     parser.add_argument('--attempt-result',choices=['running','success','failed'],default='running')
     args=parser.parse_args()
     write_status(root=args.root,attempt_result=args.attempt_result)
+
