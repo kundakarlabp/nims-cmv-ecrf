@@ -84,3 +84,11 @@ def test_clinical_mode_cannot_start_from_staging_defaults(tmp_path):
                      capture_output=True,text=True,env=env,timeout=15)
     assert p.returncode!=0
     assert "Clinical startup BLOCKED" in p.stderr
+
+
+def test_placeholder_domain_stays_blocked_even_when_db_setup_defaults_apply(tmp_path):
+    from datetime import datetime,timezone
+    at=datetime(2026,11,16,12,0,tzinfo=timezone.utc)
+    env=clinical_env(tmp_path,at)
+    env["SITE_DOMAIN"]="unconfigured.invalid"
+    assert "institutionally_approved_domain_required" in startup_deficiencies(env,at)
