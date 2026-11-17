@@ -17,6 +17,7 @@ from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError, VerificationError
 import pyotp
 from .clinical_gate import startup_deficiencies, backup_fresh, restore_verified, metadata_fingerprint
+from .build_identity import build_fingerprint
 
 DATABASE_URL=os.getenv('DATABASE_URL','')
 if not DATABASE_URL and os.getenv('DB_HOST'):
@@ -250,7 +251,12 @@ def study_script():
                                  'Pragma':'no-cache'})
 
 @app.get('/healthz')
-def health(): return {'ok':True,'service':'clinical' if CLINICAL_MODE else 'staging'}
+def health():
+    from .operations import SHA
+    commit=os.getenv('APP_COMMIT','')
+    return {'ok':True,'service':'clinical' if CLINICAL_MODE else 'staging',
+            'app_commit':commit if SHA.fullmatch(commit) else None,
+            'build_fingerprint':build_fingerprint()}
 @app.get('/readyz')
 def ready():
     try:
@@ -258,8 +264,7 @@ def ready():
             connection.execute(select(1))
     except SQLAlchemyError:
         raise HTTPException(503,'Service temporarily unavailable')
-    return {'ok':True,'service':'clinical' if CLINICAL_MODE else 'staging',
-            'database':'reachable'}
+    return {**health(),'database':'reachable'}
 @app.get('/api/system/mode')
 def system_mode(response:Response,u:AuthContext=Depends(current)):
     # Authenticated per-request current mode; never cache or infer from page URL.

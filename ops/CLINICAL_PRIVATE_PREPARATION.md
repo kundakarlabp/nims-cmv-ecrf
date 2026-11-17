@@ -25,3 +25,13 @@ even when no further release is pending.
 Deploy/rollback pass APP_COMMIT as an explicit Docker build argument because
 sudo may strip exported environment variables. This takes effect when the
 updated deploy script is the one executing a subsequent release.
+
+Release confirmation in GitHub Actions polls only the existing public readyz
+endpoint. Its new source fingerprint covers Python/JavaScript/HTML application
+files, excluding configuration, records and credentials. The checker compares
+that fingerprint to the exact reviewed Git commit and requires the image's
+commit stamp on subsequent releases. Only the first commit introducing build
+identity may report a source-only bootstrap match when the old deployment
+script could not stamp its image. It prints that limited scope explicitly.
+Failed/missing/mismatched health responses time out and cannot count as live
+confirmation. Redirects, login pages and private admin endpoints are not used.

@@ -12,7 +12,7 @@ jobs:
       github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.head_branch == 'main'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
         with:
@@ -45,3 +45,8 @@ jobs:
           tag="cmv-staging-$(date -u +%Y%m%dT%H%M%SZ)-$TARGET"
           git tag -a "$tag" "$TARGET" -m "CI-approved CMV staging release $TARGET"
           git push origin "refs/tags/$tag"
+
+      - name: Verify running application through public health only
+        if: steps.intent.outputs.publish == 'true'
+        run: python3 ops/verify_release.py --target "$TARGET" --url https://152-70-77-77.sslip.io --timeout 540
+
