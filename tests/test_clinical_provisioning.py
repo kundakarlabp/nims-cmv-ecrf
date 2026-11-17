@@ -24,9 +24,10 @@ def test_empty_clinical_schema_provision_and_controlled_registration(tmp_path):
     app_password="CI-app-disposable-long-secret-only!"
     with psycopg.connect("postgresql://ci:disposable-ci-only@127.0.0.1:5432/postgres",
                         autocommit=True) as superuser:
+        from psycopg import sql
         superuser.execute(
-            "CREATE ROLE nims_clinical_owner LOGIN CREATEROLE PASSWORD %s",
-            (owner_password,))
+            sql.SQL("CREATE ROLE nims_clinical_owner LOGIN CREATEROLE PASSWORD {}").format(
+                sql.Literal(owner_password)))
         superuser.execute("CREATE DATABASE nims_cmv_clinical OWNER nims_clinical_owner")
 
     owner_url=("postgresql+psycopg://nims_clinical_owner:"+owner_password+
