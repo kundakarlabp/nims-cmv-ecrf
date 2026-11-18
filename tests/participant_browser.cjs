@@ -202,7 +202,8 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   await page.selectOption('#tw-rand-patient','TEST-P-4');
   await page.waitForFunction(()=>$('tw-rand-progress').textContent.includes('Registered.'));
   await page.click('#tw-rand-continue');
-  await page.waitForFunction(()=>activeTab==='study'&&$('tw-patient').value==='TEST-P-4');
+  await page.waitForFunction(()=>activeTab==='study'&&$('tw-patient').value==='TEST-P-4' &&
+   $('tw-assigned-study-id').textContent.includes('pending'));
   assert.match(await page.textContent('#tw-assigned-study-id'),/pending/);
   await page.fill('#tw-screen-date','2026-10-02');await page.fill('#tw-consent-date','2026-10-02');
   for(const [id,v] of Object.entries({'tw-icf':'ICF v3','tw-pis':'PIS v3','tw-consent-obtained':'Synthetic investigator','tw-consent-source':'TEST-SIGNED-ICF','tw-initials':'TS','tw-screen-age':'50'}))await page.fill('#'+id,v);
