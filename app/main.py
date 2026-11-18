@@ -453,7 +453,8 @@ def create_patient(data:PatientIn,u:AuthContext=Depends(current),s:Session=Depen
     # Reserve the NCMV numeric namespace in UAT too; old non-trial test
     # identifiers remain readable for backwards-compatible test fixtures.
     if data.study_id and (CLINICAL_MODE or
-            (data.study_id.startswith('NCMV-') and data.study_id[5:].isdigit())):
+            ((data.study_id.startswith('NCMV-') and data.study_id[5:].isdigit()) or
+             (data.study_id.startswith('NCMV') and data.study_id[4:].isdigit()))):
         raise HTTPException(422,'Study ID is generated automatically only after approved enrollment')
     if not CLINICAL_MODE:
         if not (data.cr_number.upper().startswith('TEST-') and data.name.lower().startswith('synthetic')):
