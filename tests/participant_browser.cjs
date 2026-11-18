@@ -216,6 +216,12 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   await page.click('#tw-rand-continue');
   await page.waitForFunction(()=>activeTab==='study'&&$('tw-source').value==='TEST-BASELINE');
   assert.equal(await page.inputValue('#tw-anchor-date'),'2026-10-01');
+  await page.selectOption('#tw-context-subject','3');
+  await page.waitForFunction(()=>$('tw-checklist-subject').value==='3'&&$('tw-source').value==='');
+  assert.equal(await page.inputValue('#tw-anc'),'','Another screened patient cannot inherit baseline values');
+  assert.equal(await page.inputValue('#tw-cbc-date'),'','Another screened patient cannot inherit a CBC date');
+  await page.selectOption('#tw-context-subject','4');
+  await page.waitForFunction(()=>$('tw-source').value==='TEST-BASELINE'&&$('tw-screened').value==='4');
   await page.fill('#tw-enroll-date','2026-10-03');await page.check('#tw-pi-consent');await page.check('#tw-pi-anchor');
   await page.click('#tw-enroll-save');
   await page.waitForFunction(()=>$('tw-context-allocation').textContent.includes('TEST-STUDY-4'));

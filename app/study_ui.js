@@ -526,7 +526,8 @@ let eligibilityRequest=0;
 async function loadEligibilityReview(){
  const request=++eligibilityRequest,sid=n('tw-checklist-subject');
  for(const el of document.querySelectorAll('[data-eligibility]'))el.value='';
- for(const id of ['tw-age','tw-anc','tw-platelets','tw-hb','tw-crcl','tw-source'])$(id).value='';
+ for(const id of ['tw-age','tw-anc','tw-platelets','tw-hb','tw-crcl','tw-source','tw-cbc-date'])$(id).value='';
+ $('tw-review-on').value=today();
  if(!sid)return;
  const r=await api('/api/trial/subjects/'+sid+'/eligibility');
  if(request!==eligibilityRequest||sid!==n('tw-checklist-subject'))return;
@@ -1246,6 +1247,7 @@ $('tw-context-subject').onchange=()=>{void task('tw-context-error',async()=>{
  try{if(activeTab==='crf')await crfSaveDraft();if(activeTab==='entry')await saveDraftNow();}
  catch(e){$('tw-context-subject').value=previous?String(previous):'';throw e;}
  await selectParticipantSubject(n('tw-context-subject'));
+ if(activeTab==='study')await selectEnrollmentPatient();
  if(activeTab==='crf'){crfRender();await populateCrfLinkedIdentifiers();await crfRestoreDraft();await loadCrfEntries();}
  if(activeTab==='pcr')await loadPCR();
  if(activeTab==='drug')await loadDrug();
