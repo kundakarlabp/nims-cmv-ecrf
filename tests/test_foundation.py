@@ -177,6 +177,21 @@ def test_duplicate_registration_returns_conflict():
         assert c.post('/api/patients',headers=h,json=payload).status_code==200
         assert c.post('/api/patients',headers=h,json=payload).status_code==409
 
+def test_trial_study_id_cannot_be_preassigned_on_registration():
+    with TestClient(app) as c:
+        h=auth(c)
+        rejected=c.post('/api/patients',headers=h,json={
+            'name':'Synthetic premature ID','cr_number':'TEST-PREASSIGN',
+            'study_id':'NCMV-00001'})
+        assert rejected.status_code==422,rejected.text
+        assert 'approved enrollment' in rejected.text
+        registered=c.post('/api/patients',headers=h,json={
+            'name':'Synthetic no enrollment','cr_number':'TEST-NO-ENROLL'})
+        assert registered.status_code==200,registered.text
+        patient=c.get('/api/patients/'+registered.json()['id']).json()['patient']
+        assert patient['study_id'] is None
+
+
 def test_independent_review_requires_role_and_current_revision():
     with TestClient(app) as author:
         admin=auth(author)
@@ -336,6 +351,7 @@ def test_screening_pi_enrollment_seven_pcr_codes_and_eligibility():
             'display_name':'Synthetic trial PI','role':'pi','password':'SyntheticPiPassword123!'}).status_code==200
     with TestClient(app) as pi:
         h=auth(pi,'trialpi','SyntheticPiPassword123!')
+        assert pi.get('/api/patients/'+pid).json()['patient']['study_id'] is None
         enrollment=pi.post(f'/api/trial/subjects/{subject_id}/enroll',headers=h,json={
             'enrolled_on':'2026-10-03','pcr_anchor_on':'2026-10-01',
             'pcr_anchor_basis':'transplant_date','protocol_reference':'approved-protocol-v5',
@@ -343,18 +359,25 @@ def test_screening_pi_enrollment_seven_pcr_codes_and_eligibility():
         assert enrollment.status_code==200,enrollment.text
         assert enrollment.json()['pcr_orders']==7
         subject=enrollment.json()['subject']
-        assert subject['study_code'].startswith('NCMV-')
+        expected_id=f'NCMV-{subject_id:05d}'
+        assert subject['study_code']==expected_id
+        assert enrollment.json()['study_id']==expected_id
+        assert pi.get('/api/patients/'+pid).json()['patient']['study_id']==expected_id
+        assert pi.get('/api/trial/subjects',params={'q':expected_id}).json()[0]['id']==subject_id
         assert subject['randomization_status']=='SEE_RESTRICTED_ALLOCATION_MODULE'
         samples=pi.get(f'/api/trial/subjects/{subject_id}/pcr')
         assert samples.status_code==200
         rows=samples.json()['pcr_records']
         assert [p['scheduled_month'] for p in rows]==[1,2,3,4,6,9,12]
         assert len(set(p['specimen_code'] for p in rows))==7
+        assert all(p['specimen_code'].startswith(expected_id+'-PCR-') for p in rows)
         assert rows[0]['target_on']=='2026-11-01'
         assert pi.post(f'/api/trial/subjects/{subject_id}/enroll',headers=h,json={
             'enrolled_on':'2026-10-03','pcr_anchor_on':'2026-10-01',
             'pcr_anchor_basis':'transplant_date','protocol_reference':'approved-protocol-v5',
             'reviewed_eligibility_and_consent':True,'approved_visit_anchor':True}).status_code==409
+        assert pi.get('/api/patients/'+pid).json()['patient']['study_id']==expected_id
+        assert len(pi.get(f'/api/trial/subjects/{subject_id}/pcr').json()['pcr_records'])==7
         worklist=pi.get('/api/trial/pcr-worklist').json()
         assert len(worklist)==7
         assert all(x['completion_verified'] is False for x in worklist)
