@@ -74,6 +74,16 @@ with SessionLocal() as s:
             else:raise AssertionError('Staging account mutations were not frozen during migration')
             print('PASS: real clinical schema, named login/MFA migration, encrypted dump, isolated PostgreSQL restore, external SSH escrow recovery, no participant/session import.')
             credentials=m.sql(dc,"SELECT username,password_hash FROM users ORDER BY username;")
+            m.sql(dc,"""INSERT INTO patients(id,cr_number,name,created_by,revision,created_at)
+ SELECT 'CI-TRAIN-'||g,'TEST-TRAIN-'||g,'Synthetic training fixture '||g,u.id,1,now()
+ FROM generate_series(1,15) g CROSS JOIN users u WHERE u.pi_authorized;
+ INSERT INTO audit_events(id,actor_id,action,entity_type,entity_id,patient_id,new_record,reason,created_at)
+ SELECT 'CI-AUDIT-'||p.id,p.created_by,'create','patient',p.id,p.id,
+ '{"training":true}'::json,'Synthetic training entry',now() FROM patients p;
+ INSERT INTO audit_events(id,actor_id,action,entity_type,entity_id,new_record,reason,created_at)
+ SELECT 'CI-STOCK-AUDIT',id,'stock_receive','drug_lot','CI-LOT',
+ '{"training":true}'::json,'Synthetic training stock',now() FROM users WHERE pi_authorized;
+ """)
             m.owner_workspace_update(dc)
             assert m.sql(dc,'SELECT count(*) FROM patients;').strip()==b'0'
             assert m.sql(dc,'SELECT count(*) FROM trial_subjects;').strip()==b'0'
@@ -81,6 +91,11 @@ with SessionLocal() as s:
             assert m.sql(dc,'SELECT count(*) FROM trial_randomization_slots WHERE subject_id IS NOT NULL;').strip()==b'0'
             assert m.sql(dc,'SELECT count(*) FROM trial_user_totp;').strip()==b'0'
             assert credentials==m.sql(dc,"SELECT username,password_hash FROM users ORDER BY username;")
+            assert m.sql(dc,"SELECT count(*) FROM audit_events WHERE patient_id IS NOT NULL OR entity_type='drug_lot';").strip()==b'0'
+            assert m.sql(dc,"SELECT tgenabled FROM pg_trigger WHERE tgname='protect_trial_audit_update_delete';").strip()==b'O'
+            try:m.sql(dc,"UPDATE audit_events SET reason='must not change' WHERE action='owner_fresh_start_reset';")
+            except RuntimeError:pass
+            else:raise AssertionError('Audit protection was not restored after the authorized reset')
             # Real HTTP login against the password-only clinical container.
             login_check="""import urllib.request,json
 for username,password in [('ci-investigator','DisposableCIOnlyLongPassword123!'),('ci-nurse','DisposableCIOnlyNursePassword123!')]:
