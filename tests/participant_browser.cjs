@@ -283,6 +283,19 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   assert.equal(await page.isVisible('#tw-study-navigation'),false);
   assert.equal(await page.getAttribute('#tw-mobile-menu','aria-expanded'),'false');
   assert.match(await page.textContent('#tw-live-build'),/aaaaaaaaaa/);
+  await page.evaluate(async()=>{await tab('tasks');});
+  await page.click('#tw-task-items [data-task-idx="0"]');
+  await page.waitForFunction(()=>activeTab==='study'&&selected==='TEST-P-3');
+  // Layout must remain within the mobile viewport; data tables scroll inside
+  // their own containers, never force the whole clinical page horizontally.
+  for(const width of [360,393,768]){
+   await page.setViewportSize({width,height:852});
+   for(const section of ['dashboard','tasks','study','pcr','drug','crf','randomization','course']){
+    await page.evaluate(async name=>{await tab(name);},section);
+    const overflow=await page.evaluate(()=>document.documentElement.scrollWidth-innerWidth);
+    assert.ok(overflow<=2,'Horizontal page overflow '+overflow+'px in '+section+' at '+width+'px');
+   }
+  }
   assert.deepEqual(errors,[]);
   console.log('Real browser passed: scripts, patient identity, source-date autosave, cross-patient draft isolation, allocation persistence, mobile layout and blinded banner');
  }finally{await browser.close();}
