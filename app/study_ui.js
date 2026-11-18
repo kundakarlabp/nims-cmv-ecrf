@@ -655,7 +655,8 @@ $('tw-checklist-save').onclick=()=>{void task('tw-status',async()=>{
   'All protocol criteria checked and eligible; PI enrollment may proceed.':
   'Screening exclusion detected; enrollment is blocked. Preserve signed source.');
 });};
-for(const id of ['tw-cbc-date','tw-review-on'])$(id).value=today();
+$('tw-cbc-date').value=''; // Laboratory source date must be entered explicitly.
+$('tw-review-on').value=today(); // Review is an action performed now.
 async function loadAccounts(){
  const accounts=await api('/api/trial/staff/accounts');
  $('tw-accounts').innerHTML='<div style="overflow-x:auto"><table><thead><tr>'+
