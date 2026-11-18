@@ -4,6 +4,7 @@
 var root=$('workspace'),menu=root.querySelector('.tabs');
 var logoutBtn=Array.from(menu.querySelectorAll('button')).find(x=>x.textContent.trim()==='Log out');
 var studySubjects=[],pcrRecords=[],drugLots=[],pcrLoadedSubject=null,drugLoadedSubject=null;
+var lastIssuedSlip=null;
 function txt(s){return escapeHTML(String(s==null?'':s));}
 function value(id){return ($(id).value||'').trim();}
 function n(id){return Number(value(id));}
@@ -100,6 +101,9 @@ panel('study','Enrollment',
 panel('pcr','CMV PCR',
  choose('Enrolled subject','tw-pcr-subject',[])+
  '<h3>Seven protocol timepoints and repeat specimens</h3><div id="tw-pcr-table"></div>'+
+ '<section class="study-card"><h3>Microbiology specimen requisition</h3>'+
+ '<p class="hint">Print an individual coded requisition for an existing protocol specimen. Printing does not record collection or laboratory completion.</p>'+
+ choose('Scheduled PCR specimen','tw-pcr-print-id',[])+btn('Print coded PCR requisition','tw-pcr-print')+'</section>'+
  '<div class="study-columns"><section class="study-card"><h3>Specimen collection</h3>'+
  choose('Planned specimen','tw-collect-id',[])+field('Collection date','tw-collected','date')+
  field('Lab accession reference','tw-accession')+btn('Record collection','tw-collect-save')+
@@ -139,7 +143,8 @@ panel('drug','MSS drug accountability',
  choose('Disposition','tw-disposition',[['quarantine','Quarantine'],['destruction_pending','Destruction pending'],['destroyed','Destroyed']])+
  btn('Record return without restocking','tw-return-save')+'</section></div>'+
  '<div class="study-card"><h3>Accountability ledger</h3><div id="tw-ledger"></div></div>'+
- '<div class="study-card"><h3>MSS issue slip</h3><div id="tw-slip">Generate a confirmed issue to print and sign.</div></div>'+
+ '<div class="study-card"><h3>MSS issue slip</h3><div id="tw-slip">Generate a confirmed issue to print and sign.</div>'+
+ btn('Print confirmed MSS slip','tw-mss-print')+'</div>'+
  '<div id="tw-drug-status" class="status hide"></div>'
 );
 panel('crf','Structured eCRF and clinical logs',
@@ -393,6 +398,9 @@ async function loadPCR(){
  pcrRecords=records;pcrLoadedSubject=sid;
  $('tw-pcr-table').innerHTML='<table><thead><tr><th>Code</th><th>Month</th><th>Target</th><th>Status</th><th>Viral load (IU/mL)</th></tr></thead><tbody>'+
  pcrRecords.map(x=>'<tr><td>'+txt(x.specimen_code)+'</td><td>'+x.scheduled_month+'</td><td>'+txt(x.target_on)+'</td><td>'+txt(x.status)+'</td><td>'+txt(x.quantitative_iu_ml??'—')+'</td></tr>').join('')+'</tbody></table>';
+ fill('tw-pcr-print-id',pcrRecords.filter(x=>x.attempt===1),'id',
+   x=>x.specimen_code+' · Month '+x.scheduled_month+' · '+x.status);
+ $('tw-pcr-print').disabled=!n('tw-pcr-print-id');
  fill('tw-collect-id',pcrRecords.filter(x=>x.status==='planned'),'id',x=>x.specimen_code);
  fill('tw-result-id',pcrRecords.filter(x=>['collected','result_entered','verified'].includes(x.status)),'id',x=>x.specimen_code);
  fill('tw-verify-id',pcrRecords.filter(x=>x.status==='result_entered'),'id',x=>x.specimen_code);
@@ -501,6 +509,9 @@ $('tw-dispense-save').onclick=()=>{void task('tw-drug-status',async()=>{
  var r=await api('/api/trial/subjects/'+n('tw-drug-subject')+'/dispense',{method:'POST',
   body:JSON.stringify({authorization_id:n('tw-order-id'),lot_id:n('tw-lot-id'),
    quantity_issued:n('tw-issued'),issued_on:value('tw-issue-date')})});
+ lastIssuedSlip=Object.freeze({...r,issued_on:value('tw-issue-date'),
+   prescription_ref:($('tw-order-id').selectedOptions[0]?.textContent||'').split(' · ')[0]});
+ $('tw-mss-print').disabled=false;
  $('tw-slip').innerHTML='<h3>NIMS · ICMR CMV STUDY · MSS SIGNATURE SLIP</h3>'+
   '<p>Study ID: '+txt(r.study_code)+' | Slip code: '+txt(r.slip_code)+'</p>'+
   '<p>Valganciclovir 450 mg tablets | Quantity issued: '+r.quantity_issued+'</p>'+
@@ -1231,7 +1242,8 @@ const contextRoleUI=applyRoleUI;
 applyRoleUI=function(role){contextRoleUI(role);contextBox.classList.toggle('hide',!perms.course.includes(role));};
 function resetPCRControls(){
  pcrRecords=[];pcrLoadedSubject=null;
- for(const id of ['tw-collect-id','tw-result-id','tw-verify-id'])$(id).innerHTML='<option value="">Choose participant first</option>';
+ for(const id of ['tw-collect-id','tw-result-id','tw-verify-id','tw-pcr-print-id'])$(id).innerHTML='<option value="">Choose participant first</option>';
+ $('tw-pcr-print').disabled=true;
  for(const id of ['tw-collect-save','tw-result-save','tw-verify-save'])$(id).disabled=true;
  $('tw-pcr-table').textContent='Select an enrolled participant to load specimens.';
 }
@@ -1242,6 +1254,7 @@ function resetDrugControls(){
  for(const id of ['tw-order-id','tw-dispense-id'])$(id).innerHTML='<option value="">Choose participant first</option>';
  $('tw-ledger').textContent='Select an enrolled participant.';
  $('tw-slip').textContent='Generate a confirmed issue to print and sign.';
+ lastIssuedSlip=null;$('tw-mss-print').disabled=true;
  $('tw-drug-allocation').textContent='No randomized allocation verified.';
 }
 function requireProcedureSubject(kind){
@@ -1378,5 +1391,78 @@ $('tw-open-course').onclick=()=>{void tab('course');};
 $('tw-course-refresh').onclick=()=>{void task('tw-course-status',()=>loadClinicalCourse());};
 $('tw-course-more').onclick=()=>{void task('tw-course-status',()=>loadClinicalCourse(true));};
 $('tw-enroll-randomize').onclick=()=>{void tab('randomization');};
+
+/* Print only server-confirmed specimen codes and dispenses; do not fabricate a slip. */
+const printSheet=document.createElement('article');
+printSheet.id='tw-print-sheet';document.body.appendChild(printSheet);
+function printStudySlip(title,fields,notice){
+ printSheet.replaceChildren();
+ const head=document.createElement('h1');head.textContent='NIMS, Hyderabad · ICMR CMV Trial';printSheet.appendChild(head);
+ const subtitle=document.createElement('h2');subtitle.textContent=title;printSheet.appendChild(subtitle);
+ for(const [label,text] of fields){
+  const line=document.createElement('div');line.className='print-field';
+  line.textContent=label+': '+String(text??'');printSheet.appendChild(line);
+ }
+ const footer=document.createElement('p');footer.className='print-warning';footer.textContent=notice;printSheet.appendChild(footer);
+ window.print();
+}
+$('tw-pcr-print').onclick=()=>{
+ try{
+  requireProcedureSubject('pcr');
+  const row=pcrRecords.find(x=>x.id===n('tw-pcr-print-id'));
+  if(!row||row.attempt!==1)throw Error('Select an existing scheduled PCR specimen');
+  const subject=studySubjects.find(x=>x.id===participantSubject);
+  if(!subject?.study_code)throw Error('Study ID is required for a protocol requisition');
+  printStudySlip('Clinical Microbiology · coded CMV PCR requisition',[
+   ['Study ID',subject.study_code],['Unique specimen code',row.specimen_code],
+   ['Protocol visit','Month '+row.scheduled_month],
+   ['Target date',row.target_on],
+   ['Current recorded status',row.status],
+   ['Actual collection date/time','____________________________'],
+   ['Collection staff signature','____________________________'],
+   ['Laboratory accession number','____________________________'],
+   ['Reported date / Microbiology signature','____________________________']
+  ],'Seven scheduled study PCRs are linked to transplant date. Confirm the participant and source record before specimen collection. Printing is not specimen collection or a laboratory result.');
+ }catch(e){error('tw-pcr-status',e)}
+};
+$('tw-mss-print').disabled=true;
+$('tw-mss-print').onclick=()=>{
+ try{
+  requireProcedureSubject('drug');
+  if(!lastIssuedSlip||!lastIssuedSlip.slip_code)throw Error('Issue study tablets before printing an MSS slip');
+  printStudySlip('Main Sub Store · signed study-drug issue slip',[
+   ['Study ID',lastIssuedSlip.study_code],['Unique MSS slip code',lastIssuedSlip.slip_code],
+   ['Signed prescription reference',lastIssuedSlip.prescription_ref],
+   ['Study medication','Valganciclovir 450 mg tablets'],
+   ['Quantity issued',lastIssuedSlip.quantity_issued],
+   ['Batch / lot',lastIssuedSlip.lot_number],
+   ['Batch expiry',lastIssuedSlip.expiry_on],
+   ['Issue date',lastIssuedSlip.issued_on],
+   ['Prescriber signature','____________________________'],
+   ['MSS pharmacist signature','____________________________'],
+   ['Recipient signature / date','____________________________']
+  ],'Valid only against the signed clinical prescription and allocated nominal arm; actual renal-adjusted dosing remains subject to signed clinical orders.');
+ }catch(e){error('tw-drug-status',e)}
+};
+
+/* Single, accessible mobile navigation; existing sections retain their IDs. */
+const mobileMenu=document.createElement('button');
+mobileMenu.id='tw-mobile-menu';mobileMenu.type='button';
+mobileMenu.setAttribute('aria-controls','tw-study-navigation');
+mobileMenu.setAttribute('aria-expanded','false');
+mobileMenu.textContent='Menu · Study sections';
+menu.id='tw-study-navigation';
+root.insertBefore(mobileMenu,menu);
+mobileMenu.onclick=()=>{
+ const open=root.classList.toggle('mobile-nav-open');
+ mobileMenu.setAttribute('aria-expanded',String(open));
+ mobileMenu.textContent=open?'Close study menu':'Menu · Study sections';
+};
+menu.addEventListener('click',event=>{
+ if(!event.target.closest('button'))return;
+ root.classList.remove('mobile-nav-open');
+ mobileMenu.setAttribute('aria-expanded','false');
+ mobileMenu.textContent='Menu · Study sections';
+});
 
 })();
