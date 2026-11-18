@@ -47,8 +47,9 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
     }else result={eligibility:eligibility.get(id)||null};
    }else if(p.endsWith('/enroll')){
     const id=Number(p.split('/')[4]),data=route.request().postDataJSON();writes.push({p,body:data});
-    const subject=subjects.find(x=>x.id===id);Object.assign(subject,{status:'enrolled',study_code:'TEST-STUDY-'+id,enrolled_on:data.enrolled_on});
-    result={subject,pcr_orders:7};
+    const subject=subjects.find(x=>x.id===id);Object.assign(subject,{status:'enrolled',study_code:'NCMV001',enrolled_on:data.enrolled_on});
+    people.find(x=>x.id===subject.patient_id).study_id=subject.study_code;
+    result={subject,study_id:subject.study_code,pcr_orders:7};
    }else if(p==='/api/trial/randomization/readiness')result={sequence_locked:true,activation_ready:true,allocation_management:'owner_managed'};
    else if(p.endsWith('/allocation')){
     const id=Number(p.split('/')[5]);result=allocations.get(id)||{randomized:false,study_code:'TEST-STUDY-'+id};
@@ -187,6 +188,7 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   // not a fixture that is already enrolled before the page opens.
   await page.setViewportSize({width:1280,height:900});blinded=false;
   await page.evaluate(async()=>{await tab('registry');});
+  assert.equal(await page.locator('#registryStudyId').count(),0,'Study ID cannot be entered at registration');
   await page.fill('#cr','TEST-CR-4');await page.fill('#patientName','Synthetic fresh registry');
   await page.fill('#transplant','2026-10-01');
   await page.evaluate(async()=>{await register();});
@@ -201,6 +203,7 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   await page.waitForFunction(()=>$('tw-rand-progress').textContent.includes('Registered.'));
   await page.click('#tw-rand-continue');
   await page.waitForFunction(()=>activeTab==='study'&&$('tw-patient').value==='TEST-P-4');
+  assert.match(await page.textContent('#tw-assigned-study-id'),/pending/);
   await page.fill('#tw-screen-date','2026-10-02');await page.fill('#tw-consent-date','2026-10-02');
   for(const [id,v] of Object.entries({'tw-icf':'ICF v3','tw-pis':'PIS v3','tw-consent-obtained':'Synthetic investigator','tw-consent-source':'TEST-SIGNED-ICF','tw-initials':'TS','tw-screen-age':'50'}))await page.fill('#'+id,v);
   await page.selectOption('#tw-sex','male');await page.selectOption('#tw-ratg','true');await page.check('#tw-eligible');
@@ -225,7 +228,9 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   await page.waitForFunction(()=>$('tw-source').value==='TEST-BASELINE'&&$('tw-screened').value==='4');
   await page.fill('#tw-enroll-date','2026-10-03');await page.check('#tw-pi-consent');await page.check('#tw-pi-anchor');
   await page.click('#tw-enroll-save');
-  await page.waitForFunction(()=>$('tw-context-allocation').textContent.includes('TEST-STUDY-4'));
+  await page.waitForFunction(()=>$('tw-context-allocation').textContent.includes('NCMV001'));
+  assert.match(await page.textContent('#tw-assigned-study-id'),/Study ID: NCMV001/);
+  assert.equal(people.find(x=>x.id==='TEST-P-4').study_id,'NCMV001');
   await page.click('#tw-enroll-randomize');
   await page.waitForFunction(()=>activeTab==='randomization'&&$('tw-rand-subject').value==='4'&&!$('tw-rand-assign').disabled);
   assert.match(await page.locator('#tw-rand-subject option:checked').textContent(),/TEST-CR-4/);
@@ -241,6 +246,9 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
    assert.match(await page.textContent('#tw-context-allocation'),/TEST-ALLOC-4/);
    assert.equal(await page.evaluate(()=>selected),'TEST-P-4');
   }
+  await page.evaluate(async()=>{await tab('study');});
+  assert.match(await page.textContent('#tw-assigned-study-id'),/Study ID: NCMV001/);
+  await page.evaluate(async()=>{await tab('randomization');});
   // Unknown CR must never fall back to the first enrolled person or leave
   // the previous allocation action available.
   holdSearchContext=true;
