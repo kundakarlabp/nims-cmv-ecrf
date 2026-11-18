@@ -141,6 +141,8 @@ class ScreeningIn(BaseModel):
 def screen(data:ScreeningIn,u:AuthContext=Depends(current),s:Session=Depends(db)):
     role(u,SCREENERS)
     p=eligible_patient(s,data.patient_id)
+    if data.screening_on>date.today():
+        raise HTTPException(422,"Screening date cannot be in the future")
     if data.consent_on and data.consent_on>date.today():
         raise HTTPException(422,"Consent date cannot be in the future")
     if bool(data.consent_on)!=bool(data.consent_version):
