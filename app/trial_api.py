@@ -8,11 +8,12 @@ from calendar import monthrange
 from datetime import date, datetime, timedelta
 from typing import Literal
 import os
+import re
 import secrets
 import pyotp
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, model_validator, field_validator
-from sqlalchemy import select, func, update, delete
+from sqlalchemy import select, func, update, delete, text
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from .main import (
@@ -25,6 +26,29 @@ from .trial_models import (
 
 router=APIRouter(prefix="/api/trial",tags=["trial-workflows"])
 MONTHS=(1,2,3,4,6,9,12)
+STUDY_ID_LIMIT=350
+STUDY_ID_PATTERN=re.compile(r"NCMV([0-9]{3})")
+
+
+def allocate_study_id(s:Session)->str:
+    """Assign one permanent, sequential ID per *enrollment* (not screening).
+
+    All approved enrollments on PostgreSQL share a transaction-scoped
+    advisory lock. Reading the committed identifiers after obtaining it
+    prevents simultaneous participants from receiving the same number.
+    Existing IDs, including withdrawn subjects, are never recycled.
+    """
+    if s.get_bind().dialect.name=="postgresql":
+        s.execute(text("SELECT pg_advisory_xact_lock(165978, 350)"))
+    assigned=s.scalars(select(TrialSubject.study_code).where(
+        TrialSubject.study_code.is_not(None))).all()
+    ids=[int(m.group(1)) for code in assigned
+         if (m:=STUDY_ID_PATTERN.fullmatch(code or ""))]
+    next_number=max(ids,default=0)+1
+    if next_number>STUDY_ID_LIMIT:
+        raise HTTPException(409,"All 350 protocol Study IDs have been assigned")
+    return f"NCMV{next_number:03d}"
+
 SCREENERS={"pi","consultant","scientist"}
 ENROLLERS={"pi"}
 PCR_COLLECTORS={"pi","consultant","scientist","nurse","technician","microbiology"}
@@ -332,9 +356,9 @@ def enroll(subject_id:int,data:EnrollmentIn,u:AuthContext=Depends(current),s:Ses
         raise HTTPException(422,"Enrollment must support valganciclovir start within 10 days of transplantation")
     if data.enrolled_on>date.today() or data.pcr_anchor_on>date.today():
         raise HTTPException(422,"Study milestone dates cannot be in the future")
-    new_code=f"NCMV-{t.id:05d}"
-    if p.study_id and p.study_id!=new_code:
-        raise HTTPException(409,"Existing registry study ID requires reconciliation before enrollment")
+    if p.study_id:
+        raise HTTPException(409,"Registry already has a Study ID; reconcile before enrollment")
+    new_code=allocate_study_id(s)
     t.study_code=new_code;t.enrolled_on=data.enrolled_on;t.status="enrolled"
     t.pcr_anchor_on=data.pcr_anchor_on;t.pcr_anchor_basis=data.pcr_anchor_basis
     t.protocol_reference=data.protocol_reference;t.confirmed_by=u.user_id
