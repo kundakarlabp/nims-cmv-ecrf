@@ -31,7 +31,7 @@ function screen({mode,cr='REAL-CASE-TEST',name='Trial source test',failure}){
  }
  element('cr').value=cr;
  element('patientName').value=name;
- element('registryStudyId').value='';
+ assert.doesNotMatch(html, /id="registryStudyId"/, 'Registry Study ID must not be manually editable');
  element('transplant').value='';
  const calls=[],notices=[];
  const context={
