@@ -67,6 +67,11 @@ def test_password_team_workspace_keeps_authentication_and_removes_clinical_role_
             'pcr_anchor_basis':'transplant_date','protocol_reference':'protocol-v5',
             'reviewed_eligibility_and_consent':True,'approved_visit_anchor':True})
         assert r.status_code==200,r.text
+        matches=nurse.get('/api/trial/subjects',params={'q':'TEST-CLINICAL-001'}).json()
+        assert len(matches)==1 and matches[0]['patient_id']==pid
+        assert matches[0]['cr_number']=='TEST-CLINICAL-001'
+        assert matches[0]['id']==sid and matches[0]['status']=='enrolled'
+        assert nurse.get('/api/trial/randomization/subjects/'+str(sid)+'/allocation').json()['randomized'] is False
         from app.workspace_setup import initialize
         assert initialize()['created'] is True
         assert initialize()['created'] is False  # Never regenerate a plan.
@@ -1264,3 +1269,22 @@ def test_clinical_mode_api_no_cache_and_html_script_freshness():
         assert result.json()['clinical_registration_enabled'] is False
         assert 'no-store' in result.headers.get('cache-control','')
 
+
+
+def test_subject_search_links_cr_and_preserves_strict_role_masking():
+    with TestClient(app) as admin:
+        h=auth(admin)
+        pid,sid=setup_synthetic_trial(admin,h)
+        found=admin.get('/api/trial/subjects',params={'q':'TEST-CLINICAL-001'}).json()
+        assert len(found)==1 and found[0]['patient_id']==pid and found[0]['id']==sid
+        assert found[0]['cr_number']=='TEST-CLINICAL-001' and found[0]['status']=='screened'
+        assert admin.get('/api/trial/subjects',params={'q':'unknown-CR'}).json()==[]
+        assert admin.get('/api/trial/subjects',params={'q':'Synthetic participant'}).json()[0]['id']==sid
+        assert admin.post('/api/users',headers=h,json={'username':'lookupmonitor',
+            'display_name':'Synthetic monitor','role':'monitor','password':'MonitorLookupPassword123!'}).status_code==200
+    with TestClient(app) as monitor:
+        auth(monitor,'lookupmonitor','MonitorLookupPassword123!')
+        assert monitor.get('/api/trial/subjects',params={'q':'TEST-CLINICAL-001'}).json()==[]
+        masked=monitor.get('/api/trial/subjects').json()[0]
+        assert masked['cr_number'] is None and masked['name'] is None
+        assert monitor.get('/api/trial/subjects',params={'q':masked['screening_code']}).json()[0]['id']==sid

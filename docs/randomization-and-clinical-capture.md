@@ -32,3 +32,10 @@ Protocol v5 treatment arms, renal dose rules, endpoint definitions and the seven
 Medication previews do not create orders. Signed treatment/source references, actual drug supply and returned tablets remain separately attributable. Missing tests remain missing rather than being assumed normal or negative.
 
 Clinical capture references: NIMS protocol v5.0 and CRF v3.0, 14 August 2026; the 2025 Fourth International CMV Consensus (https://pmc.ncbi.nlm.nih.gov/articles/PMC12180710/); OVERT kidney-transplant randomized trial (https://pmc.ncbi.nlm.nih.gov/articles/PMC10125645/). These sources inform data capture; this owner-requested access change is documented separately above.
+
+
+### Registry CR lookup and enrollment handoff (18 November 2026)
+
+The randomization page searches the authenticated registry by CR number, name or study ID, including records not yet screened. It displays the exact CR alongside the study code and links registry-only or screened patients to the remaining enrollment steps. Opening enrollment keeps that patient's registry and screened-subject controls synchronized, restores that patient's recorded checklist, and anchors PCR scheduling to the registry's verified transplant date. No consent, eligibility, enrollment or allocation is created by searching. An unmatched CR leaves allocation disabled; it never selects the first enrolled patient as a fallback. The irreversible confirmation names the selected CR/study ID. Strict-role identity masking remains in force outside the owner-managed shared workspace.
+
+This update does not run a fresh-start reset or replace the locked allocation sequence. Current patient entries, accounts and prior allocations remain intact. Regression coverage starts with a new registry record and follows screening, eligibility, enrollment, explicit allocation and the same participant across PCR, pharmacy and patient course.

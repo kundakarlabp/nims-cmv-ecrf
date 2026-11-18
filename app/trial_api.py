@@ -165,15 +165,21 @@ def restricted_screening(subject_id:int,u:AuthContext=Depends(current),s:Session
 @router.get("/subjects")
 def subjects(q:str="",limit:int=50,before_id:int|None=None,u:AuthContext=Depends(current),s:Session=Depends(db)):
     limit=max(1,min(limit,200))
-    statement=select(TrialSubject).order_by(TrialSubject.id.desc())
+    # Join registry identity once so staff can find the same CR throughout the
+    # workflow. Preserve strict-role masking outside the owner-managed workspace.
+    restricted=u.role in {"microbiology","pharmacy","technician","monitor"} and not u.workspace_full_access
+    statement=select(TrialSubject,Patient).join(Patient,Patient.id==TrialSubject.patient_id).order_by(TrialSubject.id.desc())
     if before_id is not None:statement=statement.where(TrialSubject.id<before_id)
     if q.strip():
         term="%"+q.strip()+"%"
-        statement=statement.where(TrialSubject.study_code.ilike(term) |
-                                  TrialSubject.screening_code.ilike(term))
-    records=s.scalars(statement.limit(limit)).all()
-    return [subject_view(t) for t in records if (os.getenv("CLINICAL_DATA_ENABLED","false").lower()=="true"
-            or eligible_patient(s,t.patient_id))]
+        match=TrialSubject.study_code.ilike(term) | TrialSubject.screening_code.ilike(term)
+        if not restricted:match=match | Patient.cr_number.ilike(term) | Patient.name.ilike(term)
+        statement=statement.where(match)
+    records=s.execute(statement.limit(limit)).all()
+    return [dict(subject_view(t),patient_id=p.id,
+                 cr_number=None if restricted else p.cr_number,
+                 name=None if restricted else p.name) for t,p in records
+            if (os.getenv("CLINICAL_DATA_ENABLED","false").lower()=="true" or eligible_patient(s,t.patient_id))]
 
 @router.get("/subjects/{subject_id}")
 def subject(subject_id:int,u:AuthContext=Depends(current),s:Session=Depends(db)):
