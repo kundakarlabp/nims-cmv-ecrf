@@ -29,6 +29,7 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
    if(p==='/study_ui.js')return route.fulfill({contentType:'application/javascript',body:fs.readFileSync(path.join(base,'app/study_ui.js'),'utf8')});
    const method=route.request().method();let result={};
    if(p==='/api/patients')result=people;
+   else if(p==='/api/authentication-policy')result={password_only:true,shared_clinical_workspace:true};
    else if(/^\/api\/patients\/TEST-P-/.test(p))result={patient:people.find(x=>x.id===p.split('/')[3]),entries:[]};
    else if(p==='/api/trial/subjects')result=subjects;
    else if(p==='/api/trial/eligibility-schema')result={inclusion:{},exclusion:{}};
@@ -55,6 +56,8 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   });
   await page.goto('http://cmv-ui.test/');
   await page.waitForSelector('#tw-context-subject',{state:'attached'});
+  await page.waitForFunction(()=>window.passwordOnlyLogin===true);
+  assert.equal(await page.isVisible('#loginOtpLabel'),false);
   await page.evaluate(async()=>{
    $('workspace').classList.remove('hide');$('loginPanel').classList.add('hide');
    $('currentRole').textContent='nurse';applyRoleUI('nurse');await tab('study');
@@ -124,6 +127,15 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   assert.equal(await page.evaluate(()=>selected),'TEST-P-2');
   assert.equal(contextReads.length,previousReads);
   assert.equal(await page.isVisible('#tw-participant-context'),false);
+  await page.evaluate(()=>{
+   window.currentWorkspaceFullAccess=true;window.passwordOnlyLogin=true;
+   window.currentAdmin=false;window.currentPiAuthorized=false;
+   $('currentRole').textContent='pi';applyRoleUI('pi');
+  });
+  assert.equal(await page.locator('#tw-result-save').evaluate(el=>el.classList.contains('hide')),false);
+  assert.equal(await page.locator('#tw-dispense-save').evaluate(el=>el.classList.contains('hide')),false);
+  assert.equal(await page.locator('#btnstaff').evaluate(el=>el.classList.contains('hide')),true);
+  assert.equal(await page.locator('#tw-mfa-setup').evaluate(el=>el.closest('.study-card').classList.contains('hide')),true);
   assert.deepEqual(errors,[]);
   console.log('Real browser passed: scripts, patient identity, source-date autosave, cross-patient draft isolation, allocation persistence, mobile layout and blinded banner');
  }finally{await browser.close();}

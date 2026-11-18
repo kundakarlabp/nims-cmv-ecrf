@@ -23,6 +23,7 @@ from sqlalchemy.exc import IntegrityError
 from .main import AuthContext, current, db, audit, now, CLINICAL_MODE
 from .trial_models import RandomizationPlan, RandomizationSlot, TrialEligibility
 from .clinical_gate import owner_authorized
+from .workspace_policy import enabled as team_workspace
 
 router=APIRouter(prefix="/api/trial/randomization", tags=["randomization"])
 STRATA=("rATG:living","rATG:deceased","no_rATG:living","no_rATG:deceased")
@@ -110,11 +111,11 @@ def check_sequence(raw):
 @router.post("/sequence/lock")
 def lock_sequence(data:ImportSequence,u:AuthContext=Depends(current),
                   s:Session=Depends(db)):
-    if u.role!=CUSTODIAN_ROLE:
+    if u.role!=CUSTODIAN_ROLE and not (team_workspace() and (u.workspace_full_access or u.pi_authorized)):
         raise HTTPException(403,"Only an independent randomization custodian can lock a sealed sequence")
-    if not data.independent_sequence_attested:
+    if not data.independent_sequence_attested and not team_workspace():
         raise HTTPException(422,"Independent generation/signature must be attested")
-    if CLINICAL_MODE and not data.legacy_reconciliation_reference:
+    if CLINICAL_MODE and not team_workspace() and not data.legacy_reconciliation_reference:
         raise HTTPException(422,"Document reconciliation of prior worksheet allocations before locking a new official sequence")
     if s.scalar(select(RandomizationPlan.id).limit(1)) is not None:
         raise HTTPException(409,"Sequence permanently locked already; cannot replace or reseed")
@@ -146,8 +147,10 @@ def lock_sequence(data:ImportSequence,u:AuthContext=Depends(current),
               {"protocol_version":plan.protocol_version,"sequence_sha256":digest,
                "capacities":counts,"block_sizes":sizes,
                "signed_specification_reference":plan.signed_specification_reference,
-               "legacy_reconciliation_reference":data.legacy_reconciliation_reference},
-              "Independent, sealed sequence imported and permanently locked")
+               "legacy_reconciliation_reference":data.legacy_reconciliation_reference,
+               "independent_sequence_attested":data.independent_sequence_attested,
+               "allocation_management":"owner_managed" if team_workspace() else "independent_custodian"},
+              "Owner-managed sealed sequence locked" if team_workspace() else "Independent, sealed sequence imported and permanently locked")
         s.commit()
     except IntegrityError:
         s.rollback()
@@ -159,7 +162,7 @@ def lock_sequence(data:ImportSequence,u:AuthContext=Depends(current),
 class GenerateSequence(BaseModel):
     statistician_reference:str=Field(min_length=8,max_length=160)
     signed_specification_reference:str=Field(min_length=8,max_length=160)
-    independent_sequence_attested:Literal[True]
+    independent_sequence_attested:bool=True
     legacy_reconciliation_reference:str|None=Field(default=None,min_length=8,max_length=160)
     block_sizes:list[int]=Field(min_length=2,max_length=4)
 
@@ -167,8 +170,9 @@ class GenerateSequence(BaseModel):
 def generate_and_lock(data:GenerateSequence,u:AuthContext=Depends(current),s:Session=Depends(db)):
     # The separately authorized custodian acts personally. Never seed a live
     # sequence on deployment, or allow the eligibility investigator to generate.
-    if u.role!=CUSTODIAN_ROLE:raise HTTPException(403,'Independent custodian required')
-    if CLINICAL_MODE and not data.legacy_reconciliation_reference:
+    if u.role!=CUSTODIAN_ROLE and not (team_workspace() and (u.workspace_full_access or u.pi_authorized)):
+        raise HTTPException(403,'Sequence management permission required')
+    if CLINICAL_MODE and not team_workspace() and not data.legacy_reconciliation_reference:
         raise HTTPException(422,'Reconcile prior worksheet allocations before generating a new official sequence')
     sizes=sorted(set(data.block_sizes))
     if len(sizes)<2 or any(size not in {4,6,8,10} for size in sizes):
@@ -188,7 +192,7 @@ def generate_and_lock(data:GenerateSequence,u:AuthContext=Depends(current),s:Ses
     return lock_sequence(ImportSequence(protocol_version='5.0',
         statistician_reference=data.statistician_reference,
         signed_specification_reference=data.signed_specification_reference,
-        independent_sequence_attested=True,legacy_reconciliation_reference=data.legacy_reconciliation_reference,
+        independent_sequence_attested=data.independent_sequence_attested,legacy_reconciliation_reference=data.legacy_reconciliation_reference,
         sequence_sha256=digest,entries=rows),u,s)
 
 def plan_enabled(plan):
@@ -207,6 +211,8 @@ def readiness(u:AuthContext=Depends(current),s:Session=Depends(db)):
             "planned_randomizations":slots,"randomized":allocated,
             "sequence_sha256":plan.sequence_sha256 if plan else None,
             "activation_ready":enabled,"clinical_mode":CLINICAL_MODE,
+            "custodian_required":not team_workspace(),
+            "allocation_management":"owner_managed" if team_workspace() else "independent_custodian",
             "note":"Counts do not reveal unassigned arms, block order or future sequence."}
 
 def allocation_for(s,subject_id):
@@ -319,7 +325,7 @@ def read_allocation(subject_id:int,u:AuthContext=Depends(current),
 def assigned_group_counts(u:AuthContext=Depends(current),s:Session=Depends(db)):
     # Even observed aggregate group totals can reveal future assignments near the
     # end of a permuted block. Conceal them from all recruitment/dispensing staff.
-    if u.role!="randomization_custodian":
+    if u.role!="randomization_custodian" and not (team_workspace() and u.workspace_full_access):
         raise HTTPException(403,"Arm totals concealed from the enrolling clinical team")
     rows=s.scalars(select(RandomizationSlot).where(
         RandomizationSlot.subject_id.is_not(None))).all()

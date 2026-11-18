@@ -73,6 +73,32 @@ with SessionLocal() as s:
             except RuntimeError:pass
             else:raise AssertionError('Staging account mutations were not frozen during migration')
             print('PASS: real clinical schema, named login/MFA migration, encrypted dump, isolated PostgreSQL restore, external SSH escrow recovery, no participant/session import.')
+            credentials=m.sql(dc,"SELECT username,password_hash FROM users ORDER BY username;")
+            m.owner_workspace_update(dc)
+            assert m.sql(dc,'SELECT count(*) FROM patients;').strip()==b'0'
+            assert m.sql(dc,'SELECT count(*) FROM trial_subjects;').strip()==b'0'
+            assert m.sql(dc,'SELECT count(*) FROM trial_randomization_plans;').strip()==b'1'
+            assert m.sql(dc,'SELECT count(*) FROM trial_randomization_slots WHERE subject_id IS NOT NULL;').strip()==b'0'
+            assert m.sql(dc,'SELECT count(*) FROM trial_user_totp;').strip()==b'0'
+            assert credentials==m.sql(dc,"SELECT username,password_hash FROM users ORDER BY username;")
+            # Real HTTP login against the password-only clinical container.
+            login_check="""import urllib.request,json
+for username,password in [('ci-investigator','DisposableCIOnlyLongPassword123!'),('ci-nurse','DisposableCIOnlyNursePassword123!')]:
+ req=urllib.request.Request('http://127.0.0.1:8000/api/login',data=json.dumps({'username':username,'password':password}).encode(),headers={'Content-Type':'application/json'})
+ with urllib.request.urlopen(req) as response:result=json.load(response)
+ assert result['password_only'] is True and result['workspace_full_access'] is True
+ assert result['mfa_setup_required'] is False and result['mfa_enabled'] is False
+print('PASS: named owner and nurse logged in with password only; no OTP or enrollment.')
+"""
+            m.run(m.clinical(dc)+['exec','-T','api','python','-c',login_check])
+            # A fresh entry after the reset must survive future maintenance,
+            # even if the filesystem completion marker disappears.
+            m.sql(dc,"INSERT INTO patients(id,cr_number,name,created_by,revision,created_at) SELECT 'CI-POST-RESET','TEST-AFTER-RESET','Synthetic after reset',id,1,now() FROM users WHERE pi_authorized;")
+            (m.PRIVATE/'fresh-start-20261118-v1.complete').unlink()
+            m.owner_workspace_update(dc)
+            assert m.sql(dc,"SELECT count(*) FROM patients WHERE id='CI-POST-RESET';").strip()==b'1'
+            assert m.sql(dc,"SELECT count(*) FROM audit_events WHERE action='owner_fresh_start_reset';").strip()==b'1'
+            print('PASS: real one-time training reset, preserved password hashes, permanent fresh sequence, and crash-safe repeat maintenance.')
         finally:
             m.run(m.clinical(dc)+['down','-v'],check=False)
             (ROOT/'.env').unlink(missing_ok=True)

@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 import pytest
+from sqlalchemy import select
 from fastapi.testclient import TestClient
 
 # DB isolated; a new test process uses this disposable file.
@@ -27,6 +28,71 @@ def test_auth_required():
     with TestClient(app) as c:
         assert c.get('/api/patients').status_code==401
         assert c.post('/api/login',json={'username':'testadmin','password':'bad'}).status_code==401
+
+
+def test_password_team_workspace_keeps_authentication_and_removes_clinical_role_handoffs(monkeypatch):
+    from app.main import Audit
+    from app.trial_models import UserTotp
+    import pyotp
+    from cryptography.fernet import Fernet
+    monkeypatch.setenv('TEAM_WORKSPACE_ENABLED','true')
+    monkeypatch.setenv('PASSWORD_ONLY_LOGIN','true')
+    monkeypatch.setenv('MFA_REQUIRED','false')
+    monkeypatch.setenv('RANDOMIZATION_FERNET_KEY',Fernet.generate_key().decode())
+    with SessionLocal() as s:
+        owner=s.scalar(select(User).where(User.username=='testadmin'))
+        owner.pi_authorized=True
+        s.add(Audit(actor_id=owner.id,action='owner_fresh_start_reset',entity_type='workspace_policy',
+            entity_id='fresh-start-20261118-v1',reason='Synthetic test reset fixture'))
+        s.commit()
+    with TestClient(app) as admin:
+        h=auth(admin);pid,sid=setup_synthetic_trial(admin,h)
+        assert admin.post('/api/users',headers=h,json={'username':'sharednurse',
+            'display_name':'Synthetic named nurse','role':'nurse',
+            'password':'NamedNursePassword123!'}).status_code==200
+    with SessionLocal() as s:
+        nurse=s.scalar(select(User).where(User.username=='sharednurse'))
+        s.add(UserTotp(user_id=nurse.id,secret=pyotp.random_base32(),enabled=True));s.commit()
+    with TestClient(app) as nurse:
+        assert nurse.get('/api/patients').status_code==401
+        bad=nurse.post('/api/login',json={'username':'sharednurse','password':'wrong'})
+        assert bad.status_code==401
+        h=auth(nurse,'sharednurse','NamedNursePassword123!')  # No OTP, even for an existing TOTP account.
+        assert nurse.get('/api/me').json()['role']=='nurse'
+        assert nurse.post('/api/users',headers=h,json={'username':'forbiddenadmin',
+            'display_name':'Synthetic forbidden escalation','role':'admin',
+            'password':'ForbiddenEscalation123!'}).status_code==403
+        r=nurse.post(f'/api/trial/subjects/{sid}/enroll',headers=h,json={
+            'enrolled_on':'2026-10-03','pcr_anchor_on':'2026-10-01',
+            'pcr_anchor_basis':'transplant_date','protocol_reference':'protocol-v5',
+            'reviewed_eligibility_and_consent':True,'approved_visit_anchor':True})
+        assert r.status_code==200,r.text
+        from app.workspace_setup import initialize
+        assert initialize()['created'] is True
+        assert initialize()['created'] is False  # Never regenerate a plan.
+        allocation=nurse.post(f'/api/trial/randomization/subjects/{sid}/assign',headers=h,json={
+            'investigator_confirmation':True,'stratification_verified':True,
+            'signed_randomization_source_ref':'Named account dashboard request'})
+        assert allocation.status_code==200,allocation.text
+        assert allocation.json()['assigned_arm_mg'] in ('450','900')
+        assert nurse.get('/api/trial/randomization/readiness').json()['custodian_required'] is False
+        lot=nurse.post('/api/trial/pharmacy/lots',headers=h,json={
+            'lot_number':'TEST-LOT-TEAM','expiry_on':'2027-10-01',
+            'received_on':'2026-10-01','strength_mg':450,'quantity_received':100})
+        assert lot.status_code==200,lot.text
+        assert nurse.post(f'/api/trial/randomization/subjects/{sid}/assign',headers=h,json={
+            'investigator_confirmation':True,'stratification_verified':True,
+            'signed_randomization_source_ref':'Second request prohibited'}).status_code==409
+
+
+def test_team_mode_waits_for_reset_before_accepting_new_clinical_writes(monkeypatch):
+    monkeypatch.setenv('TEAM_WORKSPACE_ENABLED','true')
+    monkeypatch.setenv('PASSWORD_ONLY_LOGIN','true')
+    with TestClient(app) as c:
+        h=auth(c)
+        response=c.post('/api/patients',headers=h,json={'name':'Synthetic protected',
+            'cr_number':'TEST-PENDING-RESET'})
+        assert response.status_code==503 and 'fresh start' in response.text.lower()
 
 def test_patient_entry_audit_conflict_and_csrf():
     with TestClient(app) as c:

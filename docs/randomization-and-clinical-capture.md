@@ -1,132 +1,34 @@
-# NIMS CMV: allocation and longitudinal capture
+# Active workspace configuration — 18 November 2026
 
-Implementation specification, 17 November 2026. Protocol v5.0 and CRF v3.0,
-14 August 2026, govern the trial. This document is not a signed randomization
-specification, ethics amendment or authorization to alter an existing assignment.
+The owner confirmed that the 15 filled rows in the previous randomization workbook were training examples and explicitly requested their removal, a fresh start, username/password-only login, and removal of the separate custodian requirement.
 
-## Existing worksheet review
+## Current access
 
-The Drive workbook `NIMS_CMV_Advanced_Randomization.xlsx` has Randomization,
-Audit_Log and CTRI_Export tabs, 15 filled allocation rows, rATG, preferred/final
-arms and running counts. Its formula uses an 80% biased coin toward the preferred
-arm, with a deterministic pseudo-random seed and volatile NOW timestamps. This
-is not the protocol v5 four-stratum variable-permuted-block method. The export
-contains a broken reference and the running counts have gaps/inconsistencies.
-The worksheet alone cannot establish whether these were real enrollments,
-training examples, or formally authorized historic assignments. No identifying
-rows, seed, allocation sequence or workbook bytes belong in Git or CI.
+- Active named accounts sign in with their existing username and password. MFA enrollment and OTP entry are disabled by the explicit owner policy. Existing passwords are preserved.
+- Named study accounts share clinical workspace access: screening, eligibility recording, enrollment, randomization, laboratory entry, dispensing, correction and source review. Reviews retain the actual account identity, including reviews by an entry author.
+- User creation, privileged account changes and account disabling remain controlled by the original administrator/investigator permissions. Existing 90-day staff authorization remains available.
+- Consent, medical eligibility, data validation, permanent allocation, stock conservation, audit history and encrypted recovery remain part of the application. They do not require a separate custodian account.
 
-Keep this workbook unchanged as a restricted source. Before locking a new plan,
-the PI and independent custodian must reconcile those rows with signed consent,
-eligibility, transplant/donor/induction sources and the actual treatment delivered.
-If they are real enrollments, preserve their assignments and resolve the
-protocol-version/analysis and migration plan with the study statistician; never
-rerandomize them or silently count them as new v5 allocations. If they are test
-examples, document that conclusion. The clinical lock API requires a reference
-to this reconciliation. It does not certify that the reconciliation occurred.
+## Fresh start
 
-## Randomization procedure
+The deployment performs one fixed reset identified as `fresh-start-20261118-v1`. It first creates an encrypted, restore-tested recovery archive, stops clinical writes, clears training patient/study records, old allocations and MFA enrollment records, preserves named accounts/password hashes and access/invitation records, and logs the owner's instruction.
 
-1. Register the source patient, screen consecutively, record consent and complete
-   the attributed inclusion/exclusion checklist. Do not allocate an ineligible
-   patient. Confirm adult solitary-kidney D+/R+, stable oral intake/follow-up,
-   CBC thresholds, no dialysis/CrCl below 10, and all other protocol exclusions.
-2. PI verifies enrollment, transplantation-based PCR anchor and initiation within
-   10 days. Determine rATG yes/no and living/deceased donor from source records
-   before allocation. Keep living related/unrelated detail in screening data.
-3. Appoint a named independent sequence custodian who does not determine
-   eligibility. The custodian signs and locks the final protocol-specific
-   specification, including prior-allocation reconciliation, before use.
-4. Use concealed computer-generated 1:1 variable permuted blocks independently
-   in all four strata. A reasonable proposed size set is 4, 6 and 8, to be
-   finalized by the independent statistician. Sizes/order are restricted to the
-   custodian; clinical staff never see future assignments or block positions.
-   Do not copy the workbook's biased-coin formulas or reuse its exposed seed.
-5. Custodian imports an independently checked signed package, or personally
-   generates and permanently locks the sequence in the restricted module.
-   The application uses operating-system randomness, validates balanced complete
-   blocks, encrypts future arms and fingerprints the locked plan. The trial has
-   a global ceiling of 344; within-stratum balance does not guarantee exactly
-   172 patients per arm at an arbitrary stopping point.
-6. The PI opens the enrolled participant directly from Enrollment, verifies
-   consent/eligibility/stratum and records the signed randomization source.
-   The server atomically consumes the next concealed slot in that stratum.
-   Repeated/concurrent requests cannot allocate a second arm to that participant.
-   The assignment, actor, timestamp, source and plan fingerprint persist.
-7. Show the original nominal allocation and code throughout the selected
-   participant's workspace for PI, consultant, scientist, nurse, PG and pharmacy.
-   Endpoint monitors and laboratory roles do not receive the nominal arm.
-   Treatment remains open label; endpoint adjudication remains blinded.
-8. Preserve allocation for ITT regardless of dose change, crossover, withdrawal,
-   toxicity, infection or graft dysfunction. Record actual exposure separately.
-   Corrections require attribution/reason; no manual arm editing or reseeding.
-9. If electronic allocation is unavailable, use only an independently controlled
-   contingency process consistent with protocol §7.2. Do not run a second
-   parallel sequence or reconcile two independent assignments after the fact.
+A database transaction marker prevents repeated deletion, including after a process interruption or loss of the filesystem marker. New clinical records entered after this reset survive subsequent deployments and maintenance. Existing account/security audit records are preserved. Historical encrypted recovery copies are retained privately.
 
-## Dosing and follow-up
+The previous Drive workbook has been cleared across Randomization, Audit_Log and CTRI_Export. Its old seed and biased-coin allocation formulas were removed with the training content. It is an empty legacy template; the dashboard is the authoritative allocation system.
 
-Nominal 450 or 900 mg OD is an allocation, not an automatic medication order.
-The signed prescription uses Cockcroft–Gault CrCl and the protocol safety ceiling:
+## Owner-managed randomization
 
-| CrCl, mL/min | 450 nominal arm | 900 nominal arm |
-|---|---|---|
-| ≥60 | 450 mg OD | 900 mg OD |
-| 40–59 | 450 mg OD | 450 mg OD |
-| 25–39 | 450 mg every 48 hours | 450 mg every 48 hours |
-| 10–24 | 450 mg twice weekly | 450 mg twice weekly |
-| <10 or hemodialysis | Protocol tablets withheld; clinician manages | Same |
+The fresh sequence is generated automatically using operating-system randomness, with 1:1 variable permuted blocks of 4, 6 and 8 in the four protocol strata: rATG yes/no × living/deceased donor. Future assignments are encrypted and are never displayed. Each stratum has enough positions for the full study; a global ceiling limits enrollment to 344 allocations. There is no forced last-minute balancing to select a desired arm.
 
-The assigned arm never changes when renal function causes the regimens to
-converge. eGFR is a graft outcome and does not replace CG CrCl for this dosing.
-Continue the approved three-month strategy and seven PCR assessments at months
-1, 2, 3, 4, 6, 9, 12 after transplantation; extra testing remains clinically
-indicated. No new mandatory research investigations are introduced here.
+An enrolled participant with recorded consent and complete medical eligibility can be randomized directly by a named study account. The next stratum-specific assignment is consumed atomically and stored with the study code, allocation code, account and timestamp. Repeat or concurrent requests cannot allocate another arm to the same participant. The nominal arm remains visible throughout that participant's clinical workspace and remains unchanged when the actual renal-adjusted dose changes.
 
-## Capture workflow
+**This owner-managed custody procedure and shared access, including access by accounts originally labelled monitor, depart from protocol v5's independent-custodian and role-based blinding controls.** The implementation records the owner's configuration instruction; it does not certify an institutional or ethics-approved protocol amendment. Independent review and blinded access can be reinstated later without changing existing allocations.
 
-| Record | Capture |
-|---|---|
-| A/B and C | Screening/consent, complete eligibility, measured CBC/renal baseline, source references; baseline can be entered before arm release |
-| P transplant background | Admission/discharge, kidney disease, prior transplant/dialysis, ABO/DSA/PRA when available, desensitization, induction and early dialysis |
-| M medication | One dated regimen/administration per drug/change; prescribed versus administered versus patient-reported versus withheld; dose per administration, unit, frequency, route, AM/PM detail, source, indication, renal assessment and change reason |
-| N laboratory | Dated inpatient, pre-randomization, VGCV-initiation and follow-up samples; creatinine, CG CrCl, eGFR, weight, dialysis, CBC/ANC/ALC/platelets, available chemistry/LFT and tacrolimus trough with timing |
-| D and pharmacy | Adherence, interruptions, signed orders, linked issue/return slips, lot/expiry and pill counts; do not substitute prescribed dose for tablets actually issued or taken |
-| E and PCR | Seven visit forms, source-linked specimen/results and reviewed clinical outcomes; an extra lab panel does not mark a PCR or visit complete |
-| O infection | Separate episode per onset/recurrence; suspected/clinical/microbiologic certainty, syndrome, specimen/organism/resistance, evidence, dated treatment/source control, hospital/ICU/outcome, linked immunosuppression/VGCV changes and AE/CMV records |
-| G/H/I/J/L | CMV event and blinded adjudication, AE/SAE, rejection/graft/outcomes, deviations and final follow-up remain in their approved forms |
+## Clinical capture
 
-MMF and enteric-coated mycophenolate sodium, and immediate/prolonged-release
-tacrolimus, remain distinct formulations. Do not infer dose equivalence. Use
-separate rows or explicit AM/PM source detail for unequal doses. Capture induction
-and rejection pulses by date/dose and link cumulative summaries to source.
-Unknown values stay absent; a missing record does not establish no event.
-Clinical dates, positivity/units, independent review status and revisions remain
-visible in the paginated patient course. M–P are supplementary source-detail
-logs supporting existing protocol variables, not a new endpoint or study arm.
+Protocol v5 treatment arms, renal dose rules, endpoint definitions and the seven PCR timepoints at months 1, 2, 3, 4, 6, 9 and 12 after transplantation remain unchanged. The baseline and scheduled CRFs are complemented by dated medication exposure, laboratory, intercurrent infection and transplant-admission logs. MMF and mycophenolate sodium, prescribed and administered doses, CG CrCl and eGFR, and suspected versus confirmed infections remain distinct.
 
-## Evidence informing capture, not changing this protocol
+Medication previews do not create orders. Signed treatment/source references, actual drug supply and returned tablets remain separately attributable. Missing tests remain missing rather than being assumed normal or negative.
 
-- NIMS full protocol v5.0 §§5, 7–12, 15–18 and CRF v3.0 A–L (14 August 2026).
-- Kotton et al., Fourth International CMV Consensus, 2025:
-  https://pmc.ncbi.nlm.nih.gov/articles/PMC12180710/
-  Supports consistent virology, actual antiviral exposure, non-normalized renal
-  function for dosing, immunosuppression and hematologic monitoring. Its general
-  care recommendations do not replace the approved trial surveillance schedule.
-- Reischig et al., OVERT randomized kidney-transplant trial, JASN 2023:
-  https://pmc.ncbi.nlm.nih.gov/articles/PMC10125645/
-  Illustrates documenting background immunosuppression, rejection, renal/graft
-  outcomes, other infections, neutropenia and antiviral exposure. Its comparison
-  groups, blocks and monitoring schedule are not imported into this trial.
-
-## Release and remaining human actions
-
-No schema/table change is needed: supplementary forms use existing attributed,
-revisioned CRF records/drafts/reviews. Existing clinical data, assignments and
-backups remain intact. Verify SQLite/PostgreSQL behavior, actual browser patient
-switches, blocked unauthorized roles and Docker/clinical recovery before release.
-Release through reviewed GitHub code and the existing VM pull mechanism.
-
-Clinical data entry can remain active while the independent sequence is pending.
-Actual custodial nomination, signed prior-record reconciliation and signed final
-specification are human study actions; software cannot attest them for the team.
+Clinical capture references: NIMS protocol v5.0 and CRF v3.0, 14 August 2026; the 2025 Fourth International CMV Consensus (https://pmc.ncbi.nlm.nih.gov/articles/PMC12180710/); OVERT kidney-transplant randomized trial (https://pmc.ncbi.nlm.nih.gov/articles/PMC10125645/). These sources inform data capture; this owner-requested access change is documented separately above.

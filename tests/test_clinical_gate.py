@@ -106,6 +106,8 @@ def test_explicit_owner_activation_keeps_technical_gates_and_does_not_claim_inst
         SITE_DOMAIN=authorization['site_domain'])
     assert startup_deficiencies(env,at)==[]
     assert startup_deficiencies(dict(env,MFA_REQUIRED='false'),at)==['mandatory_MFA_disabled']
+    assert startup_deficiencies(dict(env,MFA_REQUIRED='false',
+        TEAM_WORKSPACE_ENABLED='true',PASSWORD_ONLY_LOGIN='true'),at)==[]
     assert 'dedicated_clinical_database_missing' in startup_deficiencies(dict(env,DB_NAME='nims_ecrf'),at)
     assert startup_deficiencies(dict(env,SITE_DOMAIN='another.sslip.io'),at)
     assert startup_deficiencies(dict(env,CLINICAL_GOLIVE_SHA256='0'*64),at)

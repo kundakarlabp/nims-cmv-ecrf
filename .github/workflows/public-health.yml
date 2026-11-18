@@ -20,7 +20,8 @@ jobs:
           class NoRedirect(urllib.request.HTTPRedirectHandler):
               def redirect_request(self,*args,**kwargs):return None
           fields=('ok','service','database','app_commit','build_fingerprint',
-                  'clinical_entry_available','clinical_transition','clinical_failed_step')
+                  'clinical_entry_available','clinical_transition','clinical_failed_step',
+                  'authentication_mode','shared_clinical_workspace','randomization_ready','fresh_start_completed')
           request=urllib.request.Request('https://152-70-77-77.sslip.io/readyz',
               headers={'Accept':'application/json','Cache-Control':'no-cache'})
           try:

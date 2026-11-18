@@ -316,7 +316,7 @@ def review_crf(entry_id:int,data:CRFReviewIn,
     if not row:raise HTTPException(404)
     allow_read(u,row.section);role(u,REVIEWERS)
     subject=find_subject(s,row.subject_id)
-    if u.user_id in (row.created_by,row.updated_by):
+    if u.user_id in (row.created_by,row.updated_by) and not u.workspace_full_access:
         raise HTTPException(403,"Independent review required")
     if row.revision!=data.expected_revision:raise HTTPException(409,"Stale revision")
     if review_state(s,row)!="pending":raise HTTPException(409,"Revision already reviewed")
@@ -337,7 +337,7 @@ def crf_review_queue(u:AuthContext=Depends(current),s:Session=Depends(db)):
     return [visible_entry(e,review_state(s,e)) for e in rows
             if (u.role in FORM_EDITOR[e.section] or ('pi' in FORM_EDITOR[e.section] and u.pi_authorized) or
                (u.role=="monitor" and e.section in BLINDED_FORM_SECTIONS))
-              and u.user_id not in (e.created_by,e.updated_by)]
+              and (u.workspace_full_access or u.user_id not in (e.created_by,e.updated_by))]
 
 @router.get("/completeness")
 def crf_completeness(u:AuthContext=Depends(current),s:Session=Depends(db)):

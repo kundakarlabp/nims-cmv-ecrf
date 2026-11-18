@@ -36,7 +36,7 @@ function panel(id,title,html){
  var page=document.createElement('div');
  page.id=id;page.className='panel hide';
  page.style.cssText='grid-column:2;min-width:0;padding:22px;';
- page.innerHTML='<h2>'+title+'</h2><p class="hint">NIMS CMV trial · enter source-verified records and submit for independent review.</p>'+html;
+ page.innerHTML='<h2>'+title+'</h2><p class="hint">NIMS CMV trial · enter source-verified records and submit for source review.</p>'+html;
  root.appendChild(page);
  var button=document.createElement('button');button.id='btn'+id;
  button.textContent=title;button.onclick=()=>{void tab(id)};
@@ -74,7 +74,7 @@ panel('study','Enrollment',
  field('CBC date','tw-cbc-date','date')+field('Investigator review date','tw-review-on','date')+
  field('Signed eligibility source/reference','tw-source')+
  btn('Validate complete eligibility checklist','tw-checklist-save')+'</section>'+
- '<section class="study-card"><h3>3 · PI enrollment verification</h3>'+
+ '<section class="study-card"><h3>3 · Enrollment verification</h3>'+
  choose('Screened subject','tw-screened',[])+field('Enrollment date','tw-enroll-date','date')+
  field('Approved PCR anchor date','tw-anchor-date','date')+
  choose('Protocol PCR anchor','tw-anchor-basis',[['transplant_date','Transplant date only (protocol v5.0)']])+
@@ -100,7 +100,7 @@ panel('pcr','CMV PCR',
  choose('Laboratory QC','tw-qc',[['pass','Pass'],['fail','Fail']])+
  field('Correction reason (if editing result)','tw-result-reason')+
  btn('Submit lab result for verification','tw-result-save')+'</section></div>'+
- '<section class="study-card"><h3>Independent data review</h3>'+
+ '<section class="study-card"><h3>Source review</h3>'+
  choose('Submitted result','tw-verify-id',[])+field('Signed source review reason','tw-review-reason')+
  btn('Verify result','tw-verify-save')+'</section><div id="tw-pcr-status" class="status hide"></div>'
 );
@@ -139,15 +139,15 @@ panel('crf','Structured eCRF and clinical logs',
  '<div id="tw-crf-draft-status" class="status">No draft loaded.</div>'+
  '<label>Correction reason (required only when revising submitted form)<input id="tw-crf-reason"></label>'+
  btn('Save private working draft','tw-crf-save')+' '+
- btn('Submit form for independent review','tw-crf-submit')+
+ btn('Submit form for source review','tw-crf-submit')+
  '<div class="study-card"><h3>Submitted forms and review states</h3>'+
  '<div id="tw-crf-entries"></div></div>'+
  '<div id="tw-crf-status" class="status hide"></div>'
 );
 panel('randomization','Concealed randomization',
- '<div class="study-card"><h3>Protocol v5.0 · independent 1:1 assignment</h3>'+
+ '<div class="study-card"><h3>1:1 concealed assignment</h3>'+
  '<p class="hint">Variable permuted blocks stratified by rATG (yes/no) × living/deceased donor. '+
- 'The next assignment remains concealed until PI-approved enrollment and eligibility; no manual group selection, reuse or rerandomization.</p>'+
+ 'The next assignment is released after enrollment and recorded eligibility. Each participant receives one permanent allocation.</p>'+
  '<div id="tw-rand-overview" class="hint">Checking signed sequence readiness…</div></div>'+
  '<div class="study-card" id="tw-rand-assign-panel"><h3>Release next concealed allocation</h3>'+
  choose('Enrolled and eligible subject','tw-rand-subject',[])+
@@ -195,7 +195,7 @@ panel('staff','Staff access',
  btn('Generate named invitations for this batch','tw-bulk-save')+
  '<pre id="tw-bulk-result" class="status hide" style="white-space:pre-wrap;overflow:auto"></pre></div>'+
  '<div class="study-card"><h3>Named staff · 90-day authorization</h3><p class="hint">Each person keeps their own password. Access expires after 90 days, with investigator-controlled renewal or immediate revocation.</p><div id="tw-accounts"></div></div>'+
- '<p class="hint">Each person activates their account and chooses a private password. Never share a common account. MFA and permission review remain production gates.</p>'+
+ '<p class="hint">Each person activates their account and chooses a private password. Never share a common account. Use your individual username and password. Account access remains administrator-controlled.</p>'+
  '<div id="tw-staff-status" class="status hide"></div>'
 );
 var css=document.createElement('style');
@@ -230,7 +230,14 @@ function setRole(){
   ['tw-stock-save',['pharmacy']],['tw-auth-save',['pi','consultant']],
   ['tw-dispense-save',['pharmacy']],['tw-return-save',['pharmacy']],
   ['tw-invite-save',['pi','admin']]
- ])$(id).classList.toggle('hide',!roles.includes(r));
+ ])$(id).classList.toggle('hide',!roles.includes(r)&&!window.currentWorkspaceFullAccess);
+ if(window.currentWorkspaceFullAccess){
+  $('btnstaff').classList.toggle('hide',!window.currentAdmin&&!window.currentPiAuthorized);
+  const option=Array.from($('tw-role').options).find(o=>o.value==='randomization_custodian');
+  if(option){option.disabled=true;option.hidden=true;}
+ }
+ $('tw-mfa-setup').closest('.study-card').classList.toggle('hide',!!window.passwordOnlyLogin);
+ $('tw-password-otp').parentElement.classList.toggle('hide',!!window.passwordOnlyLogin);
 }
 var originalApply=applyRoleUI;
 applyRoleUI=function(role){originalApply(role);setRole();};
@@ -354,7 +361,7 @@ $('tw-enroll-save').onclick=()=>{void task('tw-status',async()=>{
   enrolled_on:value('tw-enroll-date'),pcr_anchor_on:value('tw-anchor-date'),
   pcr_anchor_basis:value('tw-anchor-basis'),protocol_reference:value('tw-protocol'),
   reviewed_eligibility_and_consent:$('tw-pi-consent').checked,approved_visit_anchor:$('tw-pi-anchor').checked})});
- notify('tw-status',r.subject.study_code+' enrolled; seven coded PCR orders generated. Obtain independent randomization.');
+ notify('tw-status',r.subject.study_code+' enrolled; seven coded PCR orders generated. Continue to randomization.');
  await loadSubjects();
  await selectParticipantSubject(r.subject.id);
 });};
@@ -782,7 +789,7 @@ $('tw-crf-save').onclick=()=>{void task('tw-crf-status',async()=>{
 $('tw-crf-submit').onclick=()=>{void task('tw-crf-status',async()=>{
  await crfSaveDraft();
  const snapshot=crfCurrentData();
- if(!currentCrfEntry&&!confirm('Submit this CRF form for independent verification?'))return;
+ if(!currentCrfEntry&&!confirm('Submit this CRF form for source verification?'))return;
  const isCorrection=!!currentCrfEntry;
  const body=isCorrection?{
     occurred_on:snapshot.occurred_on,payload:snapshot.payload,
@@ -793,7 +800,7 @@ $('tw-crf-submit').onclick=()=>{void task('tw-crf-status',async()=>{
     '/api/trial/crf/subjects/'+n('tw-crf-subject')+'/entries';
  const result=await api(url,{method:isCorrection?'PUT':'POST',body:JSON.stringify(body)});
  notify('tw-crf-status',(isCorrection?'CRF correction':'CRF entry')+
-  ' submitted, revision '+result.revision+' · independent review pending');
+  ' submitted, revision '+result.revision+' · source review pending');
  if(crfDraftRevision!==null){
   try{await api('/api/trial/crf/subjects/'+n('tw-crf-subject')+
      '/drafts/'+encodeURIComponent(value('tw-crf-section'))+
@@ -823,7 +830,7 @@ $('tw-crf-entries').addEventListener('click',e=>{
     ' · correction reason required · no change until explicit submission';
   }else{
    if(row.review_status!=='pending')throw Error('This revision has already been reviewed');
-   const reason=prompt('Reason for independent CRF review (minimum 8 characters):');
+   const reason=prompt('Reason for CRF source review (minimum 8 characters):');
    if(!reason||reason.trim().length<8)return;
    const decision=confirm('Verify this record? Select Cancel to request correction.')?
      'verified':'needs_correction';
@@ -929,8 +936,11 @@ async function populateCrfLinkedIdentifiers(){
 let lockedSequenceFile=null;
 async function loadRandomization(){
  const role=$('currentRole').textContent.trim();
- const isCustodian=role==='randomization_custodian';
- $('tw-rand-assign-panel').classList.toggle('hide',role!=='pi');
+ const shared=!!window.currentWorkspaceFullAccess;
+ const isCustodian=role==='randomization_custodian'&&!shared;
+ $('tw-rand-assign-panel').classList.toggle('hide',role!=='pi'&&!shared);
+ $('tw-rand-source').parentElement.classList.toggle('hide',shared);
+ $('tw-rand-eligibility-confirm').parentElement.classList.toggle('hide',shared);
  $('tw-rand-custodian-panel').classList.toggle('hide',!isCustodian);
  $('tw-rand-groups-panel').classList.toggle('hide',!isCustodian);
  if(!isCustodian){
@@ -939,6 +949,7 @@ async function loadRandomization(){
  }
  const r=await api('/api/trial/randomization/readiness');
  $('tw-rand-overview').textContent=
+  (r.allocation_management==='owner_managed'?'Owner-managed allocation · no separate custodian approval. ':'')+
   'Sequence: '+(r.sequence_locked?'locked · SHA-256 '+r.sequence_sha256:'not loaded')+
   ' | Reserved positions: '+r.planned_randomizations+
   ' | Randomized: '+r.randomized+
@@ -971,9 +982,9 @@ $('tw-rand-subject').onchange=()=>{void task('tw-rand-status',loadRandSubject);}
 $('tw-rand-assign').onclick=()=>{void task('tw-rand-status',async()=>{
  const sid=n('tw-rand-subject');
  if(!sid)throw Error('Select an enrolled participant');
- if(!$('tw-rand-eligibility-confirm').checked)
+ if(!window.currentWorkspaceFullAccess&&!$('tw-rand-eligibility-confirm').checked)
   throw Error('Check the signed eligibility/stratum confirmation before requesting an allocation');
- const source=value('tw-rand-source');
+ const source=window.currentWorkspaceFullAccess?'Named account requested allocation in the dashboard':value('tw-rand-source');
  if(source.length<8)throw Error('Enter signed source reference (at least 8 characters)');
  if(!confirm('Permanently allocate the NEXT concealed assignment in the approved stratum? '+
       'You cannot select or undo this treatment arm.'))return;
