@@ -50,16 +50,16 @@ panel('study','Enrollment',
  choose('Registry record','tw-patient',[])+field('Screening date','tw-screen-date','date')+
  field('Informed consent signed','tw-consent-date','date')+
  field('Signed ICF version','tw-icf')+field('Signed PIS version','tw-pis')+
- choose('Consent language','tw-consent-language',[['English','English'],['Telugu','Telugu'],['Hindi','Hindi']])+
+ choose('Consent language','tw-consent-language',[['','Select recorded language'],['English','English'],['Telugu','Telugu'],['Hindi','Hindi']])+
  field('Consent obtained by','tw-consent-obtained')+
  field('Signed consent document/source reference','tw-consent-source')+
  field('Participant initials (restricted)','tw-initials')+
  field('Age at transplant (years)','tw-screen-age','number')+
  choose('Sex (source record)','tw-sex',[['','Not recorded'],['female','Female'],['male','Male'],['other','Other']])+
- choose('Donor CMV IgG','tw-digg',[['positive','Positive'],['negative','Negative'],['unknown','Unknown']])+
- choose('Recipient CMV IgG','tw-rigg',[['positive','Positive'],['negative','Negative'],['unknown','Unknown']])+
- choose('Donor type','tw-donor',[['living','Living'],['deceased','Deceased']])+
- choose('Donor relationship','tw-relationship',[['living_related','Living related'],
+ choose('Donor CMV IgG','tw-digg',[['','Select verified result'],['positive','Positive'],['negative','Negative'],['unknown','Unknown / not available']])+
+ choose('Recipient CMV IgG','tw-rigg',[['','Select verified result'],['positive','Positive'],['negative','Negative'],['unknown','Unknown / not available']])+
+ choose('Donor type','tw-donor',[['','Select verified donor type'],['living','Living'],['deceased','Deceased']])+
+ choose('Donor relationship','tw-relationship',[['','Select verified relationship'],['living_related','Living related'],
     ['living_unrelated','Living unrelated'],['deceased','Deceased']])+
  choose('rATG induction','tw-ratg',[['','Undocumented'],['true','Yes'],['false','No']])+
  '<label><input id="tw-eligible" type="checkbox" style="width:auto"> Signed protocol eligibility reviewed</label>'+
@@ -96,10 +96,10 @@ panel('pcr','CMV PCR',
  '</section><section class="study-card"><h3>Laboratory result</h3>'+
  choose('Collected specimen','tw-result-id',[])+field('Reported date','tw-reported','date')+
  field('Assay/platform','tw-assay')+
- choose('Result category','tw-result-kind',[['not_detected','Not detected'],['quantified','Quantified'],['detected_below_loq','Below quantification'],['invalid','Invalid']])+
+ choose('Result category','tw-result-kind',[['','Select reported category'],['not_detected','Not detected'],['quantified','Quantified'],['detected_below_loq','Below quantification'],['invalid','Invalid']])+
  field('CMV viral load (IU/mL; quantified only)','tw-viral-load','number')+
  field('Lower limit (IU/mL; if known)','tw-loq','number')+
- choose('Laboratory QC','tw-qc',[['pass','Pass'],['fail','Fail']])+
+ choose('Laboratory QC','tw-qc',[['','Select reported QC'],['pass','Pass'],['fail','Fail']])+
  field('Correction reason (if editing result)','tw-result-reason')+
  btn('Submit lab result for verification','tw-result-save')+'</section></div>'+
  '<section class="study-card"><h3>Source review</h3>'+
@@ -383,7 +383,9 @@ async function loadDrug(){
 $('tw-pcr-subject').onchange=()=>{void task('tw-pcr-status',loadPCR);};
 $('tw-drug-subject').onchange=()=>{void task('tw-drug-status',loadDrug);};
 $('tw-screen-save').onclick=()=>{void task('tw-status',async()=>{
- var r=await api('/api/trial/screening',{method:'POST',body:JSON.stringify({
+ for(const [id,label] of [['tw-digg','donor CMV IgG'],['tw-rigg','recipient CMV IgG'],['tw-donor','donor type'],['tw-relationship','donor relationship'],['tw-consent-language','consent language']])
+   if(!value(id))throw Error('Select the source-verified '+label+'; an unassessed default is not permitted');
+  var r=await api('/api/trial/screening',{method:'POST',body:JSON.stringify({
   patient_id:value('tw-patient'),screening_on:value('tw-screen-date'),consent_on:value('tw-consent-date')||null,
   consent_version:value('tw-icf')||null,donor_cmv_igg:value('tw-digg'),recipient_cmv_igg:value('tw-rigg'),
   donor_type:value('tw-donor'),donor_relationship:value('tw-relationship'),
