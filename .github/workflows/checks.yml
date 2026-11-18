@@ -1,7 +1,11 @@
 name: Application checks
 on:
+  # Development branches are validated on PR, not on every intermediate push.
   push:
+    branches: [main]
   pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
 permissions:
   contents: read
@@ -9,7 +13,20 @@ concurrency:
   group: checks-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  # Fast syntax feedback on draft PRs; no real data, containers, or external access.
+  draft-sanity:
+    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft == true }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Python and dashboard JavaScript syntax
+        run: |
+          python3 -m compileall -q app ops
+          node --check app/study_ui.js
+
   browser:
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -25,6 +42,7 @@ jobs:
           CMV_TEST_CHROME: /usr/bin/google-chrome
         run: node tests/participant_browser.cjs
   tests:
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
@@ -89,6 +107,7 @@ jobs:
         run: node --test tests/registration_mode_ui.test.cjs
       - run: bash -n ops/*.sh
   containers:
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
