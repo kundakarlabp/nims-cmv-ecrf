@@ -1039,14 +1039,19 @@ loadDashboard=async function(){
  await originalStudyDashboard();
  const target=$('dashboardResults');
  try{
-  const [trial,forms]=await Promise.all([
-   api('/api/trial/overview'),api('/api/trial/crf/completeness')
+  const [trial,forms,actions,build]=await Promise.all([
+   api('/api/trial/overview'),api('/api/trial/crf/completeness'),
+   api('/api/trial/action-worklist?limit=8'),api('/healthz')
   ]);
+  $('tw-live-build').textContent='Running server · '+(build.app_commit?
+    'commit '+build.app_commit.slice(0,10):
+    'build '+String(build.build_fingerprint||'unavailable').slice(0,12))+
+    ' · '+(build.service||'mode unavailable');
   const lab=trial.pcr||{}, drug=trial.drug_accountability||{};
   const cards=[
    ['Screened',trial.screened,'Coded screening records'],
    ['Enrolled',trial.ever_enrolled,'Includes withdrawn/closed participants'],
-   ['Randomized',trial.randomized,'Irreversible sealed 1:1 allocations'],
+   ['Randomized',trial.randomized,'Approved protocol recruitment target: 344; Study ID capacity: 350'],
    ['PCR scheduled',trial.scheduled_pcr_slots,'Seven protocol slots per enrolled subject'],
    ['PCR verified',trial.verified_protocol_pcr_slots,'Independent review completed'],
    ['Stock remaining',drug.tablets_in_stock,'450-mg tablets in study inventory'],
@@ -1074,9 +1079,17 @@ loadDashboard=async function(){
   const note='<p class="warn-demo">Study status is computed from persisted records. '+
    'Enrollment and PCR completion do not imply endpoint adjudication or data lock. '+
    'Medication exposure, renal adjustment and adjudication require source verification.</p>';
+  const operations='<div class="dash-card" style="margin:12px 0">'+
+   '<h3>Actions requiring attention</h3><p class="dash-note">'+
+   Number(actions.total||0)+' outstanding worklist item(s) · next '+Number((actions.actions||[]).length)+' shown. '+
+   'Each item links to an existing participant; no actions are automatically approved.</p>'+
+   (actions.actions||[]).slice(0,5).map(a=>'<p class="dash-note">'+
+    '<strong>'+txt(a.study_code)+' · '+txt(a.category)+'</strong> · '+txt(a.detail)+'</p>').join('')+
+   '<button id="tw-open-task-list" type="button">Open daily worklist</button></div>';
   target.insertAdjacentHTML('afterbegin',
-    '<h3 style="margin-top:8px">Clinical trial progress</h3>'+note+kpi+visits+
+    '<h3 style="margin-top:8px">Clinical trial progress</h3>'+note+kpi+operations+visits+
     '<h3 style="margin:20px 0 12px">Registry and entry-review activity</h3>');
+  $('tw-open-task-list').onclick=()=>{void tab('tasks');};
  }catch(err){
   target.insertAdjacentHTML('afterbegin','<p class="dash-note">Clinical trial metrics unavailable: '+txt(err.message)+'</p>');
  }
