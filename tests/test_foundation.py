@@ -177,6 +177,55 @@ def test_duplicate_registration_returns_conflict():
         assert c.post('/api/patients',headers=h,json=payload).status_code==200
         assert c.post('/api/patients',headers=h,json=payload).status_code==409
 
+def test_trial_study_id_cannot_be_preassigned_on_registration():
+    with TestClient(app) as c:
+        h=auth(c)
+        rejected=c.post('/api/patients',headers=h,json={
+            'name':'Synthetic premature ID','cr_number':'TEST-PREASSIGN',
+            'study_id':'NCMV001'})
+        assert rejected.status_code==422,rejected.text
+        assert 'approved enrollment' in rejected.text
+        registered=c.post('/api/patients',headers=h,json={
+            'name':'Synthetic no enrollment','cr_number':'TEST-NO-ENROLL'})
+        assert registered.status_code==200,registered.text
+        patient=c.get('/api/patients/'+registered.json()['id']).json()['patient']
+        assert patient['study_id'] is None
+
+
+def test_study_ids_count_enrollments_not_screening_records_and_stop_at_350():
+    from datetime import date
+    from app.main import Patient
+    from app.trial_models import TrialSubject
+    from app.trial_api import allocate_study_id
+    from fastapi import HTTPException
+    with SessionLocal() as s:
+        owner=s.scalar(select(User).where(User.username=='testadmin'))
+        def screen(suffix,code=None,status='screened'):
+            p=Patient(cr_number=f'TEST-STUDY-SEQ-{suffix}',
+                name=f'Synthetic sequence {suffix}',created_by=owner.id)
+            s.add(p);s.flush()
+            t=TrialSubject(patient_id=p.id,screening_on=date(2026,10,1),
+                donor_cmv_igg='positive',recipient_cmv_igg='positive',
+                donor_type='living',created_by=owner.id,
+                status=status,study_code=code)
+            s.add(t);s.flush()
+            return t
+        screen('EXCLUDED')
+        first=screen('FIRST')
+        assert first.id!=1,'An excluded screening record must consume an internal row only'
+        assert allocate_study_id(s)=='NCMV001'
+        first.study_code='NCMV001'
+        s.flush()
+        assert allocate_study_id(s)=='NCMV002'
+        first.status='withdrawn'
+        assert allocate_study_id(s)=='NCMV002','Withdrawn Study IDs are never recycled'
+        screen('END',code='NCMV350',status='enrolled')
+        with pytest.raises(HTTPException) as err:
+            allocate_study_id(s)
+        assert err.value.status_code==409
+        assert '350' in err.value.detail
+
+
 def test_independent_review_requires_role_and_current_revision():
     with TestClient(app) as author:
         admin=auth(author)
@@ -336,6 +385,7 @@ def test_screening_pi_enrollment_seven_pcr_codes_and_eligibility():
             'display_name':'Synthetic trial PI','role':'pi','password':'SyntheticPiPassword123!'}).status_code==200
     with TestClient(app) as pi:
         h=auth(pi,'trialpi','SyntheticPiPassword123!')
+        assert pi.get('/api/patients/'+pid).json()['patient']['study_id'] is None
         enrollment=pi.post(f'/api/trial/subjects/{subject_id}/enroll',headers=h,json={
             'enrolled_on':'2026-10-03','pcr_anchor_on':'2026-10-01',
             'pcr_anchor_basis':'transplant_date','protocol_reference':'approved-protocol-v5',
@@ -343,18 +393,25 @@ def test_screening_pi_enrollment_seven_pcr_codes_and_eligibility():
         assert enrollment.status_code==200,enrollment.text
         assert enrollment.json()['pcr_orders']==7
         subject=enrollment.json()['subject']
-        assert subject['study_code'].startswith('NCMV-')
+        expected_id='NCMV001'
+        assert subject['study_code']==expected_id
+        assert enrollment.json()['study_id']==expected_id
+        assert pi.get('/api/patients/'+pid).json()['patient']['study_id']==expected_id
+        assert pi.get('/api/trial/subjects',params={'q':expected_id}).json()[0]['id']==subject_id
         assert subject['randomization_status']=='SEE_RESTRICTED_ALLOCATION_MODULE'
         samples=pi.get(f'/api/trial/subjects/{subject_id}/pcr')
         assert samples.status_code==200
         rows=samples.json()['pcr_records']
         assert [p['scheduled_month'] for p in rows]==[1,2,3,4,6,9,12]
         assert len(set(p['specimen_code'] for p in rows))==7
+        assert all(p['specimen_code'].startswith(expected_id+'-PCR-') for p in rows)
         assert rows[0]['target_on']=='2026-11-01'
         assert pi.post(f'/api/trial/subjects/{subject_id}/enroll',headers=h,json={
             'enrolled_on':'2026-10-03','pcr_anchor_on':'2026-10-01',
             'pcr_anchor_basis':'transplant_date','protocol_reference':'approved-protocol-v5',
             'reviewed_eligibility_and_consent':True,'approved_visit_anchor':True}).status_code==409
+        assert pi.get('/api/patients/'+pid).json()['patient']['study_id']==expected_id
+        assert len(pi.get(f'/api/trial/subjects/{subject_id}/pcr').json()['pcr_records'])==7
         worklist=pi.get('/api/trial/pcr-worklist').json()
         assert len(worklist)==7
         assert all(x['completion_verified'] is False for x in worklist)
