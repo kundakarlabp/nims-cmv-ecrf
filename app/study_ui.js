@@ -153,6 +153,8 @@ panel('crf','Structured eCRF and clinical logs',
  '<p class="hint" id="tw-crf-descriptor">C–L map to CRF v3.0. M–P add dated source details for clinical care already received; they do not add mandatory tests or alter treatment.</p>'+
  '<label>Event/assessment date<input type="date" id="tw-crf-date"></label>'+
  '<div id="tw-crf-fields" class="study-columns"></div>'+
+ '<div id="tw-crf-source" class="study-card hide" aria-live="polite"></div>'+
+ btn('Use reviewed eligibility measurements','tw-crf-source-copy')+
  '<div id="tw-crf-draft-status" class="status">No draft loaded.</div>'+
  '<label>Correction reason (required only when revising submitted form)<input id="tw-crf-reason"></label>'+
  btn('Save private working draft','tw-crf-save')+' '+
@@ -722,6 +724,7 @@ $('tw-change-password').onclick=()=>{void task('tw-mfa-status',async()=>{
 
 /* Source-aligned CRF forms with private, revision-checked server drafts. */
 let currentCrfSchema=null,currentCrfSpec=null,currentCrfEntry=null;
+let baselineSource=null,baselineSourceRequest=0;
 let crfLoadedSection=null,crfLoadedSubject=null;
 let crfDraftRevision=null,crfDraftKey=null,crfDraftLast=null,crfDraftTimer=null,crfDraftQueue=Promise.resolve();
 const crfEditable={
@@ -837,10 +840,60 @@ function crfScheduleSave(){
  $('tw-crf-draft-status').textContent='Unsaved changes · server autosave pending';
  crfDraftTimer=setTimeout(()=>{void crfSaveDraft().catch(()=>{});},1300);
 }
+
+async function loadBaselineSource(){
+ const request=++baselineSourceRequest;
+ baselineSource=null;
+ const card=$('tw-crf-source'),copy=$('tw-crf-source-copy');
+ card.classList.add('hide');copy.classList.add('hide');
+ if(crfLoadedSection!=='C_baseline'||!crfLoadedSubject)return;
+ const allowed=['pi','consultant','scientist','monitor'].includes($('currentRole').textContent.trim());
+ if(!allowed)return;
+ try{
+  const response=await api('/api/trial/subjects/'+crfLoadedSubject+'/eligibility');
+  if(request!==baselineSourceRequest || crfLoadedSection!=='C_baseline' ||
+     crfLoadedSubject!==n('tw-crf-subject'))return;
+  const record=response.eligibility;
+  if(!record||!record.baseline){card.textContent='No investigator-reviewed eligibility measurements are available.';card.classList.remove('hide');return;}
+  baselineSource=record.baseline;
+  const fields=[
+   ['CBC date',baselineSource.baseline_cbc_on],
+   ['ANC (/µL)',baselineSource.anc_per_ul],
+   ['Platelets (/µL)',baselineSource.platelets_per_ul],
+   ['Hemoglobin (g/dL)',baselineSource.hemoglobin_g_dl],
+   ['Cockcroft–Gault CrCl (mL/min)',baselineSource.crcl_cg_ml_min],
+   ['Eligibility signed source',baselineSource.signed_source_reference]
+  ];
+  card.innerHTML='<h3>Reviewed eligibility source · read-only</h3>'+
+   '<p class="hint">Measurements below come from the eligibility checklist. They may not represent a different baseline date. They are never copied without explicit confirmation.</p>'+
+   fields.map(([label,val])=>'<p><strong>'+txt(label)+':</strong> '+txt(val??'Not recorded')+'</p>').join('');
+  card.classList.remove('hide');
+  copy.classList.toggle('hide',!crfCanEdit());
+ }catch(e){if(request===baselineSourceRequest){card.textContent='Eligibility source unavailable for this account.';card.classList.remove('hide');}}
+}
+$('tw-crf-source-copy').onclick=()=>{
+ if(!baselineSource||crfLoadedSection!=='C_baseline'||!crfCanEdit())return;
+ const sourceDate=baselineSource.baseline_cbc_on;
+ if(sourceDate&&value('tw-crf-date')<sourceDate){
+  error('tw-crf-status',Error('Baseline assessment date precedes the source laboratory date. Correct it before copying.'));return;
+ }
+ if(!confirm('Copy only currently BLANK measurements from the investigator-reviewed '+sourceDate+
+    ' eligibility source into baseline? Verify that the same source results apply to this assessment date.'))return;
+ const mapping={anc_per_ul:'anc_per_ul',platelets_per_ul:'platelets_per_ul',
+  hemoglobin_g_dl:'hemoglobin_g_dl',crcl_cg_ml_min:'cockcroft_gault_crcl_ml_min'};
+ for(const [src,dest] of Object.entries(mapping)){
+  const node=$('twcrf-'+dest);
+  if(node&&!node.value&&baselineSource[src]!==null&&baselineSource[src]!==undefined)
+   node.value=String(baselineSource[src]);
+ }
+ crfScheduleSave();
+ notify('tw-crf-status','Reviewed measurements copied into blank fields only. Verify clinical dates and sign the baseline source before submission.');
+};
 function crfRender(){
  currentCrfSpec=currentCrfSchema?.[value('tw-crf-section')]||null;
  crfLoadedSection=value('tw-crf-section');crfLoadedSubject=n('tw-crf-subject');
  currentCrfEntry=null;
+ void loadBaselineSource();
  $('tw-crf-descriptor').textContent=currentCrfSpec?
   currentCrfSpec.title+' · '+currentCrfSpec.repeat+(currentCrfSpec.supplementary?
    ' · supplementary source-detail log (no additional mandatory investigations)':' · CRF v3.0 (14 August 2026)'):
