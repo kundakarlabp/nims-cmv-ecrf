@@ -45,6 +45,16 @@ function panel(id,title,html){
 var field=(title,id,type='text')=>'<label>'+title+'<input id="'+id+'" type="'+type+'"></label>';
 var choose=(title,id,opts)=>'<label>'+title+'<select id="'+id+'">'+opts.map(o=>'<option value="'+o[0]+'">'+o[1]+'</option>').join('')+'</select></label>';
 var btn=(label,id)=>'<button id="'+id+'">'+label+'</button>';
+panel('tasks','Daily worklist',
+ '<p class="hint">Actionable items from saved trial records. Dates are scheduled targets, not approved visit windows. No entries or allocations are created by opening an item.</p>'+
+ '<div class="worklist-controls"><label>Filter actions<select id="tw-task-filter">'+
+ '<option value="">All actions</option><option value="Enrollment">Screening and enrollment</option>'+
+ '<option value="Randomization">Randomization</option><option value="PCR">CMV PCR</option>'+
+ '<option value="eCRF">eCRF review / corrections</option><option value="SAE">Safety reporting checks</option></select></label>'+
+ btn('Refresh worklist','tw-task-refresh')+'</div>'+
+ '<div id="tw-task-counts" class="worklist-summary" aria-live="polite"></div>'+
+ '<div id="tw-task-items"></div><div id="tw-task-status" class="status hide"></div>'
+);
 panel('study','Enrollment',
  '<div class="study-columns"><section class="study-card"><h3>1 · Screening</h3>'+
  choose('Registry record','tw-patient',[])+field('Screening date','tw-screen-date','date')+
@@ -215,7 +225,7 @@ loginPanelElement.insertAdjacentHTML('beforeend','<hr><h3>Activate individual st
  '<label>Choose a private password<input type="password" id="tw-password" autocomplete="new-password"></label>'+
  btn('Activate account','tw-activate-save')+'<div id="tw-activate-status" class="status hide"></div>');
 for(const id of ['tw-screen-date','tw-consent-date','tw-enroll-date','tw-anchor-date','tw-collected','tw-reported','tw-receipt-date','tw-rx-date','tw-issue-date','tw-return-date'])$(id).value=today();
-var perms={randomization:['pi','consultant','pharmacy','scientist','monitor','randomization_custodian'],crf:['pi','consultant','scientist','nurse','pg','technician','microbiology','pharmacy','monitor'],study:['pi','consultant','scientist'],pcr:['pi','consultant','scientist','nurse','technician','microbiology','monitor'],drug:['pi','consultant','scientist','pharmacy','monitor'],staff:['pi','admin'],security:['pi','admin','consultant','pg','scientist','nurse','technician','microbiology','pharmacy','monitor','randomization_custodian']};
+var perms={tasks:['pi','consultant','scientist','nurse','pg','technician','microbiology','pharmacy','monitor','admin'],randomization:['pi','consultant','pharmacy','scientist','monitor','randomization_custodian'],crf:['pi','consultant','scientist','nurse','pg','technician','microbiology','pharmacy','monitor'],study:['pi','consultant','scientist'],pcr:['pi','consultant','scientist','nurse','technician','microbiology','monitor'],drug:['pi','consultant','scientist','pharmacy','monitor'],staff:['pi','admin'],security:['pi','admin','consultant','pg','scientist','nurse','technician','microbiology','pharmacy','monitor','randomization_custodian']};
 function setRole(){
  var r=$('currentRole').textContent.trim();
  for(const k of Object.keys(perms))$('btn'+k).classList.toggle('hide',!perms[k].includes(r));
@@ -258,7 +268,7 @@ tab=async function(name){
   $('tw-invitation').textContent='';$('tw-invitation').classList.add('hide');
   $('tw-bulk-result').textContent='';$('tw-bulk-result').classList.add('hide');
  }
- if(['study','pcr','drug','staff','security','crf','randomization'].includes(name)){
+ if(['tasks','study','pcr','drug','staff','security','crf','randomization'].includes(name)){
   if(activeTab==='entry'){try{await saveDraftNow();}catch(e){show('msg','Draft not saved: '+e.message,true);return;}}
   activeTab=name;
   for(const section of ['dashboard','registry','review','entry','dose','due','study','pcr','drug','staff','security','crf','randomization']){
@@ -267,7 +277,8 @@ tab=async function(name){
   }
   root.querySelector('.grid').classList.add('hide');
   await task(name==='pcr'?'tw-pcr-status':name==='drug'?'tw-drug-status':name==='randomization'?'tw-rand-status':'tw-status',async()=>{
-   if(name==='study'){
+   if(name==='tasks'){await loadTasks();}
+    if(name==='study'){
      $('tw-assigned-study-id').textContent='Study ID: loading selected participant…';
      await loadRegistry();await loadSubjects();await loadEligibilitySchema();await selectEnrollmentPatient();
    }
@@ -338,6 +349,41 @@ async function loadSubjects(){
  $('tw-register').innerHTML='<table><thead><tr><th>CR number / Study code</th><th>Status</th><th>D+/R+</th><th>Signed consent</th></tr></thead><tbody>'+
  studySubjects.map(x=>'<tr><td>'+txt(subjectLabel(x))+'</td><td>'+txt(x.status)+'</td><td>'+String(x.d_plus_r_plus)+'</td><td>'+String(x.consent_recorded)+'</td></tr>').join('')+'</tbody></table>';
 }
+/* Action worklist: read-only navigation, never an allocation/clinical write. */
+var taskEntries=[];
+async function loadTasks(){
+ const r=await api('/api/trial/action-worklist?limit=200');
+ taskEntries=r.actions||[];
+ const summary=$('tw-task-counts');
+ summary.textContent=r.total+' outstanding action(s) · '+r.as_of+' · '+Object.entries(r.counts||{})
+   .map(([name,count])=>name+': '+count).join(' · ');
+ renderTasks();
+}
+function renderTasks(){
+ const filter=value('tw-task-filter').toLowerCase();
+ const items=taskEntries.filter(a=>!filter||
+   (filter==='enrollment' && /eligibility|enrollment/i.test(a.category))||
+   a.category.toLowerCase().includes(filter));
+ $('tw-task-items').innerHTML=items.length?items.map((a,i)=>
+  '<article class="worklist-item"><div><span class="worklist-category">'+txt(a.category)+'</span>'+
+  '<strong>'+txt(a.study_code||'Screened participant')+'</strong>'+
+  '<p>'+txt(a.detail)+'</p>'+
+  (a.target_on?'<small>Scheduled target '+txt(a.target_on)+'</small>':'')+'</div>'+
+  '<button class="secondary" data-task-idx="'+taskEntries.indexOf(a)+'" aria-label="Open '+txt(a.category)+' for '+txt(a.study_code)+'">Open</button></article>'
+ ).join(''):'<p class="hint">No matching actions. This does not imply that all trial data are verified or complete.</p>';
+}
+$('tw-task-filter').onchange=renderTasks;
+$('tw-task-refresh').onclick=()=>{void task('tw-task-status',loadTasks);};
+$('tw-task-items').onclick=e=>{const btn=e.target.closest('[data-task-idx]');if(!btn)return;
+ void task('tw-task-status',async()=>{
+  const item=taskEntries[Number(btn.dataset.taskIdx)];
+  if(!item)throw Error('Refresh the worklist before opening this item');
+  await window.choose(item.patient_id);
+  if(selected!==item.patient_id)throw Error('Patient context changed; select the action again');
+  await tab(item.route);
+ });
+};
+
 async function loadPCR(){
  const sid=n('tw-pcr-subject');resetPCRControls();if(!sid)return;
  if(!await selectParticipantSubject(sid))return;
