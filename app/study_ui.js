@@ -278,7 +278,7 @@ tab=async function(name){
  if(['tasks','study','pcr','drug','staff','security','crf','randomization'].includes(name)){
   if(activeTab==='entry'){try{await saveDraftNow();}catch(e){show('msg','Draft not saved: '+e.message,true);return;}}
   activeTab=name;
-  for(const section of ['dashboard','registry','review','entry','dose','due','study','pcr','drug','staff','security','crf','randomization']){
+  for(const section of ['dashboard','registry','review','entry','dose','due','tasks','study','pcr','drug','staff','security','crf','randomization']){
    $(section).classList.toggle('hide',section!==name);
    $('btn'+section).classList.toggle('selected',section===name);
   }
