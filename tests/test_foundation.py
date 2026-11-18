@@ -192,6 +192,40 @@ def test_trial_study_id_cannot_be_preassigned_on_registration():
         assert patient['study_id'] is None
 
 
+def test_study_ids_count_enrollments_not_screening_records_and_stop_at_350():
+    from datetime import date
+    from app.main import Patient
+    from app.trial_models import TrialSubject
+    from app.trial_api import allocate_study_id
+    from fastapi import HTTPException
+    with SessionLocal() as s:
+        owner=s.scalar(select(User).where(User.username=='testadmin'))
+        def screen(suffix,code=None,status='screened'):
+            p=Patient(cr_number=f'TEST-STUDY-SEQ-{suffix}',
+                name=f'Synthetic sequence {suffix}',created_by=owner.id)
+            s.add(p);s.flush()
+            t=TrialSubject(patient_id=p.id,screening_on=date(2026,10,1),
+                donor_cmv_igg='positive',recipient_cmv_igg='positive',
+                donor_type='living',created_by=owner.id,
+                status=status,study_code=code)
+            s.add(t);s.flush()
+            return t
+        screen('EXCLUDED')
+        first=screen('FIRST')
+        assert first.id!=1,'An excluded screening record must consume an internal row only'
+        assert allocate_study_id(s)=='NCMV001'
+        first.study_code='NCMV001'
+        s.flush()
+        assert allocate_study_id(s)=='NCMV002'
+        first.status='withdrawn'
+        assert allocate_study_id(s)=='NCMV002','Withdrawn Study IDs are never recycled'
+        screen('END',code='NCMV350',status='enrolled')
+        with pytest.raises(HTTPException) as err:
+            allocate_study_id(s)
+        assert err.value.status_code==409
+        assert '350' in err.value.detail
+
+
 def test_independent_review_requires_role_and_current_revision():
     with TestClient(app) as author:
         admin=auth(author)
