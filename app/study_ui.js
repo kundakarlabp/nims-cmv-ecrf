@@ -267,7 +267,10 @@ tab=async function(name){
   }
   root.querySelector('.grid').classList.add('hide');
   await task(name==='pcr'?'tw-pcr-status':name==='drug'?'tw-drug-status':name==='randomization'?'tw-rand-status':'tw-status',async()=>{
-   if(name==='study'){await loadRegistry();await loadSubjects();await loadEligibilitySchema();await selectEnrollmentPatient();}
+   if(name==='study'){
+     $('tw-assigned-study-id').textContent='Study ID: loading selected participant…';
+     await loadRegistry();await loadSubjects();await loadEligibilitySchema();await selectEnrollmentPatient();
+   }
    if(name==='pcr'){await loadSubjects();await loadPCR();}
    if(name==='drug'){await loadSubjects();await loadDrug();}
    if(name==='staff'){await loadAccounts();}
@@ -292,8 +295,9 @@ async function loadRegistry(){
  $('tw-patient').value=selected||'';
 }
 function showEnrollmentStudyId(){
- const patientId=value('tw-patient')||selected;
- const subject=studySubjects.find(s=>s.patient_id===patientId);
+ // Only the authoritative selected registry patient may supply this label;
+ // never fall back to a prior form value while the next context is loading.
+ const subject=studySubjects.find(s=>s.patient_id===selected);
  $('tw-assigned-study-id').textContent=subject?.study_code?
   'Study ID: '+subject.study_code+' · permanently assigned at approved enrollment.':
   'Study ID: pending · automatically assigned only after enrollment is approved.';
@@ -1218,6 +1222,7 @@ function renderParticipant(context){
   for(const id of ['age','weight','creatinine','sex'])$(id).value='';
  }
  participantContext=context;participantSubject=context.subject?.id||null;
+ showEnrollmentStudyId();
  $('tw-context-subject').value=participantSubject?String(participantSubject):'';
  const a=context.allocation||{};
  $('doseResult').textContent='';
