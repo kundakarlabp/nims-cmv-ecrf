@@ -282,6 +282,7 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   await page.waitForFunction(()=>activeTab==='dashboard');
   assert.equal(await page.isVisible('#tw-study-navigation'),false);
   assert.equal(await page.getAttribute('#tw-mobile-menu','aria-expanded'),'false');
+  await page.waitForFunction(()=>$('tw-live-build').textContent.includes('aaaaaaaaaa'));
   assert.match(await page.textContent('#tw-live-build'),/aaaaaaaaaa/);
   await page.evaluate(async()=>{await tab('tasks');});
   await page.click('#tw-task-items [data-task-idx="0"]');
