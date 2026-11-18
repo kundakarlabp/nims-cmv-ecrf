@@ -1012,11 +1012,14 @@ function updateRandomizationProgress(){
   s.status==='enrolled'?'Enrolled. Allocation status is shown below.':'Study status: '+s.status+'. New allocation is unavailable.');
  if(s&&s.status!=='enrolled')$('tw-rand-continue').disabled=s.status!=='screened';
 }
-$('tw-rand-fetch').onclick=()=>{clearTimeout(registrySearchTimer);void task('tw-rand-status',loadRandomizationRegistry);};
-$('tw-rand-search').oninput=()=>{
- registrySearchRequest++;$('tw-rand-patient').value='';$('tw-rand-continue').disabled=true;
+function invalidateRandomizationSearch(){
+ participantRequest++;$('tw-rand-patient').value='';$('tw-rand-continue').disabled=true;
  $('tw-rand-subject').value='';$('tw-rand-assign').disabled=true;
  $('tw-rand-subject-status').textContent='Select the matching CR number after searching.';
+}
+$('tw-rand-fetch').onclick=()=>{invalidateRandomizationSearch();clearTimeout(registrySearchTimer);void task('tw-rand-status',loadRandomizationRegistry);};
+$('tw-rand-search').oninput=()=>{
+ registrySearchRequest++;invalidateRandomizationSearch();
  clearTimeout(registrySearchTimer);registrySearchTimer=setTimeout(()=>{void task('tw-rand-status',loadRandomizationRegistry);},250);
 };
 $('tw-rand-patient').onchange=()=>{void task('tw-rand-status',async()=>{
@@ -1065,14 +1068,14 @@ async function loadRandomization(){
  }
 }
 async function loadRandSubject(){
- const subject=n('tw-rand-subject');
+ const subject=n('tw-rand-subject'),searchVersion=registrySearchRequest;
  const target=$('tw-rand-subject-status');
  $('tw-rand-assign').disabled=true;
  if(!subject){target.textContent='No enrolled participant selected. Fetch the CR number above and continue any unfinished screening or enrollment.';return;}
- if(!await selectParticipantSubject(subject))return;
+ if(!await selectParticipantSubject(subject)||searchVersion!==registrySearchRequest)return;
  const request=participantRequest;
  const r=await api('/api/trial/randomization/subjects/'+subject+'/allocation');
- if(request!==participantRequest||subject!==participantSubject||subject!==n('tw-rand-subject'))return;
+ if(searchVersion!==registrySearchRequest||request!==participantRequest||subject!==participantSubject||subject!==n('tw-rand-subject'))return;
  if(Array.from($('tw-rand-patient').options).some(o=>o.value===selected))$('tw-rand-patient').value=selected;
  updateRandomizationProgress();
  target.textContent=r.randomized?

@@ -22,7 +22,7 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
  try{
   const page=await browser.newPage({viewport:{width:1280,height:900}});
   const errors=[],writes=[],drafts=new Map(),contextReads=[];let blinded=false,holdOldDraft=false,releaseOldDraft=null;
-  const eligibility=new Map(),allocations=new Map();let assignedFresh=false;
+  const eligibility=new Map(),allocations=new Map();let assignedFresh=false,holdSearchContext=false,releaseSearchContext=null;
   let holdOldPCR=false,releaseOldPCR=null,holdScreenedContext=false,releaseScreenedContext=null;
   page.on('pageerror',e=>errors.push(e.message));
   await page.route('http://cmv-ui.test/**',async route=>{
@@ -67,6 +67,7 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
     const subject=subjects.find(x=>x.id===id)||null;
     result={subject,patient_id:'TEST-P-'+id,transplant_on:'2026-10-01',
       allocation:allocations.get(id)||(id<3?{randomized:true,allocation_code:'TEST-ALLOC-'+id,...(blinded?{}:{assigned_arm_mg:id===1?'450':'900'})}:{randomized:false})};
+    if(holdSearchContext&&id===1){holdSearchContext=false;await new Promise(resolve=>{releaseSearchContext=resolve;});}
     if(holdScreenedContext&&id===3){holdScreenedContext=false;await new Promise(resolve=>{releaseScreenedContext=resolve;});}
    }else if(p.endsWith('/pcr')){
     const sid=Number(p.split('/')[4]);result={pcr_records:[{id:sid*10+1,status:'planned',specimen_code:'TEST-PCR-'+sid,scheduled_month:1,target_on:'2026-11-01'}]};
@@ -242,8 +243,13 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   }
   // Unknown CR must never fall back to the first enrolled person or leave
   // the previous allocation action available.
+  holdSearchContext=true;
+  await page.selectOption('#tw-rand-subject','1');
+  for(let i=0;i<200&&!releaseSearchContext;i++)await new Promise(resolve=>setTimeout(resolve,20));
+  assert.ok(releaseSearchContext,'Prior enrolled participant context must still be pending');
   await page.fill('#tw-rand-search','DOES-NOT-EXIST');await page.click('#tw-rand-fetch');
   await page.waitForFunction(()=>$('tw-rand-progress').textContent.includes('No registry record'));
+  releaseSearchContext();await page.waitForTimeout(150);
   assert.equal(await page.inputValue('#tw-rand-patient'),'');
   assert.equal(await page.inputValue('#tw-rand-subject'),'');
   assert.equal(await page.isDisabled('#tw-rand-assign'),true);
