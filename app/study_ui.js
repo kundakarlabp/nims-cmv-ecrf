@@ -299,9 +299,10 @@ async function loadSubjects(){
 }
 async function loadPCR(){
  const sid=n('tw-pcr-subject');resetPCRControls();if(!sid)return;
- await selectParticipantSubject(sid);
+ if(!await selectParticipantSubject(sid))return;
+ const contextVersion=participantRequest;
  const records=(await api('/api/trial/subjects/'+sid+'/pcr')).pcr_records;
- if(sid!==participantSubject||sid!==n('tw-pcr-subject'))return;
+ if(contextVersion!==participantRequest||sid!==participantSubject||sid!==n('tw-pcr-subject'))return;
  pcrRecords=records;pcrLoadedSubject=sid;
  $('tw-pcr-table').innerHTML='<table><thead><tr><th>Code</th><th>Month</th><th>Target</th><th>Status</th><th>Viral load (IU/mL)</th></tr></thead><tbody>'+
  pcrRecords.map(x=>'<tr><td>'+txt(x.specimen_code)+'</td><td>'+x.scheduled_month+'</td><td>'+txt(x.target_on)+'</td><td>'+txt(x.status)+'</td><td>'+txt(x.quantitative_iu_ml??'—')+'</td></tr>').join('')+'</tbody></table>';
@@ -314,16 +315,17 @@ async function loadDrug(){
  const sid=n('tw-drug-subject');drugLoadedSubject=null;
  for(const id of ['tw-auth-save','tw-dispense-save','tw-return-save'])$(id).disabled=true;
  if(!sid){resetDrugControls();return;}
- await selectParticipantSubject(sid);
+ if(!await selectParticipantSubject(sid))return;
+ const contextVersion=participantRequest;
  if(['pharmacy','scientist','pi','monitor','admin'].includes($('currentRole').textContent.trim())){
   drugLots=await api('/api/trial/pharmacy/lots');
   fill('tw-lot-id',drugLots,'id',x=>x.lot_number+' ('+x.quantity_on_hand+' remaining)');
  }
  var p=await api('/api/trial/subjects/'+sid+'/pharmacy');
- if(sid!==participantSubject||sid!==n('tw-drug-subject'))return;
+ if(contextVersion!==participantRequest||sid!==participantSubject||sid!==n('tw-drug-subject'))return;
  if(['pi','consultant','pharmacy'].includes($('currentRole').textContent.trim())){
    const allocation=await api('/api/trial/randomization/subjects/'+sid+'/allocation');
-   if(sid!==participantSubject||sid!==n('tw-drug-subject'))return;
+   if(contextVersion!==participantRequest||sid!==participantSubject||sid!==n('tw-drug-subject'))return;
    const banner=$('tw-drug-allocation');
    if(banner)banner.textContent=allocation.randomized?
     'Verified assignment '+allocation.allocation_code+' · nominal '+allocation.assigned_arm_mg+' mg OD (renal-adjusted prescribing required)':
@@ -1116,7 +1118,8 @@ function renderParticipant(context){
 }
 async function selectParticipantSubject(id){
  if(activeTab==='entry')await saveDraftNow();
- if(!id){clearParticipant();return;}
+ if(!id){clearParticipant();return false;}
+ if(id!==participantSubject){resetPCRControls();resetDrugControls();}
  const request=++participantRequest;
  $('tw-context-allocation').textContent='Checking participant and allocation…';
  $('tw-context-detail').textContent='';$('tw-context-error').textContent='';
@@ -1131,6 +1134,7 @@ async function selectParticipantSubject(id){
    if(request===participantRequest)renderParticipant(context);
   }
  }catch(e){if(request===participantRequest){clearParticipant();$('tw-context-error').textContent=e.message;}throw e;}
+ return request===participantRequest;
 }
 $('tw-context-subject').onchange=()=>{void task('tw-context-error',async()=>{
  const previous=participantSubject;

@@ -113,7 +113,8 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   await page.selectOption('#tw-context-subject','1');
   await page.waitForFunction(()=>$('tw-collect-id').value==='11');
   await page.selectOption('#tw-context-subject','3');
-  await page.waitForFunction(()=>$('tw-context-subject').value==='3'&&$('tw-collect-id').value==='');
+  assert.equal(await page.isDisabled('#tw-collect-save'),true,'Patient switch must disable collection immediately');
+  await page.waitForFunction(()=>$('tw-context-allocation').textContent.includes('TEST-SCREEN-3')&&$('tw-collect-id').value==='');
   assert.equal(await page.isDisabled('#tw-collect-save'),true);
   assert.equal(await page.inputValue('#tw-pcr-subject'),'');
   await page.selectOption('#tw-context-subject','');
