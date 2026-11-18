@@ -3,7 +3,7 @@
 'use strict';
 var root=$('workspace'),menu=root.querySelector('.tabs');
 var logoutBtn=Array.from(menu.querySelectorAll('button')).find(x=>x.textContent.trim()==='Log out');
-var studySubjects=[],selectedId=null,pcrRecords=[],drugLots=[];
+var studySubjects=[],pcrRecords=[],drugLots=[],pcrLoadedSubject=null,drugLoadedSubject=null;
 function txt(s){return escapeHTML(String(s==null?'':s));}
 function value(id){return ($(id).value||'').trim();}
 function n(id){return Number(value(id));}
@@ -118,11 +118,11 @@ panel('drug','MSS drug accountability',
  field('Prescribed dosing instruction','tw-instruction')+
  btn('Record prescription authorization','tw-auth-save')+'</section>'+
  '<section class="study-card"><h3>Issue study medication</h3>'+
- field('Authorized order ID','tw-order-id','number')+
+ choose('Authorized order for this participant','tw-order-id',[])+
  choose('Stock lot','tw-lot-id',[])+field('Issue date','tw-issue-date','date')+
  field('Number of tablets','tw-issued','number')+btn('Issue and generate MSS slip','tw-dispense-save')+
  '</section><section class="study-card"><h3>Record returned medication</h3>'+
- field('Dispense entry number','tw-dispense-id','number')+
+ choose('Dispense entry for this participant','tw-dispense-id',[])+
  field('Returned quantity','tw-return-qty','number')+field('Returned date','tw-return-date','date')+
  choose('Disposition','tw-disposition',[['quarantine','Quarantine'],['destruction_pending','Destruction pending'],['destroyed','Destroyed']])+
  btn('Record return without restocking','tw-return-save')+'</section></div>'+
@@ -291,25 +291,32 @@ async function loadSubjects(){
  studySubjects.map(x=>'<tr><td>'+txt(x.study_code||x.screening_code)+'</td><td>'+txt(x.status)+'</td><td>'+String(x.d_plus_r_plus)+'</td><td>'+String(x.consent_recorded)+'</td></tr>').join('')+'</tbody></table>';
 }
 async function loadPCR(){
- selectedId=n('tw-pcr-subject');if(!selectedId)return;
- await selectParticipantSubject(selectedId);
- pcrRecords=(await api('/api/trial/subjects/'+selectedId+'/pcr')).pcr_records;
+ const sid=n('tw-pcr-subject');resetPCRControls();if(!sid)return;
+ await selectParticipantSubject(sid);
+ const records=(await api('/api/trial/subjects/'+sid+'/pcr')).pcr_records;
+ if(sid!==participantSubject||sid!==n('tw-pcr-subject'))return;
+ pcrRecords=records;pcrLoadedSubject=sid;
  $('tw-pcr-table').innerHTML='<table><thead><tr><th>Code</th><th>Month</th><th>Target</th><th>Status</th><th>Viral load (IU/mL)</th></tr></thead><tbody>'+
  pcrRecords.map(x=>'<tr><td>'+txt(x.specimen_code)+'</td><td>'+x.scheduled_month+'</td><td>'+txt(x.target_on)+'</td><td>'+txt(x.status)+'</td><td>'+txt(x.quantitative_iu_ml??'—')+'</td></tr>').join('')+'</tbody></table>';
  fill('tw-collect-id',pcrRecords.filter(x=>x.status==='planned'),'id',x=>x.specimen_code);
  fill('tw-result-id',pcrRecords.filter(x=>['collected','result_entered','verified'].includes(x.status)),'id',x=>x.specimen_code);
  fill('tw-verify-id',pcrRecords.filter(x=>x.status==='result_entered'),'id',x=>x.specimen_code);
+ for(const [button,selection] of [['tw-collect-save','tw-collect-id'],['tw-result-save','tw-result-id'],['tw-verify-save','tw-verify-id']])$(button).disabled=!n(selection);
 }
 async function loadDrug(){
- selectedId=n('tw-drug-subject');if(!selectedId)return;
- await selectParticipantSubject(selectedId);
+ const sid=n('tw-drug-subject');drugLoadedSubject=null;
+ for(const id of ['tw-auth-save','tw-dispense-save','tw-return-save'])$(id).disabled=true;
+ if(!sid){resetDrugControls();return;}
+ await selectParticipantSubject(sid);
  if(['pharmacy','scientist','pi','monitor','admin'].includes($('currentRole').textContent.trim())){
   drugLots=await api('/api/trial/pharmacy/lots');
   fill('tw-lot-id',drugLots,'id',x=>x.lot_number+' ('+x.quantity_on_hand+' remaining)');
  }
- var p=await api('/api/trial/subjects/'+selectedId+'/pharmacy');
+ var p=await api('/api/trial/subjects/'+sid+'/pharmacy');
+ if(sid!==participantSubject||sid!==n('tw-drug-subject'))return;
  if(['pi','consultant','pharmacy'].includes($('currentRole').textContent.trim())){
-   const allocation=await api('/api/trial/randomization/subjects/'+selectedId+'/allocation');
+   const allocation=await api('/api/trial/randomization/subjects/'+sid+'/allocation');
+   if(sid!==participantSubject||sid!==n('tw-drug-subject'))return;
    const banner=$('tw-drug-allocation');
    if(banner)banner.textContent=allocation.randomized?
     'Verified assignment '+allocation.allocation_code+' · nominal '+allocation.assigned_arm_mg+' mg OD (renal-adjusted prescribing required)':
@@ -318,6 +325,10 @@ async function loadDrug(){
  }
  $('tw-ledger').innerHTML='<table><thead><tr><th>MSS slip code</th><th>Issued</th><th>Returned</th><th>Unreconciled</th></tr></thead><tbody>'+
  p.dispenses.map(x=>'<tr><td>'+txt(x.slip_code)+'</td><td>'+x.quantity_issued+'</td><td>'+x.total_returned+'</td><td>'+x.remaining_unreconciled+'</td></tr>').join('')+'</tbody></table>';
+ drugLoadedSubject=sid;
+ fill('tw-order-id',p.orders||[],'id',x=>x.prescription_ref+(x.authorized_dose_instruction?' · '+x.authorized_dose_instruction:''));
+ fill('tw-dispense-id',p.dispenses||[],'id',x=>x.slip_code+' · '+x.remaining_unreconciled+' unreconciled');
+ for(const id of ['tw-auth-save','tw-dispense-save','tw-return-save'])$(id).disabled=false;
 }
 $('tw-pcr-subject').onchange=()=>{void task('tw-pcr-status',loadPCR);};
 $('tw-drug-subject').onchange=()=>{void task('tw-drug-status',loadDrug);};
@@ -348,11 +359,14 @@ $('tw-enroll-save').onclick=()=>{void task('tw-status',async()=>{
  await selectParticipantSubject(r.subject.id);
 });};
 $('tw-collect-save').onclick=()=>{void task('tw-pcr-status',async()=>{
+ requireProcedureSubject('pcr');
+ if(!pcrRecords.some(x=>x.id===n('tw-collect-id')&&x.status==='planned'))throw Error('Choose a planned specimen for this participant');
  var r=await api('/api/trial/pcr/'+n('tw-collect-id')+'/collect',{method:'POST',
   body:JSON.stringify({collected_on:value('tw-collected'),lab_accession:value('tw-accession')})});
  notify('tw-pcr-status','Collected '+r.specimen_code);await loadPCR();
 });};
 $('tw-result-save').onclick=()=>{void task('tw-pcr-status',async()=>{
+ requireProcedureSubject('pcr');
  var r=pcrRecords.find(x=>x.id===n('tw-result-id'));if(!r)throw Error('Select a collected specimen');
  var updated=await api('/api/trial/pcr/'+r.id+'/result',{method:'PUT',body:JSON.stringify({
   expected_revision:r.revision,reported_on:value('tw-reported'),assay_platform:value('tw-assay'),
@@ -362,6 +376,7 @@ $('tw-result-save').onclick=()=>{void task('tw-pcr-status',async()=>{
  notify('tw-pcr-status',updated.specimen_code+' result saved, awaiting independent review');await loadPCR();
 });};
 $('tw-verify-save').onclick=()=>{void task('tw-pcr-status',async()=>{
+ requireProcedureSubject('pcr');
  var r=pcrRecords.find(x=>x.id===n('tw-verify-id'));if(!r)throw Error('Select submitted result');
  var verified=await api('/api/trial/pcr/'+r.id+'/verify',{method:'POST',body:JSON.stringify({
   expected_revision:r.revision,review_reason:value('tw-review-reason')})});
@@ -374,13 +389,15 @@ $('tw-stock-save').onclick=()=>{void task('tw-drug-status',async()=>{
  notify('tw-drug-status','Lot '+r.lot_id+' received: '+r.remaining+' tablets');await loadDrug();
 });};
 $('tw-auth-save').onclick=()=>{void task('tw-drug-status',async()=>{
+ requireProcedureSubject('drug');
  var r=await api('/api/trial/subjects/'+n('tw-drug-subject')+'/drug-authorization',{method:'POST',
   body:JSON.stringify({prescription_ref:value('tw-rx'),signed_on:value('tw-rx-date'),
    allocation_reference:value('tw-allocation'),renal_assessment_ref:value('tw-renal'),
    authorized_dose_instruction:value('tw-instruction')})});
- $('tw-order-id').value=r.id;notify('tw-drug-status','Authorized order reference '+r.id);await loadDrug();
+ notify('tw-drug-status','Authorized order reference '+r.id);await loadDrug();$('tw-order-id').value=String(r.id);
 });};
 $('tw-dispense-save').onclick=()=>{void task('tw-drug-status',async()=>{
+ requireProcedureSubject('drug');
  var r=await api('/api/trial/subjects/'+n('tw-drug-subject')+'/dispense',{method:'POST',
   body:JSON.stringify({authorization_id:n('tw-order-id'),lot_id:n('tw-lot-id'),
    quantity_issued:n('tw-issued'),issued_on:value('tw-issue-date')})});
@@ -394,6 +411,7 @@ $('tw-dispense-save').onclick=()=>{void task('tw-drug-status',async()=>{
  notify('tw-drug-status','Issued '+r.slip_code+'. Print the slip and obtain physical signatures.');await loadDrug();
 });};
 $('tw-return-save').onclick=()=>{void task('tw-drug-status',async()=>{
+ requireProcedureSubject('drug');
  var r=await api('/api/trial/pharmacy/dispenses/'+n('tw-dispense-id')+'/return',{method:'POST',
   body:JSON.stringify({quantity_returned:n('tw-return-qty'),returned_on:value('tw-return-date'),
    disposition:value('tw-disposition')})});
@@ -1028,18 +1046,42 @@ panel('course','Patient course',
  '<div id="tw-course-status" class="status hide"></div>');
 perms.course=['pi','consultant','scientist','nurse','pg','pharmacy','monitor','microbiology','technician'];
 const contextRoleUI=applyRoleUI;
-applyRoleUI=function(role){contextRoleUI(role);contextBox.classList.toggle('hide',role==='randomization_custodian');};
+applyRoleUI=function(role){contextRoleUI(role);contextBox.classList.toggle('hide',!perms.course.includes(role));};
+function resetPCRControls(){
+ pcrRecords=[];pcrLoadedSubject=null;
+ for(const id of ['tw-collect-id','tw-result-id','tw-verify-id'])$(id).innerHTML='<option value="">Choose participant first</option>';
+ for(const id of ['tw-collect-save','tw-result-save','tw-verify-save'])$(id).disabled=true;
+ $('tw-pcr-table').textContent='Select an enrolled participant to load specimens.';
+}
+function resetDrugControls(){
+ drugLoadedSubject=null;
+ for(const id of ['tw-auth-save','tw-dispense-save','tw-return-save'])$(id).disabled=true;
+ for(const id of ['tw-order-id','tw-dispense-id','tw-return-qty','tw-issued','tw-rx','tw-allocation','tw-renal','tw-instruction'])$(id).value='';
+ for(const id of ['tw-order-id','tw-dispense-id'])$(id).innerHTML='<option value="">Choose participant first</option>';
+ $('tw-ledger').textContent='Select an enrolled participant.';
+ $('tw-slip').textContent='Generate a confirmed issue to print and sign.';
+ $('tw-drug-allocation').textContent='No randomized allocation verified.';
+}
+function requireProcedureSubject(kind){
+ const loaded=kind==='pcr'?pcrLoadedSubject:drugLoadedSubject;
+ if(!participantSubject||loaded!==participantSubject||n('tw-'+kind+'-subject')!==participantSubject)
+  throw Error('Reload procedures for the selected enrolled participant before saving');
+}
 function clearParticipant(){
  participantRequest++;participantSubject=null;participantContext=null;timelineCursor=null;
  selected=null;
  $('currentPatient').textContent='None';$('records').textContent='Select a participant.';$('entryList').textContent='';
  $('doseResult').textContent='';$('arm').disabled=false;
+ resetPCRControls();resetDrugControls();
  $('tw-context-subject').value='';$('tw-context-allocation').textContent='No participant selected.';
  $('tw-context-detail').textContent='';$('tw-course-records').textContent='';
  for(const id of ['tw-pcr-subject','tw-drug-subject','tw-crf-subject','tw-rand-subject'])$(id).value='';
 }
 function renderParticipant(context){
  if(context.patient_id!==participantContext?.patient_id){
+  resetPCRControls();resetDrugControls();
+  for(const id of ['tw-collected','tw-accession','tw-reported','tw-assay','tw-result-kind','tw-viral-load','tw-loq','tw-qc','tw-result-reason','tw-review-reason','tw-rx-date','tw-issue-date','tw-return-date','tw-rand-source'])$(id).value='';
+  $('tw-rand-eligibility-confirm').checked=false;
   for(const id of ['age','weight','creatinine','sex'])$(id).value='';
  }
  participantContext=context;participantSubject=context.subject?.id||null;
@@ -1062,6 +1104,7 @@ function renderParticipant(context){
  }
 }
 async function selectParticipantSubject(id){
+ if(activeTab==='entry')await saveDraftNow();
  if(!id){clearParticipant();return;}
  const request=++participantRequest;
  $('tw-context-allocation').textContent='Checking participant and allocation…';
@@ -1094,6 +1137,10 @@ window.choose=async function(id){
  if(activeTab==='crf')try{await crfSaveDraft();}catch(e){error('tw-crf-status',e);return;}
  await participantChoose(id);
  if(selected!==id)return;
+ if(!perms.course.includes($('currentRole').textContent.trim())){
+  participantRequest++;participantSubject=null;participantContext=null;
+  resetPCRControls();resetDrugControls();return;
+ }
  const request=++participantRequest;
  $('tw-context-allocation').textContent='Checking participant and allocation…';
  $('tw-context-detail').textContent='';

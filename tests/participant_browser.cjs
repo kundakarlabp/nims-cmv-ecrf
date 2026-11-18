@@ -6,7 +6,8 @@ const assert=require('node:assert/strict');
 const base=path.join(__dirname,'..');
 const subjects=[1,2].map(id=>({id,study_code:'TEST-STUDY-'+id,screening_code:'TEST-SCREEN-'+id,
  status:'enrolled',enrolled_on:'2026-10-02',donor_type:'living',ratg_induction:true}));
-const people=[1,2].map(id=>({id:'TEST-P-'+id,name:'Synthetic participant '+id,cr_number:'TEST-CR-'+id}));
+subjects.push({id:3,screening_code:'TEST-SCREEN-3',status:'screened',enrolled_on:null,donor_type:'living',ratg_induction:true});
+const people=[1,2,3].map(id=>({id:'TEST-P-'+id,name:'Synthetic participant '+id,cr_number:'TEST-CR-'+id}));
 const f=(label,type='text',required=false)=>({label,type,required});
 const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplementary:true,fields:{
  start_on:f('Effective date','date',true),source_reference:f('Source','text',true),
@@ -20,7 +21,7 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
  const browser=await chromium.launch({headless:true,executablePath});
  try{
   const page=await browser.newPage({viewport:{width:1280,height:900}});
-  const errors=[],writes=[],drafts=new Map();let blinded=false,holdOldDraft=false,releaseOldDraft=null;
+  const errors=[],writes=[],drafts=new Map(),contextReads=[];let blinded=false,holdOldDraft=false,releaseOldDraft=null;
   page.on('pageerror',e=>errors.push(e.message));
   await page.route('http://cmv-ui.test/**',async route=>{
    const url=new URL(route.request().url());const p=url.pathname;
@@ -32,9 +33,12 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
    else if(p==='/api/trial/subjects')result=subjects;
    else if(p==='/api/trial/eligibility-schema')result={inclusion:{},exclusion:{}};
    else if(p.endsWith('/context')){
+    contextReads.push(p);
     const id=p.includes('/patients/')?Number(p.match(/TEST-P-(\d+)/)[1]):Number(p.split('/')[5]);
     result={subject:subjects[id-1],patient_id:'TEST-P-'+id,transplant_on:'2026-10-01',
       allocation:{randomized:true,allocation_code:'TEST-ALLOC-'+id,...(blinded?{}:{assigned_arm_mg:id===1?'450':'900'})}};
+   }else if(p.endsWith('/pcr')){
+    const sid=Number(p.split('/')[4]);result={pcr_records:[{id:sid*10+1,status:'planned',specimen_code:'TEST-PCR-'+sid,scheduled_month:1,target_on:'2026-11-01'}]};
    }else if(p==='/api/trial/crf/schema')result={forms};
    else if(p.includes('/drafts/')){
     const key=p+'?occurrence_key=NEW';
@@ -101,6 +105,25 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   await page.selectOption('#tw-context-subject','1');
   await page.waitForFunction(()=>$('tw-context-allocation').textContent.includes('concealed'));
   assert.doesNotMatch(await page.textContent('#tw-context-allocation'),/450|900/);
+  await page.evaluate(()=>{$('currentRole').textContent='pi';applyRoleUI('pi');});
+  await page.evaluate(async()=>{await tab('pcr');});
+  await page.selectOption('#tw-context-subject','1');
+  await page.waitForFunction(()=>$('tw-collect-id').value==='11');
+  await page.selectOption('#tw-context-subject','3');
+  await page.waitForFunction(()=>$('tw-context-subject').value==='3'&&$('tw-collect-id').value==='');
+  assert.equal(await page.isDisabled('#tw-collect-save'),true);
+  assert.equal(await page.inputValue('#tw-pcr-subject'),'');
+  await page.selectOption('#tw-context-subject','');
+  assert.equal(await page.isDisabled('#tw-result-save'),true);
+  assert.equal(await page.isDisabled('#tw-verify-save'),true);
+  // Ordinary IT administrators retain authorized registry use, while the
+  // restricted clinical allocation context stays unavailable to them.
+  await page.evaluate(()=>{$('currentRole').textContent='admin';applyRoleUI('admin');});
+  const previousReads=contextReads.length;
+  await page.evaluate(async()=>{await choose('TEST-P-2');});
+  assert.equal(await page.evaluate(()=>selected),'TEST-P-2');
+  assert.equal(contextReads.length,previousReads);
+  assert.equal(await page.isVisible('#tw-participant-context'),false);
   assert.deepEqual(errors,[]);
   console.log('Real browser passed: scripts, patient identity, source-date autosave, cross-patient draft isolation, allocation persistence, mobile layout and blinded banner');
  }finally{await browser.close();}
