@@ -27,7 +27,7 @@ from .clinical_gate import owner_authorized
 router=APIRouter(prefix="/api/trial/randomization", tags=["randomization"])
 STRATA=("rATG:living","rATG:deceased","no_rATG:living","no_rATG:deceased")
 ARMS=("450","900")
-REVEAL_ROLES={"pi","consultant","pharmacy"}
+REVEAL_ROLES={"pi","consultant","pharmacy","scientist","nurse","pg"}
 CUSTODIAN_ROLE="randomization_custodian"
 
 def cipher():
@@ -69,6 +69,7 @@ class ImportSequence(BaseModel):
     statistician_reference:str=Field(min_length=8,max_length=160)
     signed_specification_reference:str=Field(min_length=8,max_length=160)
     independent_sequence_attested:bool
+    legacy_reconciliation_reference:str|None=Field(default=None,min_length=8,max_length=160)
     sequence_sha256:str=Field(pattern=r"^[0-9a-f]{64}$")
     entries:list[SequenceEntry]=Field(min_length=20,max_length=5000)
 
@@ -113,6 +114,8 @@ def lock_sequence(data:ImportSequence,u:AuthContext=Depends(current),
         raise HTTPException(403,"Only an independent randomization custodian can lock a sealed sequence")
     if not data.independent_sequence_attested:
         raise HTTPException(422,"Independent generation/signature must be attested")
+    if CLINICAL_MODE and not data.legacy_reconciliation_reference:
+        raise HTTPException(422,"Document reconciliation of prior worksheet allocations before locking a new official sequence")
     if s.scalar(select(RandomizationPlan.id).limit(1)) is not None:
         raise HTTPException(409,"Sequence permanently locked already; cannot replace or reseed")
     rows=[r.model_dump() for r in data.entries]
@@ -142,7 +145,8 @@ def lock_sequence(data:ImportSequence,u:AuthContext=Depends(current),
         audit(s,u,"randomization_lock","randomization_plan",str(plan.id),None,None,
               {"protocol_version":plan.protocol_version,"sequence_sha256":digest,
                "capacities":counts,"block_sizes":sizes,
-               "signed_specification_reference":plan.signed_specification_reference},
+               "signed_specification_reference":plan.signed_specification_reference,
+               "legacy_reconciliation_reference":data.legacy_reconciliation_reference},
               "Independent, sealed sequence imported and permanently locked")
         s.commit()
     except IntegrityError:
@@ -156,6 +160,7 @@ class GenerateSequence(BaseModel):
     statistician_reference:str=Field(min_length=8,max_length=160)
     signed_specification_reference:str=Field(min_length=8,max_length=160)
     independent_sequence_attested:Literal[True]
+    legacy_reconciliation_reference:str|None=Field(default=None,min_length=8,max_length=160)
     block_sizes:list[int]=Field(min_length=2,max_length=4)
 
 @router.post('/sequence/generate-and-lock')
@@ -163,6 +168,8 @@ def generate_and_lock(data:GenerateSequence,u:AuthContext=Depends(current),s:Ses
     # The separately authorized custodian acts personally. Never seed a live
     # sequence on deployment, or allow the eligibility investigator to generate.
     if u.role!=CUSTODIAN_ROLE:raise HTTPException(403,'Independent custodian required')
+    if CLINICAL_MODE and not data.legacy_reconciliation_reference:
+        raise HTTPException(422,'Reconcile prior worksheet allocations before generating a new official sequence')
     sizes=sorted(set(data.block_sizes))
     if len(sizes)<2 or any(size not in {4,6,8,10} for size in sizes):
         raise HTTPException(422,'Prespecify at least two distinct sizes from 4, 6, 8, 10')
@@ -181,7 +188,8 @@ def generate_and_lock(data:GenerateSequence,u:AuthContext=Depends(current),s:Ses
     return lock_sequence(ImportSequence(protocol_version='5.0',
         statistician_reference=data.statistician_reference,
         signed_specification_reference=data.signed_specification_reference,
-        independent_sequence_attested=True,sequence_sha256=digest,entries=rows),u,s)
+        independent_sequence_attested=True,legacy_reconciliation_reference=data.legacy_reconciliation_reference,
+        sequence_sha256=digest,entries=rows),u,s)
 
 def plan_enabled(plan):
     if not plan:return False

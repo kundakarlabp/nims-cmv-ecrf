@@ -9,6 +9,21 @@ concurrency:
   group: checks-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install pinned test-only browser driver
+        run: npm install --prefix /tmp/cmv-ui-tests --no-audit --no-fund playwright@1.62.1
+      - name: Exercise actual clinical workspace in Chromium with synthetic API fixtures
+        env:
+          NODE_PATH: /tmp/cmv-ui-tests/node_modules
+          CMV_TEST_CHROME: /usr/bin/google-chrome
+        run: node tests/participant_browser.cjs
   tests:
     runs-on: ubuntu-latest
     timeout-minutes: 10
