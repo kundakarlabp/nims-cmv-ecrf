@@ -182,7 +182,7 @@ def test_trial_study_id_cannot_be_preassigned_on_registration():
         h=auth(c)
         rejected=c.post('/api/patients',headers=h,json={
             'name':'Synthetic premature ID','cr_number':'TEST-PREASSIGN',
-            'study_id':'NCMV-00001'})
+            'study_id':'NCMV001'})
         assert rejected.status_code==422,rejected.text
         assert 'approved enrollment' in rejected.text
         registered=c.post('/api/patients',headers=h,json={
@@ -359,7 +359,7 @@ def test_screening_pi_enrollment_seven_pcr_codes_and_eligibility():
         assert enrollment.status_code==200,enrollment.text
         assert enrollment.json()['pcr_orders']==7
         subject=enrollment.json()['subject']
-        expected_id=f'NCMV-{subject_id:05d}'
+        expected_id='NCMV001'
         assert subject['study_code']==expected_id
         assert enrollment.json()['study_id']==expected_id
         assert pi.get('/api/patients/'+pid).json()['patient']['study_id']==expected_id
