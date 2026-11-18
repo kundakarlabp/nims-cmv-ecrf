@@ -4,6 +4,7 @@
 var root=$('workspace'),menu=root.querySelector('.tabs');
 var logoutBtn=Array.from(menu.querySelectorAll('button')).find(x=>x.textContent.trim()==='Log out');
 var studySubjects=[],pcrRecords=[],drugLots=[],pcrLoadedSubject=null,drugLoadedSubject=null;
+var lastIssuedSlip=null;
 function txt(s){return escapeHTML(String(s==null?'':s));}
 function value(id){return ($(id).value||'').trim();}
 function n(id){return Number(value(id));}
@@ -45,21 +46,31 @@ function panel(id,title,html){
 var field=(title,id,type='text')=>'<label>'+title+'<input id="'+id+'" type="'+type+'"></label>';
 var choose=(title,id,opts)=>'<label>'+title+'<select id="'+id+'">'+opts.map(o=>'<option value="'+o[0]+'">'+o[1]+'</option>').join('')+'</select></label>';
 var btn=(label,id)=>'<button id="'+id+'">'+label+'</button>';
+panel('tasks','Daily worklist',
+ '<p class="hint">Actionable items from saved trial records. Dates are scheduled targets, not approved visit windows. No entries or allocations are created by opening an item.</p>'+
+ '<div class="worklist-controls"><label>Filter actions<select id="tw-task-filter">'+
+ '<option value="">All actions</option><option value="Enrollment">Screening and enrollment</option>'+
+ '<option value="Randomization">Randomization</option><option value="PCR">CMV PCR</option>'+
+ '<option value="eCRF">eCRF review / corrections</option><option value="SAE">Safety reporting checks</option></select></label>'+
+ btn('Refresh worklist','tw-task-refresh')+'</div>'+
+ '<div id="tw-task-counts" class="worklist-summary" aria-live="polite"></div>'+
+ '<div id="tw-task-items"></div><div id="tw-task-status" class="status hide"></div>'
+);
 panel('study','Enrollment',
  '<div class="study-columns"><section class="study-card"><h3>1 · Screening</h3>'+
  choose('Registry record','tw-patient',[])+field('Screening date','tw-screen-date','date')+
  field('Informed consent signed','tw-consent-date','date')+
  field('Signed ICF version','tw-icf')+field('Signed PIS version','tw-pis')+
- choose('Consent language','tw-consent-language',[['English','English'],['Telugu','Telugu'],['Hindi','Hindi']])+
+ choose('Consent language','tw-consent-language',[['','Select recorded language'],['English','English'],['Telugu','Telugu'],['Hindi','Hindi']])+
  field('Consent obtained by','tw-consent-obtained')+
  field('Signed consent document/source reference','tw-consent-source')+
  field('Participant initials (restricted)','tw-initials')+
  field('Age at transplant (years)','tw-screen-age','number')+
  choose('Sex (source record)','tw-sex',[['','Not recorded'],['female','Female'],['male','Male'],['other','Other']])+
- choose('Donor CMV IgG','tw-digg',[['positive','Positive'],['negative','Negative'],['unknown','Unknown']])+
- choose('Recipient CMV IgG','tw-rigg',[['positive','Positive'],['negative','Negative'],['unknown','Unknown']])+
- choose('Donor type','tw-donor',[['living','Living'],['deceased','Deceased']])+
- choose('Donor relationship','tw-relationship',[['living_related','Living related'],
+ choose('Donor CMV IgG','tw-digg',[['','Select verified result'],['positive','Positive'],['negative','Negative'],['unknown','Unknown / not available']])+
+ choose('Recipient CMV IgG','tw-rigg',[['','Select verified result'],['positive','Positive'],['negative','Negative'],['unknown','Unknown / not available']])+
+ choose('Donor type','tw-donor',[['','Select verified donor type'],['living','Living'],['deceased','Deceased']])+
+ choose('Donor relationship','tw-relationship',[['','Select verified relationship'],['living_related','Living related'],
     ['living_unrelated','Living unrelated'],['deceased','Deceased']])+
  choose('rATG induction','tw-ratg',[['','Undocumented'],['true','Yes'],['false','No']])+
  '<label><input id="tw-eligible" type="checkbox" style="width:auto"> Signed protocol eligibility reviewed</label>'+
@@ -90,16 +101,19 @@ panel('study','Enrollment',
 panel('pcr','CMV PCR',
  choose('Enrolled subject','tw-pcr-subject',[])+
  '<h3>Seven protocol timepoints and repeat specimens</h3><div id="tw-pcr-table"></div>'+
+ '<section class="study-card"><h3>Microbiology specimen requisition</h3>'+
+ '<p class="hint">Print an individual coded requisition for an existing protocol specimen. Printing does not record collection or laboratory completion.</p>'+
+ choose('Scheduled PCR specimen','tw-pcr-print-id',[])+btn('Print coded PCR requisition','tw-pcr-print')+'</section>'+
  '<div class="study-columns"><section class="study-card"><h3>Specimen collection</h3>'+
  choose('Planned specimen','tw-collect-id',[])+field('Collection date','tw-collected','date')+
  field('Lab accession reference','tw-accession')+btn('Record collection','tw-collect-save')+
  '</section><section class="study-card"><h3>Laboratory result</h3>'+
  choose('Collected specimen','tw-result-id',[])+field('Reported date','tw-reported','date')+
  field('Assay/platform','tw-assay')+
- choose('Result category','tw-result-kind',[['not_detected','Not detected'],['quantified','Quantified'],['detected_below_loq','Below quantification'],['invalid','Invalid']])+
+ choose('Result category','tw-result-kind',[['','Select reported category'],['not_detected','Not detected'],['quantified','Quantified'],['detected_below_loq','Below quantification'],['invalid','Invalid']])+
  field('CMV viral load (IU/mL; quantified only)','tw-viral-load','number')+
  field('Lower limit (IU/mL; if known)','tw-loq','number')+
- choose('Laboratory QC','tw-qc',[['pass','Pass'],['fail','Fail']])+
+ choose('Laboratory QC','tw-qc',[['','Select reported QC'],['pass','Pass'],['fail','Fail']])+
  field('Correction reason (if editing result)','tw-result-reason')+
  btn('Submit lab result for verification','tw-result-save')+'</section></div>'+
  '<section class="study-card"><h3>Source review</h3>'+
@@ -129,7 +143,8 @@ panel('drug','MSS drug accountability',
  choose('Disposition','tw-disposition',[['quarantine','Quarantine'],['destruction_pending','Destruction pending'],['destroyed','Destroyed']])+
  btn('Record return without restocking','tw-return-save')+'</section></div>'+
  '<div class="study-card"><h3>Accountability ledger</h3><div id="tw-ledger"></div></div>'+
- '<div class="study-card"><h3>MSS issue slip</h3><div id="tw-slip">Generate a confirmed issue to print and sign.</div></div>'+
+ '<div class="study-card"><h3>MSS issue slip</h3><div id="tw-slip">Generate a confirmed issue to print and sign.</div>'+
+ btn('Print confirmed MSS slip','tw-mss-print')+'</div>'+
  '<div id="tw-drug-status" class="status hide"></div>'
 );
 panel('crf','Structured eCRF and clinical logs',
@@ -138,6 +153,8 @@ panel('crf','Structured eCRF and clinical logs',
  '<p class="hint" id="tw-crf-descriptor">C–L map to CRF v3.0. M–P add dated source details for clinical care already received; they do not add mandatory tests or alter treatment.</p>'+
  '<label>Event/assessment date<input type="date" id="tw-crf-date"></label>'+
  '<div id="tw-crf-fields" class="study-columns"></div>'+
+ '<div id="tw-crf-source" class="study-card hide" aria-live="polite"></div>'+
+ btn('Use reviewed eligibility measurements','tw-crf-source-copy')+
  '<div id="tw-crf-draft-status" class="status">No draft loaded.</div>'+
  '<label>Correction reason (required only when revising submitted form)<input id="tw-crf-reason"></label>'+
  btn('Save private working draft','tw-crf-save')+' '+
@@ -215,7 +232,7 @@ loginPanelElement.insertAdjacentHTML('beforeend','<hr><h3>Activate individual st
  '<label>Choose a private password<input type="password" id="tw-password" autocomplete="new-password"></label>'+
  btn('Activate account','tw-activate-save')+'<div id="tw-activate-status" class="status hide"></div>');
 for(const id of ['tw-screen-date','tw-consent-date','tw-enroll-date','tw-anchor-date','tw-collected','tw-reported','tw-receipt-date','tw-rx-date','tw-issue-date','tw-return-date'])$(id).value=today();
-var perms={randomization:['pi','consultant','pharmacy','scientist','monitor','randomization_custodian'],crf:['pi','consultant','scientist','nurse','pg','technician','microbiology','pharmacy','monitor'],study:['pi','consultant','scientist'],pcr:['pi','consultant','scientist','nurse','technician','microbiology','monitor'],drug:['pi','consultant','scientist','pharmacy','monitor'],staff:['pi','admin'],security:['pi','admin','consultant','pg','scientist','nurse','technician','microbiology','pharmacy','monitor','randomization_custodian']};
+var perms={tasks:['pi','consultant','scientist','nurse','pg','technician','microbiology','pharmacy','monitor','admin'],randomization:['pi','consultant','pharmacy','scientist','monitor','randomization_custodian'],crf:['pi','consultant','scientist','nurse','pg','technician','microbiology','pharmacy','monitor'],study:['pi','consultant','scientist'],pcr:['pi','consultant','scientist','nurse','technician','microbiology','monitor'],drug:['pi','consultant','scientist','pharmacy','monitor'],staff:['pi','admin'],security:['pi','admin','consultant','pg','scientist','nurse','technician','microbiology','pharmacy','monitor','randomization_custodian']};
 function setRole(){
  var r=$('currentRole').textContent.trim();
  for(const k of Object.keys(perms))$('btn'+k).classList.toggle('hide',!perms[k].includes(r));
@@ -258,16 +275,17 @@ tab=async function(name){
   $('tw-invitation').textContent='';$('tw-invitation').classList.add('hide');
   $('tw-bulk-result').textContent='';$('tw-bulk-result').classList.add('hide');
  }
- if(['study','pcr','drug','staff','security','crf','randomization'].includes(name)){
+ if(['tasks','study','pcr','drug','staff','security','crf','randomization'].includes(name)){
   if(activeTab==='entry'){try{await saveDraftNow();}catch(e){show('msg','Draft not saved: '+e.message,true);return;}}
   activeTab=name;
-  for(const section of ['dashboard','registry','review','entry','dose','due','study','pcr','drug','staff','security','crf','randomization']){
+  for(const section of ['dashboard','registry','review','entry','dose','due','tasks','study','pcr','drug','staff','security','crf','randomization']){
    $(section).classList.toggle('hide',section!==name);
    $('btn'+section).classList.toggle('selected',section===name);
   }
   root.querySelector('.grid').classList.add('hide');
   await task(name==='pcr'?'tw-pcr-status':name==='drug'?'tw-drug-status':name==='randomization'?'tw-rand-status':'tw-status',async()=>{
-   if(name==='study'){
+   if(name==='tasks'){await loadTasks();}
+    if(name==='study'){
      $('tw-assigned-study-id').textContent='Study ID: loading selected participant…';
      await loadRegistry();await loadSubjects();await loadEligibilitySchema();await selectEnrollmentPatient();
    }
@@ -338,6 +356,41 @@ async function loadSubjects(){
  $('tw-register').innerHTML='<table><thead><tr><th>CR number / Study code</th><th>Status</th><th>D+/R+</th><th>Signed consent</th></tr></thead><tbody>'+
  studySubjects.map(x=>'<tr><td>'+txt(subjectLabel(x))+'</td><td>'+txt(x.status)+'</td><td>'+String(x.d_plus_r_plus)+'</td><td>'+String(x.consent_recorded)+'</td></tr>').join('')+'</tbody></table>';
 }
+/* Action worklist: read-only navigation, never an allocation/clinical write. */
+var taskEntries=[];
+async function loadTasks(){
+ const r=await api('/api/trial/action-worklist?limit=200');
+ taskEntries=r.actions||[];
+ const summary=$('tw-task-counts');
+ summary.textContent=r.total+' outstanding action(s) · '+r.as_of+' · '+Object.entries(r.counts||{})
+   .map(([name,count])=>name+': '+count).join(' · ');
+ renderTasks();
+}
+function renderTasks(){
+ const filter=value('tw-task-filter').toLowerCase();
+ const items=taskEntries.filter(a=>!filter||
+   (filter==='enrollment' && /eligibility|enrollment/i.test(a.category))||
+   a.category.toLowerCase().includes(filter));
+ $('tw-task-items').innerHTML=items.length?items.map((a,i)=>
+  '<article class="worklist-item"><div><span class="worklist-category">'+txt(a.category)+'</span>'+
+  '<strong>'+txt(a.study_code||'Screened participant')+'</strong>'+
+  '<p>'+txt(a.detail)+'</p>'+
+  (a.target_on?'<small>Scheduled target '+txt(a.target_on)+'</small>':'')+'</div>'+
+  '<button class="secondary" data-task-idx="'+taskEntries.indexOf(a)+'" aria-label="Open '+txt(a.category)+' for '+txt(a.study_code)+'">Open</button></article>'
+ ).join(''):'<p class="hint">No matching actions. This does not imply that all trial data are verified or complete.</p>';
+}
+$('tw-task-filter').onchange=renderTasks;
+$('tw-task-refresh').onclick=()=>{void task('tw-task-status',loadTasks);};
+$('tw-task-items').onclick=e=>{const btn=e.target.closest('[data-task-idx]');if(!btn)return;
+ void task('tw-task-status',async()=>{
+  const item=taskEntries[Number(btn.dataset.taskIdx)];
+  if(!item)throw Error('Refresh the worklist before opening this item');
+  await window.choose(item.patient_id);
+  if(selected!==item.patient_id)throw Error('Patient context changed; select the action again');
+  await tab(item.route);
+ });
+};
+
 async function loadPCR(){
  const sid=n('tw-pcr-subject');resetPCRControls();if(!sid)return;
  if(!await selectParticipantSubject(sid))return;
@@ -347,6 +400,9 @@ async function loadPCR(){
  pcrRecords=records;pcrLoadedSubject=sid;
  $('tw-pcr-table').innerHTML='<table><thead><tr><th>Code</th><th>Month</th><th>Target</th><th>Status</th><th>Viral load (IU/mL)</th></tr></thead><tbody>'+
  pcrRecords.map(x=>'<tr><td>'+txt(x.specimen_code)+'</td><td>'+x.scheduled_month+'</td><td>'+txt(x.target_on)+'</td><td>'+txt(x.status)+'</td><td>'+txt(x.quantitative_iu_ml??'—')+'</td></tr>').join('')+'</tbody></table>';
+ fill('tw-pcr-print-id',pcrRecords.filter(x=>x.attempt===1),'id',
+   x=>x.specimen_code+' · Month '+x.scheduled_month+' · '+x.status);
+ $('tw-pcr-print').disabled=!n('tw-pcr-print-id');
  fill('tw-collect-id',pcrRecords.filter(x=>x.status==='planned'),'id',x=>x.specimen_code);
  fill('tw-result-id',pcrRecords.filter(x=>['collected','result_entered','verified'].includes(x.status)),'id',x=>x.specimen_code);
  fill('tw-verify-id',pcrRecords.filter(x=>x.status==='result_entered'),'id',x=>x.specimen_code);
@@ -383,7 +439,9 @@ async function loadDrug(){
 $('tw-pcr-subject').onchange=()=>{void task('tw-pcr-status',loadPCR);};
 $('tw-drug-subject').onchange=()=>{void task('tw-drug-status',loadDrug);};
 $('tw-screen-save').onclick=()=>{void task('tw-status',async()=>{
- var r=await api('/api/trial/screening',{method:'POST',body:JSON.stringify({
+ for(const [id,label] of [['tw-digg','donor CMV IgG'],['tw-rigg','recipient CMV IgG'],['tw-donor','donor type'],['tw-relationship','donor relationship'],['tw-consent-language','consent language']])
+   if(!value(id))throw Error('Select the source-verified '+label+'; an unassessed default is not permitted');
+  var r=await api('/api/trial/screening',{method:'POST',body:JSON.stringify({
   patient_id:value('tw-patient'),screening_on:value('tw-screen-date'),consent_on:value('tw-consent-date')||null,
   consent_version:value('tw-icf')||null,donor_cmv_igg:value('tw-digg'),recipient_cmv_igg:value('tw-rigg'),
   donor_type:value('tw-donor'),donor_relationship:value('tw-relationship'),
@@ -453,6 +511,9 @@ $('tw-dispense-save').onclick=()=>{void task('tw-drug-status',async()=>{
  var r=await api('/api/trial/subjects/'+n('tw-drug-subject')+'/dispense',{method:'POST',
   body:JSON.stringify({authorization_id:n('tw-order-id'),lot_id:n('tw-lot-id'),
    quantity_issued:n('tw-issued'),issued_on:value('tw-issue-date')})});
+ lastIssuedSlip=Object.freeze({...r,issued_on:value('tw-issue-date'),
+   prescription_ref:($('tw-order-id').selectedOptions[0]?.textContent||'').split(' · ')[0]});
+ $('tw-mss-print').disabled=false;
  $('tw-slip').innerHTML='<h3>NIMS · ICMR CMV STUDY · MSS SIGNATURE SLIP</h3>'+
   '<p>Study ID: '+txt(r.study_code)+' | Slip code: '+txt(r.slip_code)+'</p>'+
   '<p>Valganciclovir 450 mg tablets | Quantity issued: '+r.quantity_issued+'</p>'+
@@ -594,7 +655,8 @@ $('tw-checklist-save').onclick=()=>{void task('tw-status',async()=>{
   'All protocol criteria checked and eligible; PI enrollment may proceed.':
   'Screening exclusion detected; enrollment is blocked. Preserve signed source.');
 });};
-for(const id of ['tw-cbc-date','tw-review-on'])$(id).value=today();
+$('tw-cbc-date').value=''; // Laboratory source date must be entered explicitly.
+$('tw-review-on').value=today(); // Review is an action performed now.
 async function loadAccounts(){
  const accounts=await api('/api/trial/staff/accounts');
  $('tw-accounts').innerHTML='<div style="overflow-x:auto"><table><thead><tr>'+
@@ -663,6 +725,7 @@ $('tw-change-password').onclick=()=>{void task('tw-mfa-status',async()=>{
 
 /* Source-aligned CRF forms with private, revision-checked server drafts. */
 let currentCrfSchema=null,currentCrfSpec=null,currentCrfEntry=null;
+let baselineSource=null,baselineSourceRequest=0;
 let crfLoadedSection=null,crfLoadedSubject=null;
 let crfDraftRevision=null,crfDraftKey=null,crfDraftLast=null,crfDraftTimer=null,crfDraftQueue=Promise.resolve();
 const crfEditable={
@@ -778,10 +841,60 @@ function crfScheduleSave(){
  $('tw-crf-draft-status').textContent='Unsaved changes · server autosave pending';
  crfDraftTimer=setTimeout(()=>{void crfSaveDraft().catch(()=>{});},1300);
 }
+
+async function loadBaselineSource(){
+ const request=++baselineSourceRequest;
+ baselineSource=null;
+ const card=$('tw-crf-source'),copy=$('tw-crf-source-copy');
+ card.classList.add('hide');copy.classList.add('hide');
+ if(crfLoadedSection!=='C_baseline'||!crfLoadedSubject)return;
+ const allowed=['pi','consultant','scientist','monitor'].includes($('currentRole').textContent.trim());
+ if(!allowed)return;
+ try{
+  const response=await api('/api/trial/subjects/'+crfLoadedSubject+'/eligibility');
+  if(request!==baselineSourceRequest || crfLoadedSection!=='C_baseline' ||
+     crfLoadedSubject!==n('tw-crf-subject'))return;
+  const record=response.eligibility;
+  if(!record||!record.baseline){card.textContent='No investigator-reviewed eligibility measurements are available.';card.classList.remove('hide');return;}
+  baselineSource=record.baseline;
+  const fields=[
+   ['CBC date',baselineSource.baseline_cbc_on],
+   ['ANC (/µL)',baselineSource.anc_per_ul],
+   ['Platelets (/µL)',baselineSource.platelets_per_ul],
+   ['Hemoglobin (g/dL)',baselineSource.hemoglobin_g_dl],
+   ['Cockcroft–Gault CrCl (mL/min)',baselineSource.crcl_cg_ml_min],
+   ['Eligibility signed source',baselineSource.signed_source_reference]
+  ];
+  card.innerHTML='<h3>Reviewed eligibility source · read-only</h3>'+
+   '<p class="hint">Measurements below come from the eligibility checklist. They may not represent a different baseline date. They are never copied without explicit confirmation.</p>'+
+   fields.map(([label,val])=>'<p><strong>'+txt(label)+':</strong> '+txt(val??'Not recorded')+'</p>').join('');
+  card.classList.remove('hide');
+  copy.classList.toggle('hide',!crfCanEdit());
+ }catch(e){if(request===baselineSourceRequest){card.textContent='Eligibility source unavailable for this account.';card.classList.remove('hide');}}
+}
+$('tw-crf-source-copy').onclick=()=>{
+ if(!baselineSource||crfLoadedSection!=='C_baseline'||!crfCanEdit())return;
+ const sourceDate=baselineSource.baseline_cbc_on;
+ if(sourceDate&&value('tw-crf-date')<sourceDate){
+  error('tw-crf-status',Error('Baseline assessment date precedes the source laboratory date. Correct it before copying.'));return;
+ }
+ if(!confirm('Copy only currently BLANK measurements from the investigator-reviewed '+sourceDate+
+    ' eligibility source into baseline? Verify that the same source results apply to this assessment date.'))return;
+ const mapping={anc_per_ul:'anc_per_ul',platelets_per_ul:'platelets_per_ul',
+  hemoglobin_g_dl:'hemoglobin_g_dl',crcl_cg_ml_min:'cockcroft_gault_crcl_ml_min'};
+ for(const [src,dest] of Object.entries(mapping)){
+  const node=$('twcrf-'+dest);
+  if(node&&!node.value&&baselineSource[src]!==null&&baselineSource[src]!==undefined)
+   node.value=String(baselineSource[src]);
+ }
+ crfScheduleSave();
+ notify('tw-crf-status','Reviewed measurements copied into blank fields only. Verify clinical dates and sign the baseline source before submission.');
+};
 function crfRender(){
  currentCrfSpec=currentCrfSchema?.[value('tw-crf-section')]||null;
  crfLoadedSection=value('tw-crf-section');crfLoadedSubject=n('tw-crf-subject');
  currentCrfEntry=null;
+ void loadBaselineSource();
  $('tw-crf-descriptor').textContent=currentCrfSpec?
   currentCrfSpec.title+' · '+currentCrfSpec.repeat+(currentCrfSpec.supplementary?
    ' · supplementary source-detail log (no additional mandatory investigations)':' · CRF v3.0 (14 August 2026)'):
@@ -927,14 +1040,19 @@ loadDashboard=async function(){
  await originalStudyDashboard();
  const target=$('dashboardResults');
  try{
-  const [trial,forms]=await Promise.all([
-   api('/api/trial/overview'),api('/api/trial/crf/completeness')
+  const [trial,forms,actions,build]=await Promise.all([
+   api('/api/trial/overview'),api('/api/trial/crf/completeness'),
+   api('/api/trial/action-worklist?limit=8'),api('/healthz')
   ]);
+  $('tw-live-build').textContent='Running server · '+(build.app_commit?
+    'commit '+build.app_commit.slice(0,10):
+    'build '+String(build.build_fingerprint||'unavailable').slice(0,12))+
+    ' · '+(build.service||'mode unavailable');
   const lab=trial.pcr||{}, drug=trial.drug_accountability||{};
   const cards=[
    ['Screened',trial.screened,'Coded screening records'],
    ['Enrolled',trial.ever_enrolled,'Includes withdrawn/closed participants'],
-   ['Randomized',trial.randomized,'Irreversible sealed 1:1 allocations'],
+   ['Randomized',trial.randomized,'Approved protocol recruitment target: 344; Study ID capacity: 350'],
    ['PCR scheduled',trial.scheduled_pcr_slots,'Seven protocol slots per enrolled subject'],
    ['PCR verified',trial.verified_protocol_pcr_slots,'Independent review completed'],
    ['Stock remaining',drug.tablets_in_stock,'450-mg tablets in study inventory'],
@@ -962,9 +1080,17 @@ loadDashboard=async function(){
   const note='<p class="warn-demo">Study status is computed from persisted records. '+
    'Enrollment and PCR completion do not imply endpoint adjudication or data lock. '+
    'Medication exposure, renal adjustment and adjudication require source verification.</p>';
+  const operations='<div class="dash-card" style="margin:12px 0">'+
+   '<h3>Actions requiring attention</h3><p class="dash-note">'+
+   Number(actions.total||0)+' outstanding worklist item(s) · next '+Number((actions.actions||[]).length)+' shown. '+
+   'Each item links to an existing participant; no actions are automatically approved.</p>'+
+   (actions.actions||[]).slice(0,5).map(a=>'<p class="dash-note">'+
+    '<strong>'+txt(a.study_code)+' · '+txt(a.category)+'</strong> · '+txt(a.detail)+'</p>').join('')+
+   '<button id="tw-open-task-list" type="button">Open daily worklist</button></div>';
   target.insertAdjacentHTML('afterbegin',
-    '<h3 style="margin-top:8px">Clinical trial progress</h3>'+note+kpi+visits+
+    '<h3 style="margin-top:8px">Clinical trial progress</h3>'+note+kpi+operations+visits+
     '<h3 style="margin:20px 0 12px">Registry and entry-review activity</h3>');
+  $('tw-open-task-list').onclick=()=>{void tab('tasks');};
  }catch(err){
   target.insertAdjacentHTML('afterbegin','<p class="dash-note">Clinical trial metrics unavailable: '+txt(err.message)+'</p>');
  }
@@ -1183,7 +1309,8 @@ const contextRoleUI=applyRoleUI;
 applyRoleUI=function(role){contextRoleUI(role);contextBox.classList.toggle('hide',!perms.course.includes(role));};
 function resetPCRControls(){
  pcrRecords=[];pcrLoadedSubject=null;
- for(const id of ['tw-collect-id','tw-result-id','tw-verify-id'])$(id).innerHTML='<option value="">Choose participant first</option>';
+ for(const id of ['tw-collect-id','tw-result-id','tw-verify-id','tw-pcr-print-id'])$(id).innerHTML='<option value="">Choose participant first</option>';
+ $('tw-pcr-print').disabled=true;
  for(const id of ['tw-collect-save','tw-result-save','tw-verify-save'])$(id).disabled=true;
  $('tw-pcr-table').textContent='Select an enrolled participant to load specimens.';
 }
@@ -1194,6 +1321,7 @@ function resetDrugControls(){
  for(const id of ['tw-order-id','tw-dispense-id'])$(id).innerHTML='<option value="">Choose participant first</option>';
  $('tw-ledger').textContent='Select an enrolled participant.';
  $('tw-slip').textContent='Generate a confirmed issue to print and sign.';
+ lastIssuedSlip=null;$('tw-mss-print').disabled=true;
  $('tw-drug-allocation').textContent='No randomized allocation verified.';
 }
 function requireProcedureSubject(kind){
@@ -1330,5 +1458,78 @@ $('tw-open-course').onclick=()=>{void tab('course');};
 $('tw-course-refresh').onclick=()=>{void task('tw-course-status',()=>loadClinicalCourse());};
 $('tw-course-more').onclick=()=>{void task('tw-course-status',()=>loadClinicalCourse(true));};
 $('tw-enroll-randomize').onclick=()=>{void tab('randomization');};
+
+/* Print only server-confirmed specimen codes and dispenses; do not fabricate a slip. */
+const printSheet=document.createElement('article');
+printSheet.id='tw-print-sheet';document.body.appendChild(printSheet);
+function printStudySlip(title,fields,notice){
+ printSheet.replaceChildren();
+ const head=document.createElement('h1');head.textContent='NIMS, Hyderabad · ICMR CMV Trial';printSheet.appendChild(head);
+ const subtitle=document.createElement('h2');subtitle.textContent=title;printSheet.appendChild(subtitle);
+ for(const [label,text] of fields){
+  const line=document.createElement('div');line.className='print-field';
+  line.textContent=label+': '+String(text??'');printSheet.appendChild(line);
+ }
+ const footer=document.createElement('p');footer.className='print-warning';footer.textContent=notice;printSheet.appendChild(footer);
+ window.print();
+}
+$('tw-pcr-print').onclick=()=>{
+ try{
+  requireProcedureSubject('pcr');
+  const row=pcrRecords.find(x=>x.id===n('tw-pcr-print-id'));
+  if(!row||row.attempt!==1)throw Error('Select an existing scheduled PCR specimen');
+  const subject=studySubjects.find(x=>x.id===participantSubject);
+  if(!subject?.study_code)throw Error('Study ID is required for a protocol requisition');
+  printStudySlip('Clinical Microbiology · coded CMV PCR requisition',[
+   ['Study ID',subject.study_code],['Unique specimen code',row.specimen_code],
+   ['Protocol visit','Month '+row.scheduled_month],
+   ['Target date',row.target_on],
+   ['Current recorded status',row.status],
+   ['Actual collection date/time','____________________________'],
+   ['Collection staff signature','____________________________'],
+   ['Laboratory accession number','____________________________'],
+   ['Reported date / Microbiology signature','____________________________']
+  ],'Seven scheduled study PCRs are linked to transplant date. Confirm the participant and source record before specimen collection. Printing is not specimen collection or a laboratory result.');
+ }catch(e){error('tw-pcr-status',e)}
+};
+$('tw-mss-print').disabled=true;
+$('tw-mss-print').onclick=()=>{
+ try{
+  requireProcedureSubject('drug');
+  if(!lastIssuedSlip||!lastIssuedSlip.slip_code)throw Error('Issue study tablets before printing an MSS slip');
+  printStudySlip('Main Sub Store · signed study-drug issue slip',[
+   ['Study ID',lastIssuedSlip.study_code],['Unique MSS slip code',lastIssuedSlip.slip_code],
+   ['Signed prescription reference',lastIssuedSlip.prescription_ref],
+   ['Study medication','Valganciclovir 450 mg tablets'],
+   ['Quantity issued',lastIssuedSlip.quantity_issued],
+   ['Batch / lot',lastIssuedSlip.lot_number],
+   ['Batch expiry',lastIssuedSlip.expiry_on],
+   ['Issue date',lastIssuedSlip.issued_on],
+   ['Prescriber signature','____________________________'],
+   ['MSS pharmacist signature','____________________________'],
+   ['Recipient signature / date','____________________________']
+  ],'Valid only against the signed clinical prescription and allocated nominal arm; actual renal-adjusted dosing remains subject to signed clinical orders.');
+ }catch(e){error('tw-drug-status',e)}
+};
+
+/* Single, accessible mobile navigation; existing sections retain their IDs. */
+const mobileMenu=document.createElement('button');
+mobileMenu.id='tw-mobile-menu';mobileMenu.type='button';
+mobileMenu.setAttribute('aria-controls','tw-study-navigation');
+mobileMenu.setAttribute('aria-expanded','false');
+mobileMenu.textContent='Menu · Study sections';
+menu.id='tw-study-navigation';
+root.insertBefore(mobileMenu,menu);
+mobileMenu.onclick=()=>{
+ const open=root.classList.toggle('mobile-nav-open');
+ mobileMenu.setAttribute('aria-expanded',String(open));
+ mobileMenu.textContent=open?'Close study menu':'Menu · Study sections';
+};
+menu.addEventListener('click',event=>{
+ if(!event.target.closest('button'))return;
+ root.classList.remove('mobile-nav-open');
+ mobileMenu.setAttribute('aria-expanded','false');
+ mobileMenu.textContent='Menu · Study sections';
+});
 
 })();

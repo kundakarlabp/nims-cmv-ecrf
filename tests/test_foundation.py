@@ -373,6 +373,35 @@ def setup_synthetic_trial(client,headers):
     return pid,screening.json()['id']
 
 
+def test_action_worklist_is_source_derived_and_never_reveals_patient_names():
+    with TestClient(app) as admin:
+        h=auth(admin)
+        pid,sid=setup_synthetic_trial(admin,h)
+        actions=admin.get('/api/trial/action-worklist').json()
+        assert actions['total']>=1
+        matches=[a for a in actions['actions'] if a['subject_id']==sid]
+        assert any(a['category']=='Enrollment pending' for a in matches)
+        assert all('name' not in a and 'cr_number' not in a
+                   and 'assigned_arm_mg' not in a for a in actions['actions'])
+        assert admin.post('/api/users',headers=h,json={
+            'username':'actionworkpi','display_name':'Synthetic action PI',
+            'role':'pi','password':'StrongActionPI123456!'}).status_code==200
+    with TestClient(app) as pi:
+        h=auth(pi,'actionworkpi','StrongActionPI123456!')
+        status=pi.post(f'/api/trial/subjects/{sid}/enroll',headers=h,json={
+            'enrolled_on':'2026-10-03','pcr_anchor_on':'2026-10-01',
+            'pcr_anchor_basis':'transplant_date','protocol_reference':'approved-protocol-v5',
+            'reviewed_eligibility_and_consent':True,'approved_visit_anchor':True})
+        assert status.status_code==200,status.text
+        actions=pi.get('/api/trial/action-worklist').json()
+        categories=[a['category'] for a in actions['actions'] if a['subject_id']==sid]
+        assert 'Enrollment pending' not in categories
+        assert 'Randomization pending' in categories
+        assert 'PCR target' in categories
+        assert all('overdue' not in a['detail'].lower() for a in actions['actions'])
+        assert actions['note'].lower().find('not approved visit windows')!=-1
+
+
 def test_screening_pi_enrollment_seven_pcr_codes_and_eligibility():
     with TestClient(app) as admin:
         h=auth(admin)
