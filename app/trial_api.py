@@ -307,7 +307,11 @@ class EnrollmentIn(BaseModel):
 @router.post("/subjects/{subject_id}/enroll")
 def enroll(subject_id:int,data:EnrollmentIn,u:AuthContext=Depends(current),s:Session=Depends(db)):
     role(u,ENROLLERS)
-    t=find_subject(s,subject_id)
+    # Serialize approval of the same screened participant. PostgreSQL holds
+    # this lock until the Study ID and seven PCR orders commit together.
+    t=s.scalar(select(TrialSubject).where(TrialSubject.id==subject_id).with_for_update())
+    if not t: raise HTTPException(404,"Study subject not found")
+    eligible_patient(s,t.patient_id)
     if t.status!="screened": raise HTTPException(409,"Enrollment already decided")
     signed_check=s.get(TrialEligibility,t.id)
     if not signed_check or not signed_check.baseline.get("is_eligible") or \
@@ -340,9 +344,13 @@ def enroll(subject_id:int,data:EnrollmentIn,u:AuthContext=Depends(current),s:Ses
             specimen_code=code_for(t,"PCR",f"M{month:02d}-A01"),
             target_on=month_date(data.pcr_anchor_on,month),status="planned"))
     audit(s,u,"enroll","trial_subject",str(t.id),p.id,None,
-          subject_view(t),"PI enrollment approved; independent randomization remains external")
-    s.commit()
-    return {"subject":subject_view(t),"pcr_orders":7}
+          subject_view(t),"Enrollment approved; permanent Study ID and seven PCR codes generated; randomization remains separate")
+    try:
+        s.commit()
+    except IntegrityError:
+        s.rollback()
+        raise HTTPException(409,"Study ID or scheduled PCR already exists; refresh this participant")
+    return {"subject":subject_view(t),"study_id":new_code,"pcr_orders":len(MONTHS)}
 
 class DiscontinueIn(BaseModel):
     status:Literal["withdrawn","deceased","discontinued"]
