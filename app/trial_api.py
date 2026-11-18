@@ -21,7 +21,8 @@ from .main import (
 )
 from .trial_models import (
     TrialSubject, PCRRecord, DrugLot, DrugAuthorization, DrugDispense,
-    DrugReturn, UserInvitation, LoginThrottle, UserTotp, StaffAccess, TrialEligibility, TrialScreeningMeta
+    DrugReturn, UserInvitation, LoginThrottle, UserTotp, StaffAccess, TrialEligibility, TrialScreeningMeta,
+    RandomizationSlot, TrialCRFEntry, TrialCRFReview
 )
 
 router=APIRouter(prefix="/api/trial",tags=["trial-workflows"])
@@ -319,6 +320,92 @@ def eligibility_review(subject_id:int,data:EligibilityReviewIn,
     return {"subject_id":t.id,"eligible":eligible,
         "reviewed_by":u.user_id,"reviewed_on":data.reviewed_on,
         "note":"A complete checklist is mandatory; no auto-randomization."}
+
+@router.get("/action-worklist")
+def action_worklist(limit:int=Query(default=80,ge=1,le=200),
+                    u:AuthContext=Depends(current),s:Session=Depends(db)):
+    """Source-derived operational actions. Target dates are NOT approved visit windows.
+
+    Never expose future assignments, treatment-arm balance or identifiers in
+    these cards. Selecting an action does not automatically change trial data.
+    """
+    from zoneinfo import ZoneInfo
+    from datetime import datetime
+    from .trial_crf import FORM_EDITOR, BLINDED_FORM_SECTIONS
+    today=datetime.now(ZoneInfo("Asia/Kolkata")).date()
+    records=s.execute(select(TrialSubject,Patient).join(
+        Patient,Patient.id==TrialSubject.patient_id)).all()
+    subjects={t.id:(t,p) for t,p in records}
+    eligibility={r.subject_id:r for r in s.scalars(select(TrialEligibility)).all()}
+    assigned=set(s.scalars(select(RandomizationSlot.subject_id).where(
+        RandomizationSlot.subject_id.is_not(None))).all())
+    actions=[]
+    def add(subject,patient,category,detail,route,priority=2,target_on=None):
+        actions.append({
+            "subject_id":subject.id,"patient_id":patient.id,
+            "study_code":subject.study_code or subject.screening_code,
+            "category":category,"detail":detail,"route":route,
+            "priority":priority,
+            "target_on":target_on.isoformat() if target_on else None,
+        })
+    for subject,patient in records:
+        check=eligibility.get(subject.id)
+        if subject.status=="screened":
+            if check is None:
+                add(subject,patient,"Eligibility pending","Complete and source-verify all inclusion and exclusion criteria","study",1)
+            elif check.baseline.get("is_eligible") is True:
+                add(subject,patient,"Enrollment pending","Eligibility documented; investigator must verify enrollment and consent","study",1)
+        elif subject.status=="enrolled" and subject.id not in assigned:
+            add(subject,patient,"Randomization pending","Verify stratum and signed source before irreversible assignment","randomization",1)
+    for specimen in s.scalars(select(PCRRecord).where(
+        PCRRecord.attempt==1,PCRRecord.status!="verified",
+        PCRRecord.target_on<=today+timedelta(days=7))).all():
+        pair=subjects.get(specimen.subject_id)
+        if not pair or pair[0].status!="enrolled":continue
+        subject,patient=pair
+        if specimen.status=="result_entered":
+            category,detail="PCR verification","Reported result awaiting source review"
+        elif specimen.status=="collected":
+            category,detail="PCR result pending","Collected specimen awaiting laboratory result"
+        elif specimen.status=="planned":
+            category,detail="PCR target","Scheduled month "+str(specimen.scheduled_month)+" target; confirm approved collection window"
+        else:
+            continue
+        if specimen.target_on<today:
+            detail+="; target date passed (not a protocol-window breach determination)"
+        add(subject,patient,category,detail,"pcr",1 if specimen.target_on<today else 2,specimen.target_on)
+    crf_rows=s.scalars(select(TrialCRFEntry)).all()
+    review_keys={(r.entry_id,r.entry_revision):r.decision for r in
+        s.scalars(select(TrialCRFReview)).all()}
+    for entry in crf_rows:
+        pair=subjects.get(entry.subject_id)
+        if not pair:continue
+        subject,patient=pair
+        if (not u.workspace_full_access and u.role not in FORM_EDITOR.get(entry.section,set())
+            and not (u.role=="monitor" and entry.section in BLINDED_FORM_SECTIONS)
+            and not (u.pi_authorized and "pi" in FORM_EDITOR.get(entry.section,set()))):
+            continue
+        state=review_keys.get((entry.id,entry.revision),"pending")
+        if state in ("pending","needs_correction"):
+            add(subject,patient,"eCRF "+("review" if state=="pending" else "correction"),
+                entry.section+" · "+("awaiting source review" if state=="pending" else "requires corrected revision"),
+                "crf",2)
+        if entry.section=="H_adverse_event" and entry.payload.get("serious")=="yes" and entry.payload.get("iec_reported")!="yes":
+            add(subject,patient,"SAE reporting check",
+                "Submitted serious adverse event: confirm required reporting and source evidence",
+                "crf",0)
+    rank={"SAE reporting check":0,"Eligibility pending":1,"Enrollment pending":1,
+          "Randomization pending":1,"PCR verification":2,"PCR result pending":2,
+          "PCR target":3,"eCRF correction":4,"eCRF review":5}
+    actions.sort(key=lambda a:(a["priority"],rank.get(a["category"],6),
+                               a["target_on"] or "9999-12-31",
+                               a["study_code"] or ""))
+    counts={}
+    for item in actions:counts[item["category"]]=counts.get(item["category"],0)+1
+    return {"as_of":today.isoformat(),"total":len(actions),"counts":counts,
+            "actions":actions[:limit],
+            "note":"Worklist derived from persisted records. PCR targets are not approved visit windows. Actions do not create approvals, allocations, orders or adjudicated endpoints."}
+
 
 class EnrollmentIn(BaseModel):
     enrolled_on:date
