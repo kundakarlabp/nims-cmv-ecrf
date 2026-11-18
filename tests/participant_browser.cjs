@@ -94,6 +94,10 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
    $('currentRole').textContent='nurse';applyRoleUI('nurse');await tab('study');
   });
   assert.deepEqual(errors,[],'Actual deferred script must initialize without JavaScript errors');
+  assert.deepEqual(await page.evaluate(()=>{
+   const ids=Array.from(document.querySelectorAll('[id]'),el=>el.id);
+   return ids.filter((id,index)=>ids.indexOf(id)!==index);
+  }),[],'Every page and control ID must be unique; Enrollment must not collide with registry Study ID');
   await page.selectOption('#tw-context-subject','1');
   await page.waitForFunction(()=>$('tw-context-allocation').textContent.includes('450 mg'));
   assert.equal(await page.evaluate(()=>selected),'TEST-P-1');
