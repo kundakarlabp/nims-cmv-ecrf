@@ -146,6 +146,10 @@ def fetch():
     deadline=time.monotonic()+900
     while True:
         try:
+            state=json.loads(read(BASE+'/readyz'))
+            if state.get('shared_clinical_workspace') is True and state.get('fresh_start_completed') is not True:
+                if time.monotonic()>=deadline:raise SystemExit('Owner-requested fresh start not complete')
+                time.sleep(15);continue
             metadata=json.loads(read(BASE+'/api/backup-channel/latest',identity()))
             if metadata['restore_verified'] is not True:raise ValueError('Restore has not passed')
             raw=read(BASE+'/api/backup-channel/bundles/'+metadata['id'],identity(),limit=MAX)
@@ -189,7 +193,8 @@ def verify():
         try:
             status=json.loads(read(BASE+'/readyz'))
             if status.get('service')=='clinical' and status.get('clinical_entry_available') is True:
-                print('VERIFIED: clinical database reachable; clinical data entry active; mandatory MFA enforced.')
+                mode=status.get('authentication_mode','standard')
+                print('VERIFIED: clinical database reachable; clinical data entry active; authentication mode: '+mode+'.')
                 return
         except (HTTPError,URLError,TimeoutError):pass
         if time.monotonic()>=deadline:raise SystemExit('Clinical activation not confirmed; inspect host maintenance status')

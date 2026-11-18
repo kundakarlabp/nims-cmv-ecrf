@@ -71,7 +71,9 @@ def startup_deficiencies(env=None,at=None):
     at=datetime.now(UTC) if at is None else at
     issues=[]
     owner_release=owner_authorized(env)
-    if env.get("MFA_REQUIRED","false").lower()!="true":issues.append("mandatory_MFA_disabled")
+    from .workspace_policy import password_only
+    if env.get("MFA_REQUIRED","false").lower()!="true" and not password_only(env):
+        issues.append("mandatory_MFA_disabled")
     if env.get("COOKIE_SECURE","true").lower()!="true":issues.append("secure_cookies_disabled")
     if not owner_release and env.get("CLINICAL_INSTITUTIONAL_APPROVAL","")!="verified":
         issues.append("institutional_approval_not_verified")

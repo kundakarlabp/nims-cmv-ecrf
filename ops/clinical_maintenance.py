@@ -142,6 +142,60 @@ def freeze_source_accounts(dc):
         statement+=f'CREATE OR REPLACE TRIGGER clinical_account_migration_freeze BEFORE INSERT OR UPDATE OR DELETE ON public.{table} FOR EACH ROW EXECUTE FUNCTION public.freeze_cmv_account_migration();\n'
     sql(dc,statement+'COMMIT;','nims_ecrf',True)
 
+def owner_workspace_update(dc):
+    """One fixed, owner-authorized reset. Database marker prevents repeat erasure."""
+    authorization=json.loads((ROOT/'ops/clinical-authorization.json').read_text())
+    request_id=authorization.get('fresh_start_request')
+    if (authorization.get('workspace_policy')!='owner-password-team-20261118' or
+        authorization.get('training_examples_confirmed') is not True or
+        request_id!='fresh-start-20261118-v1'):return
+    complete=PRIVATE/(request_id+'.complete')
+    if complete.exists():return
+    cc=clinical(dc)
+    marker=sql(dc,"SELECT EXISTS(SELECT 1 FROM audit_events WHERE action='owner_fresh_start_reset' AND entity_id='fresh-start-20261118-v1');").strip()==b't'
+    run(cc+['stop','api'])
+    try:
+        if not marker:
+            backup_and_restore(dc,force=True)
+            # No CASCADE: an unexpected foreign key fails the transaction. User,
+            # password, invitation and access tables are deliberately not truncated.
+            statement="""
+    BEGIN;
+    SELECT pg_advisory_xact_lock(18451018);
+    DO $$ BEGIN
+     IF NOT EXISTS(SELECT 1 FROM audit_events WHERE action='owner_fresh_start_reset' AND entity_id='fresh-start-20261118-v1') THEN
+      IF (SELECT count(*) FROM users WHERE active AND pi_authorized)<>1 THEN
+       RAISE EXCEPTION 'Unique owner required';
+      END IF;
+      TRUNCATE trial_drug_returns,trial_drug_dispenses,trial_drug_authorizations,
+       trial_drug_lots,trial_pcr_records,trial_randomization_slots,trial_randomization_plans,
+       trial_crf_reviews,trial_crf_drafts,trial_crf_entries,trial_eligibility,
+       trial_screening_meta,trial_subjects,entry_reviews,entry_drafts,entries,patients RESTART IDENTITY;
+      ALTER TABLE public.audit_events DISABLE TRIGGER protect_trial_audit_update_delete;
+      DELETE FROM audit_events WHERE patient_id IS NOT NULL OR entity_type IN
+       ('drug_lot','randomization_plan','randomization_slot','trial_crf','trial_subject');
+      ALTER TABLE public.audit_events ENABLE TRIGGER protect_trial_audit_update_delete;
+      DELETE FROM sessions;
+      DELETE FROM trial_user_totp;
+      DELETE FROM trial_login_throttle;
+      INSERT INTO audit_events(id,actor_id,action,entity_type,entity_id,patient_id,old_record,new_record,reason,created_at)
+       SELECT 'owner-fresh-start-20261118-v1',id,'owner_fresh_start_reset','workspace_policy',
+        'fresh-start-20261118-v1',NULL,NULL,
+        '{"training_examples_removed":true,"passwords_preserved":true,"mfa_removed":true}'::json,
+        'Owner confirmed filled records are training examples and explicitly requested a fresh start, password-only login and removal of separate custodian.',now()
+       FROM users WHERE active AND pi_authorized;
+     END IF;
+    END $$;
+    COMMIT;
+    """
+            sql(dc,statement)
+        run(cc+['run','--rm','--no-deps','api','python','-m','app.workspace_setup'])
+        backup_and_restore(dc,force=True)
+    finally:
+        # Recovery endpoints stay available even when preparation needs retry.
+        run(cc+['up','-d','--no-build','--wait','--wait-timeout','150','api'])
+    atomic(complete,b'Owner-confirmed training reset and owner-managed sequence initialized\n')
+
 def ensure_crypto():
     try:
         from cryptography.fernet import Fernet
@@ -288,6 +342,7 @@ def main():
                 run(dc+['image','tag','nims-cmv-api','nims-cmv-clinical-api'])
             PHASE='database_provisioning';print('Clinical maintenance:',PHASE,flush=True)
             provision(dc)
+            PHASE='owner_requested_fresh_start';owner_workspace_update(dc)
             PHASE='encrypted_backup_and_isolated_restore';print('Clinical maintenance:',PHASE,flush=True)
             backup_and_restore(dc)
             PHASE='offsite_receipt';accept_receipts()

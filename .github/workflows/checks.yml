@@ -116,7 +116,9 @@ jobs:
           assert c['name']=='nims-cmv-clinical'
           api=c['services']['api']['environment']
           assert str(api['CLINICAL_DATA_ENABLED']).lower()=='true'
-          assert str(api['MFA_REQUIRED']).lower()=='true'
+          assert str(api['MFA_REQUIRED']).lower()=='false'
+          assert str(api['PASSWORD_ONLY_LOGIN']).lower()=='true'
+          assert str(api['TEAM_WORKSPACE_ENABLED']).lower()=='true'
           assert api['DB_NAME']=='nims_cmv_clinical'
           assert api['DB_USER']=='nims_clinical_app'
           db=c['services']['db']

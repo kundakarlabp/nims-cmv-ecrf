@@ -6,6 +6,11 @@
   "protocol_version": "5.0",
   "site_domain": "152-70-77-77.sslip.io",
   "institutional_approval_claimed": false,
-  "source": "Owner explicitly requested clinical database provisioning, MFA, verified backup/restore and official randomization integration in ChatGPT.",
-  "limits": "This records system activation authorization only. It does not certify institutional hosting approval, signed human UAT, authenticator possession or independent sequence custody."
+  "source": "Owner explicitly requested username/password-only named access, removal of MFA and separate custodian requirements, deletion of confirmed training examples, and a fresh start in ChatGPT on 18 November 2026.",
+  "workspace_policy": "owner-password-team-20261118",
+  "password_only_requested": true,
+  "training_examples_confirmed": true,
+  "independent_custodian_required": false,
+  "fresh_start_request": "fresh-start-20261118-v1",
+  "limits": "Owner-managed allocation and shared clinical permissions depart from the independent-custodian procedure in protocol v5. This records the owner's software configuration request and does not certify institutional approval of that protocol change."
 }

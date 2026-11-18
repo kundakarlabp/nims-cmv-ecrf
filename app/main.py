@@ -18,6 +18,7 @@ from argon2.exceptions import VerifyMismatchError, VerificationError
 import pyotp
 from .clinical_gate import startup_deficiencies, runtime_startup_deficiencies, backup_fresh, restore_verified, metadata_fingerprint
 from .build_identity import build_fingerprint
+from .workspace_policy import enabled as team_workspace, password_only, clinical_path as clinical_workspace_path
 
 DATABASE_URL=os.getenv('DATABASE_URL','')
 if not DATABASE_URL and os.getenv('DB_HOST'):
@@ -202,6 +203,7 @@ class AuthContext(BaseModel):
     csrf_hash: str
     pi_authorized: bool=False
     session_hash: str=''
+    workspace_full_access: bool=False
     model_config=ConfigDict(frozen=True)
 
 def current(request:Request,s:Session=Depends(db)) -> AuthContext:
@@ -231,7 +233,11 @@ def current(request:Request,s:Session=Depends(db)) -> AuthContext:
         if not backup_fresh() or not restore_verified():
             raise HTTPException(503,'Clinical write temporarily paused: backup or restore verification overdue')
 
-    if user.role=='randomization_custodian' and not (
+    shared=team_workspace() and clinical_workspace_path(request.url.path)
+    if shared and request.method not in ('GET','HEAD','OPTIONS') and not s.scalar(
+        select(Audit.id).where(Audit.action=='owner_fresh_start_reset').limit(1)):
+        raise HTTPException(503,'The requested fresh start is being prepared; sign in again when setup completes')
+    if user.role=='randomization_custodian' and not shared and not (
         request.url.path.startswith('/api/trial/randomization/')
         or request.url.path in {'/api/me','/api/logout','/api/system/mode',
           '/api/trial/staff/change-password','/api/trial/staff/mfa-setup',
@@ -242,8 +248,10 @@ def current(request:Request,s:Session=Depends(db)) -> AuthContext:
         supplied=request.headers.get('x-csrf-token','')
         if not supplied or not secrets.compare_digest(sha(supplied),active.csrf_hash):
             raise HTTPException(403,'Missing or invalid CSRF token')
-    return AuthContext(user_id=user.id,role=user.role,name=user.display_name,csrf_hash=active.csrf_hash,
-                       pi_authorized=user.pi_authorized,session_hash=active.token_hash)
+    return AuthContext(user_id=user.id,role='pi' if shared else user.role,
+                       name=user.display_name,csrf_hash=active.csrf_hash,
+                       pi_authorized=user.pi_authorized,session_hash=active.token_hash,
+                       workspace_full_access=shared)
 
 def audit(s:Session,u:AuthContext,action:str,entity_type:str,entity_id:str,patient_id:str|None,old:dict|None,new:dict|None,reason:str):
     s.add(Audit(actor_id=u.user_id,action=action,entity_type=entity_type,entity_id=entity_id,patient_id=patient_id,old_record=jsonable_encoder(old),new_record=jsonable_encoder(new),reason=reason))
@@ -296,13 +304,26 @@ def ready():
             connection.execute(select(1))
     except SQLAlchemyError:
         raise HTTPException(503,'Service temporarily unavailable')
+    with SessionLocal() as session:
+        plan_ready=bool(session.scalar(select(RandomizationPlan.id).where(RandomizationPlan.active.is_(True)).limit(1)))
+        fresh=bool(session.scalar(select(Audit.id).where(Audit.action=='owner_fresh_start_reset').limit(1)))
     return {**health(),'database':'reachable',
-            'clinical_entry_available':bool(CLINICAL_MODE and backup_fresh() and restore_verified())}
+            'authentication_mode':'username_password' if password_only() else 'standard',
+            'shared_clinical_workspace':team_workspace(),
+            'randomization_ready':plan_ready,'fresh_start_completed':fresh,
+            'clinical_entry_available':bool(CLINICAL_MODE and backup_fresh() and restore_verified() and (not team_workspace() or fresh))}
+
+@app.get('/api/authentication-policy')
+def authentication_policy():
+    return {'password_only':password_only(),'shared_clinical_workspace':team_workspace()}
 @app.get('/api/system/mode')
 def system_mode(response:Response,u:AuthContext=Depends(current)):
     # Authenticated per-request current mode; never cache or infer from page URL.
     response.headers['Cache-Control']='no-store, private, max-age=0'
     writable=bool(CLINICAL_MODE and backup_fresh() and restore_verified())
+    if team_workspace():
+        with SessionLocal() as session:
+            writable=writable and bool(session.scalar(select(Audit.id).where(Audit.action=='owner_fresh_start_reset').limit(1)))
     return {'mode':'clinical' if CLINICAL_MODE else 'synthetic',
             'clinical_registration_enabled':writable,
             'institutional_release_required':not CLINICAL_MODE,
@@ -363,7 +384,7 @@ def login(data:LoginInput,response:Response,s:Session=Depends(db)):
         if CLINICAL_MODE and u.role not in {'admin','pi'} and not access:
             raise HTTPException(403,'Staff access authorization required')
     mfa=s.get(UserTotp,u.id) if password_ok else None
-    otp_ok=bool(password_ok and (not mfa or not mfa.enabled or
+    otp_ok=bool(password_ok and (password_only() or not mfa or not mfa.enabled or
         (data.otp and pyotp.TOTP(mfa.secret).verify(data.otp,valid_window=1))))
     setup_required=bool(password_ok and os.getenv('MFA_REQUIRED','false').lower()=='true' and (not mfa or not mfa.enabled))
     if not password_ok or not otp_ok:
@@ -390,8 +411,9 @@ def login(data:LoginInput,response:Response,s:Session=Depends(db)):
     response.set_cookie('nims_session',token,max_age=seconds,
         httponly=True,secure=COOKIE_SECURE,samesite='strict',path='/')
     return {'username':u.username,'role':u.role,'display_name':u.display_name,
-            'csrf_token':csrf,'mfa_enabled':bool(mfa and mfa.enabled),
-            'mfa_setup_required':setup_required,'pi_authorized':u.pi_authorized}
+            'csrf_token':csrf,'mfa_enabled':bool(mfa and mfa.enabled and not password_only()),
+            'mfa_setup_required':setup_required,'pi_authorized':u.pi_authorized,
+            'workspace_full_access':team_workspace(),'password_only':password_only()}
 @app.get('/api/me')
 def me(u:AuthContext=Depends(current)):
     return {'user_id':u.user_id,'role':u.role,'display_name':u.name,'pi_authorized':u.pi_authorized}
@@ -609,7 +631,7 @@ def review_entry(entry_id:str,data:ReviewInput,u:AuthContext=Depends(current),s:
     e=s.get(Entry,entry_id)
     if not e: raise HTTPException(404)
     if e.revision!=data.expected_revision: raise HTTPException(409,'Revision changed; reload before review')
-    if u.user_id in (e.created_by,e.updated_by): raise HTTPException(403,'Independent reviewer required')
+    if u.user_id in (e.created_by,e.updated_by) and not u.workspace_full_access: raise HTTPException(403,'Independent reviewer required')
     if review_state(s,e)!='pending': raise HTTPException(409,'This revision was already reviewed')
     r=EntryReview(entry_id=e.id,entry_revision=e.revision,decision=data.decision,
                   reason=data.reason,reviewer_id=u.user_id)
