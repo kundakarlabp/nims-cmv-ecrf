@@ -22,6 +22,7 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
  try{
   const page=await browser.newPage({viewport:{width:1280,height:900}});
   const errors=[],writes=[],drafts=new Map(),contextReads=[];let blinded=false,holdOldDraft=false,releaseOldDraft=null;
+  let holdOldPCR=false,releaseOldPCR=null,holdScreenedContext=false,releaseScreenedContext=null;
   page.on('pageerror',e=>errors.push(e.message));
   await page.route('http://cmv-ui.test/**',async route=>{
    const url=new URL(route.request().url());const p=url.pathname;
@@ -38,8 +39,10 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
     const id=p.includes('/patients/')?Number(p.match(/TEST-P-(\d+)/)[1]):Number(p.split('/')[5]);
     result={subject:subjects[id-1],patient_id:'TEST-P-'+id,transplant_on:'2026-10-01',
       allocation:{randomized:true,allocation_code:'TEST-ALLOC-'+id,...(blinded?{}:{assigned_arm_mg:id===1?'450':'900'})}};
+    if(holdScreenedContext&&id===3){holdScreenedContext=false;await new Promise(resolve=>{releaseScreenedContext=resolve;});}
    }else if(p.endsWith('/pcr')){
     const sid=Number(p.split('/')[4]);result={pcr_records:[{id:sid*10+1,status:'planned',specimen_code:'TEST-PCR-'+sid,scheduled_month:1,target_on:'2026-11-01'}]};
+    if(holdOldPCR&&sid===1){holdOldPCR=false;await new Promise(resolve=>{releaseOldPCR=resolve;});}
    }else if(p==='/api/trial/crf/schema')result={forms};
    else if(p.includes('/drafts/')){
     const key=p+'?occurrence_key=NEW';
@@ -112,8 +115,18 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   await page.evaluate(async()=>{await tab('pcr');});
   await page.selectOption('#tw-context-subject','1');
   await page.waitForFunction(()=>$('tw-collect-id').value==='11');
+  holdOldPCR=true;
+  await page.selectOption('#tw-context-subject','1');
+  for(let i=0;i<200&&!releaseOldPCR;i++)await new Promise(resolve=>setTimeout(resolve,20));
+  assert.ok(releaseOldPCR,'Old participant specimen request must be held');
+  holdScreenedContext=true;
   await page.selectOption('#tw-context-subject','3');
   assert.equal(await page.isDisabled('#tw-collect-save'),true,'Patient switch must disable collection immediately');
+  for(let i=0;i<200&&!releaseScreenedContext;i++)await new Promise(resolve=>setTimeout(resolve,20));
+  assert.ok(releaseScreenedContext,'New participant context must still be loading');
+  releaseOldPCR();await page.waitForTimeout(150);
+  assert.equal(await page.isDisabled('#tw-collect-save'),true,'A delayed old specimen response cannot re-enable collection');
+  releaseScreenedContext();
   await page.waitForFunction(()=>$('tw-context-allocation').textContent.includes('TEST-SCREEN-3')&&$('tw-collect-id').value==='');
   assert.equal(await page.isDisabled('#tw-collect-save'),true);
   assert.equal(await page.inputValue('#tw-pcr-subject'),'');
