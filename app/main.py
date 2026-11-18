@@ -462,15 +462,15 @@ def create_patient(data:PatientIn,u:AuthContext=Depends(current),s:Session=Depen
 def patients(q:str='',limit:int=50,u:AuthContext=Depends(current),s:Session=Depends(db)):
     limit=min(max(limit,1),100)
     st=select(Patient)
+    restricted=u.role in {'microbiology','pharmacy','technician','monitor'} and not u.workspace_full_access
     if q.strip():
-        if u.role in {'microbiology','pharmacy','technician','monitor'}:
+        if restricted:
             st=st.where(Patient.study_id.ilike('%'+q.strip()+'%'))
         else:
             st=st.where(Patient.name.ilike('%'+q.strip()+'%') |
                 Patient.cr_number.ilike('%'+q.strip()+'%') |
                 Patient.study_id.ilike('%'+q.strip()+'%'))
     ps=s.scalars(st.order_by(Patient.created_at.desc()).limit(limit)).all()
-    restricted=u.role in {'microbiology','pharmacy','technician','monitor'}
     return [{'id':p.id,'cr_number':None if restricted else p.cr_number,
              'name':None if restricted else p.name,'study_id':p.study_id,
              'transplant_date':p.transplant_date,'revision':p.revision} for p in ps]
@@ -480,7 +480,7 @@ def patient(patient_id:str,u:AuthContext=Depends(current),s:Session=Depends(db))
     if not p: raise HTTPException(404)
     es=s.scalars(select(Entry).where(Entry.patient_id==patient_id).order_by(Entry.occurred_on.desc(),Entry.created_at.desc())).all()
     data=as_dict(p)
-    if u.role in {'microbiology','pharmacy','technician','monitor'}:
+    if u.role in {'microbiology','pharmacy','technician','monitor'} and not u.workspace_full_access:
         data.pop('name',None);data.pop('cr_number',None)
         # Lab, pharmacy and external monitors never receive unrelated clinical entry payloads.
         permitted={'lab'} if u.role in {'microbiology','technician'} else ({'pharmacy'} if u.role=='pharmacy' else set())

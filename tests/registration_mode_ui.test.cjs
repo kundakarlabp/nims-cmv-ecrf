@@ -31,7 +31,7 @@ function screen({mode,cr='REAL-CASE-TEST',name='Trial source test',failure}){
  }
  element('cr').value=cr;
  element('patientName').value=name;
- element('study').value='';
+ element('registryStudyId').value='';
  element('transplant').value='';
  const calls=[],notices=[];
  const context={

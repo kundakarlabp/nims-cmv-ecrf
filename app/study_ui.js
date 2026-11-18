@@ -149,8 +149,14 @@ panel('randomization','Concealed randomization',
  '<p class="hint">Variable permuted blocks stratified by rATG (yes/no) × living/deceased donor. '+
  'The next assignment is released after enrollment and recorded eligibility. Each participant receives one permanent allocation.</p>'+
  '<div id="tw-rand-overview" class="hint">Checking signed sequence readiness…</div></div>'+
+ '<div class="study-card" id="tw-rand-registry-panel"><h3>Find registered patient by CR number</h3>'+
+ field('Search hospital CR number, name or study ID','tw-rand-search','search')+
+ btn('Fetch registry records','tw-rand-fetch')+
+ choose('Registry patient · CR number','tw-rand-patient',[])+
+ '<p id="tw-rand-progress" class="hint" role="status">Choose a registered patient. Screening and enrollment status will appear here.</p>'+
+ btn('Continue selected patient to enrollment','tw-rand-continue')+'</div>'+
  '<div class="study-card" id="tw-rand-assign-panel"><h3>Release next concealed allocation</h3>'+
- choose('Enrolled and eligible subject','tw-rand-subject',[])+
+ choose('Enrolled participant · CR number / study ID','tw-rand-subject',[])+
  '<div id="tw-rand-subject-status" class="hint">Choose an eligible enrolled subject.</div>'+
  field('Signed randomization source / investigator confirmation','tw-rand-source')+
  '<label><input type="checkbox" id="tw-rand-eligibility-confirm" style="width:auto"> '+
@@ -258,8 +264,8 @@ tab=async function(name){
    $('btn'+section).classList.toggle('selected',section===name);
   }
   root.querySelector('.grid').classList.add('hide');
-  await task(name==='pcr'?'tw-pcr-status':name==='drug'?'tw-drug-status':'tw-status',async()=>{
-   if(name==='study'){await loadRegistry();await loadSubjects();await loadEligibilitySchema();}
+  await task(name==='pcr'?'tw-pcr-status':name==='drug'?'tw-drug-status':name==='randomization'?'tw-rand-status':'tw-status',async()=>{
+   if(name==='study'){await loadRegistry();await loadSubjects();await loadEligibilitySchema();await selectEnrollmentPatient();}
    if(name==='pcr'){await loadSubjects();await loadPCR();}
    if(name==='drug'){await loadSubjects();await loadDrug();}
    if(name==='staff'){await loadAccounts();}
@@ -271,10 +277,31 @@ tab=async function(name){
   for(const k of Object.keys(perms)){$(k).classList.add('hide');$('btn'+k).classList.remove('selected');}
  }
 };
+function registryLabel(p){return (p.cr_number?'CR '+p.cr_number+' · ':'')+(p.name||'')+(p.study_id?' · '+p.study_id:'');}
+function subjectLabel(s){return (s.cr_number?'CR '+s.cr_number+' · ':'')+(s.study_code||s.screening_code)+' · '+s.status;}
 async function loadRegistry(){
- var people=await api('/api/patients?limit=100');
- fill('tw-patient',people,'id',p=>(p.study_id||p.cr_number||'')+' · '+(p.name||''));
+ const people=await api('/api/patients?limit=100');
+ // A selected patient may be outside the newest 100 records; fetch that record
+ // explicitly instead of silently falling back to another person's first row.
+ if(selected&&!people.some(p=>p.id===selected)){
+  people.unshift((await api('/api/patients/'+encodeURIComponent(selected))).patient);
+ }
+ fill('tw-patient',people,'id',registryLabel);
+ $('tw-patient').value=selected||'';
 }
+async function selectEnrollmentPatient(){
+ $('tw-patient').value=selected||'';
+ const subject=studySubjects.find(s=>s.patient_id===selected);
+ for(const id of ['tw-screened','tw-checklist-subject'])$(id).value=subject?.status==='screened'?String(subject.id):'';
+ if(participantContext?.patient_id===selected&&participantContext.transplant_on)$('tw-anchor-date').value=participantContext.transplant_on;
+ if(!$('tw-protocol').value)$('tw-protocol').value='Protocol v5.0, 14 Aug 2026';
+ await loadEligibilityReview();
+}
+$('tw-patient').onchange=()=>{void task('tw-status',async()=>{
+ const id=value('tw-patient');
+ if(!id){clearParticipant();await selectEnrollmentPatient();return;}
+ await window.choose(id);await selectEnrollmentPatient();
+});};
 async function loadSubjects(){
  const gathered=[];let before=null;
  for(let page=0;page<100;page++){
@@ -286,16 +313,16 @@ async function loadSubjects(){
   before=next;
  }
  studySubjects=gathered;
- fill('tw-screened',studySubjects.filter(x=>x.status==='screened'),'id',x=>x.screening_code);
- fill('tw-checklist-subject',studySubjects.filter(x=>x.status==='screened'),'id',x=>x.screening_code);
+ fill('tw-screened',studySubjects.filter(x=>x.status==='screened'),'id',subjectLabel);
+ fill('tw-checklist-subject',studySubjects.filter(x=>x.status==='screened'),'id',subjectLabel);
  var active=studySubjects.filter(x=>x.enrolled_on);
  for(const id of ['tw-pcr-subject','tw-drug-subject','tw-crf-subject','tw-rand-subject']){
-  fill(id,id==='tw-rand-subject'?active.filter(x=>x.status==='enrolled'):active,'id',x=>x.study_code+' · '+x.status);$(id).value=participantSubject?String(participantSubject):'';
+  fill(id,id==='tw-rand-subject'?active.filter(x=>x.status==='enrolled'):active,'id',subjectLabel);$(id).value=participantSubject?String(participantSubject):'';
  }
- fill('tw-context-subject',studySubjects,'id',x=>(x.study_code||x.screening_code)+' · '+x.status);
+ fill('tw-context-subject',studySubjects,'id',subjectLabel);
  $('tw-context-subject').value=participantSubject?String(participantSubject):'';
- $('tw-register').innerHTML='<table><thead><tr><th>Study code</th><th>Status</th><th>D+/R+</th><th>Signed consent</th></tr></thead><tbody>'+
- studySubjects.map(x=>'<tr><td>'+txt(x.study_code||x.screening_code)+'</td><td>'+txt(x.status)+'</td><td>'+String(x.d_plus_r_plus)+'</td><td>'+String(x.consent_recorded)+'</td></tr>').join('')+'</tbody></table>';
+ $('tw-register').innerHTML='<table><thead><tr><th>CR number / Study code</th><th>Status</th><th>D+/R+</th><th>Signed consent</th></tr></thead><tbody>'+
+ studySubjects.map(x=>'<tr><td>'+txt(subjectLabel(x))+'</td><td>'+txt(x.status)+'</td><td>'+String(x.d_plus_r_plus)+'</td><td>'+String(x.consent_recorded)+'</td></tr>').join('')+'</tbody></table>';
 }
 async function loadPCR(){
  const sid=n('tw-pcr-subject');resetPCRControls();if(!sid)return;
@@ -354,8 +381,9 @@ $('tw-screen-save').onclick=()=>{void task('tw-status',async()=>{
   signed_consent_source_ref:value('tw-consent-source')||null,
   ratg_induction:value('tw-ratg')===''?null:value('tw-ratg')==='true',
   eligibility_attested:$('tw-eligible').checked})});
- notify('tw-status','Screening code '+r.screening_code+' assigned. No randomization performed.');
- await loadSubjects();
+ notify('tw-status','Screening code '+r.screening_code+' assigned. Complete the eligibility checklist, then enrollment.');
+ await loadSubjects();await selectParticipantSubject(r.id);await selectEnrollmentPatient();
+ $('tw-checklist-subject').scrollIntoView({block:'center'});
 });};
 $('tw-enroll-save').onclick=()=>{void task('tw-status',async()=>{
  var id=n('tw-screened');if(!id)throw Error('Select a screened subject');
@@ -494,6 +522,27 @@ $('tw-mfa-confirm').onclick=()=>{void task('tw-mfa-status',async()=>{
 });};
 
 let eligibilityItems=null;
+let eligibilityRequest=0;
+async function loadEligibilityReview(){
+ const request=++eligibilityRequest,sid=n('tw-checklist-subject');
+ for(const el of document.querySelectorAll('[data-eligibility]'))el.value='';
+ for(const id of ['tw-age','tw-anc','tw-platelets','tw-hb','tw-crcl','tw-source','tw-cbc-date'])$(id).value='';
+ $('tw-review-on').value=today();
+ if(!sid)return;
+ const r=await api('/api/trial/subjects/'+sid+'/eligibility');
+ if(request!==eligibilityRequest||sid!==n('tw-checklist-subject'))return;
+ const e=r.eligibility;if(!e)return;
+ for(const el of document.querySelectorAll('[data-eligibility]')){
+  const v=e[el.dataset.eligibility]?.[el.dataset.key];el.value=typeof v==='boolean'?String(v):'';
+ }
+ const b=e.baseline||{};
+ for(const [id,key] of Object.entries({'tw-age':'age_years','tw-anc':'anc_per_ul','tw-platelets':'platelets_per_ul','tw-hb':'hemoglobin_g_dl','tw-crcl':'crcl_cg_ml_min','tw-cbc-date':'baseline_cbc_on','tw-source':'signed_source_reference'}))$(id).value=b[key]??'';
+ $('tw-review-on').value=e.reviewed_on||today();
+}
+for(const id of ['tw-checklist-subject','tw-screened'])$(id).onchange=()=>{void task('tw-status',async()=>{
+ const sid=n(id);if(!sid)return;
+ await selectParticipantSubject(sid);await selectEnrollmentPatient();
+});};
 async function loadEligibilitySchema(){
  eligibilityItems=await api('/api/trial/eligibility-schema');
  const makeFields=(group,items,label)=>{
@@ -935,18 +984,70 @@ async function populateCrfLinkedIdentifiers(){
 
 
 /* Independent, concealed sequence import and PI-only randomized assignment. */
-let lockedSequenceFile=null;
+let lockedSequenceFile=null,registrySearchRequest=0,registrySearchTimer;
+async function loadRandomizationRegistry(){
+ const request=++registrySearchRequest,q=value('tw-rand-search');
+ const people=await api('/api/patients?limit=100&q='+encodeURIComponent(q));
+ if(request!==registrySearchRequest)return;
+ if(!q&&selected&&!people.some(p=>p.id===selected)){
+  people.unshift((await api('/api/patients/'+encodeURIComponent(selected))).patient);
+ }
+ if(request!==registrySearchRequest)return;
+ fill('tw-rand-patient',people,'id',registryLabel);
+ $('tw-rand-patient').value=!q&&people.some(p=>p.id===selected)?selected:'';
+ if(!$('tw-rand-patient').value){
+  $('tw-rand-progress').textContent=people.length?'Select the matching CR number below. Up to 100 matches are shown; refine the search if needed.':'No registry record matches this search.';
+  $('tw-rand-continue').disabled=true;
+ }else updateRandomizationProgress();
+}
+function updateRandomizationProgress(){
+ const patient=value('tw-rand-patient'),s=participantContext?.patient_id===patient?participantContext.subject:null;
+ const target=$('tw-rand-progress');
+ $('tw-rand-continue').disabled=!patient||s?.status==='enrolled';
+ $('tw-rand-continue').textContent=s?'Continue to eligibility and enrollment':'Continue to screening';
+ if(!patient){target.textContent='Choose a registry patient by CR number.';return;}
+ const label=$('tw-rand-patient').selectedOptions[0]?.textContent||'';
+ target.textContent=label+' · '+(!s?'Registered. Screening, consent, eligibility and enrollment have not yet been recorded.':
+  s.status==='screened'?'Screened. Complete or review the eligibility checklist and approve enrollment before allocation.':
+  s.status==='enrolled'?'Enrolled. Allocation status is shown below.':'Study status: '+s.status+'. New allocation is unavailable.');
+ if(s&&s.status!=='enrolled')$('tw-rand-continue').disabled=s.status!=='screened';
+}
+function invalidateRandomizationSearch(){
+ participantRequest++;$('tw-rand-patient').value='';$('tw-rand-continue').disabled=true;
+ $('tw-rand-subject').value='';$('tw-rand-assign').disabled=true;
+ $('tw-rand-subject-status').textContent='Select the matching CR number after searching.';
+}
+$('tw-rand-fetch').onclick=()=>{invalidateRandomizationSearch();clearTimeout(registrySearchTimer);void task('tw-rand-status',loadRandomizationRegistry);};
+$('tw-rand-search').oninput=()=>{
+ registrySearchRequest++;invalidateRandomizationSearch();
+ clearTimeout(registrySearchTimer);registrySearchTimer=setTimeout(()=>{void task('tw-rand-status',loadRandomizationRegistry);},250);
+};
+$('tw-rand-patient').onchange=()=>{void task('tw-rand-status',async()=>{
+ $('tw-rand-assign').disabled=true;
+ const patient=value('tw-rand-patient');
+ if(!patient){clearParticipant();updateRandomizationProgress();return;}
+ await window.choose(patient);updateRandomizationProgress();await loadRandSubject();
+});};
+$('tw-rand-continue').onclick=()=>{void task('tw-rand-status',async()=>{
+ const patient=value('tw-rand-patient');if(!patient)throw Error('Choose a registry CR number first');
+ await window.choose(patient);await tab('study');
+ (n('tw-checklist-subject')?$('tw-checklist-subject'):$('tw-patient')).scrollIntoView({block:'center'});
+});};
 async function loadRandomization(){
+ clearTimeout(registrySearchTimer);$('tw-rand-search').value='';
  const role=$('currentRole').textContent.trim();
  const shared=!!window.currentWorkspaceFullAccess;
  const isCustodian=role==='randomization_custodian'&&!shared;
  $('tw-rand-assign-panel').classList.toggle('hide',role!=='pi'&&!shared);
+ $('tw-rand-registry-panel').classList.toggle('hide',isCustodian);
+ $('tw-rand-assign').disabled=true;
  $('tw-rand-source').parentElement.classList.toggle('hide',shared);
  $('tw-rand-eligibility-confirm').parentElement.classList.toggle('hide',shared);
  $('tw-rand-custodian-panel').classList.toggle('hide',!isCustodian);
  $('tw-rand-groups-panel').classList.toggle('hide',!isCustodian);
  if(!isCustodian){
   await loadSubjects();
+  await loadRandomizationRegistry();
   await loadRandSubject();
  }
  const r=await api('/api/trial/randomization/readiness');
@@ -967,11 +1068,16 @@ async function loadRandomization(){
  }
 }
 async function loadRandSubject(){
- const subject=n('tw-rand-subject');
+ const subject=n('tw-rand-subject'),searchVersion=registrySearchRequest;
  const target=$('tw-rand-subject-status');
- if(!subject){target.textContent='Choose an enrolled participant.';return;}
- await selectParticipantSubject(subject);
+ $('tw-rand-assign').disabled=true;
+ if(!subject){target.textContent='No enrolled participant selected. Fetch the CR number above and continue any unfinished screening or enrollment.';return;}
+ if(!await selectParticipantSubject(subject)||searchVersion!==registrySearchRequest)return;
+ const request=participantRequest;
  const r=await api('/api/trial/randomization/subjects/'+subject+'/allocation');
+ if(searchVersion!==registrySearchRequest||request!==participantRequest||subject!==participantSubject||subject!==n('tw-rand-subject'))return;
+ if(Array.from($('tw-rand-patient').options).some(o=>o.value===selected))$('tw-rand-patient').value=selected;
+ updateRandomizationProgress();
  target.textContent=r.randomized?
   'Already randomized · '+r.allocation_code+
     (r.assigned_arm_mg?' · '+r.assigned_arm_mg+' mg nominal':'')+
@@ -988,7 +1094,7 @@ $('tw-rand-assign').onclick=()=>{void task('tw-rand-status',async()=>{
   throw Error('Check the signed eligibility/stratum confirmation before requesting an allocation');
  const source=window.currentWorkspaceFullAccess?'Named account requested allocation in the dashboard':value('tw-rand-source');
  if(source.length<8)throw Error('Enter signed source reference (at least 8 characters)');
- if(!confirm('Permanently allocate the NEXT concealed assignment in the approved stratum? '+
+ if(!confirm($('tw-rand-subject').selectedOptions[0].textContent+'\nPermanently allocate the NEXT concealed assignment in the approved stratum? '+
       'You cannot select or undo this treatment arm.'))return;
  const r=await api('/api/trial/randomization/subjects/'+sid+'/assign',{
   method:'POST',body:JSON.stringify({investigator_confirmation:true,
@@ -1089,10 +1195,13 @@ function clearParticipant(){
  $('tw-context-subject').value='';$('tw-context-allocation').textContent='No participant selected.';
  $('tw-context-detail').textContent='';$('tw-course-records').textContent='';
  for(const id of ['tw-pcr-subject','tw-drug-subject','tw-crf-subject','tw-rand-subject'])$(id).value='';
+ $('tw-rand-assign').disabled=true;
 }
 function renderParticipant(context){
  if(context.patient_id!==participantContext?.patient_id){
   resetPCRControls();resetDrugControls();
+  for(const id of ['tw-consent-date','tw-icf','tw-pis','tw-consent-obtained','tw-consent-source','tw-initials','tw-screen-age','tw-sex','tw-ratg','tw-anchor-date'])$(id).value='';
+  for(const id of ['tw-eligible','tw-pi-consent','tw-pi-anchor'])$(id).checked=false;
   for(const id of ['tw-collected','tw-accession','tw-reported','tw-assay','tw-result-kind','tw-viral-load','tw-loq','tw-qc','tw-result-reason','tw-review-reason','tw-rx-date','tw-issue-date','tw-return-date','tw-rand-source'])$(id).value='';
   $('tw-rand-eligibility-confirm').checked=false;
   for(const id of ['age','weight','creatinine','sex'])$(id).value='';
@@ -1141,6 +1250,7 @@ $('tw-context-subject').onchange=()=>{void task('tw-context-error',async()=>{
  try{if(activeTab==='crf')await crfSaveDraft();if(activeTab==='entry')await saveDraftNow();}
  catch(e){$('tw-context-subject').value=previous?String(previous):'';throw e;}
  await selectParticipantSubject(n('tw-context-subject'));
+ if(activeTab==='study')await selectEnrollmentPatient();
  if(activeTab==='crf'){crfRender();await populateCrfLinkedIdentifiers();await crfRestoreDraft();await loadCrfEntries();}
  if(activeTab==='pcr')await loadPCR();
  if(activeTab==='drug')await loadDrug();
