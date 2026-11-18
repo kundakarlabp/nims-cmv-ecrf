@@ -380,14 +380,14 @@ $('tw-result-save').onclick=()=>{void task('tw-pcr-status',async()=>{
   result_kind:value('tw-result-kind'),quantitative_iu_ml:value('tw-viral-load')?n('tw-viral-load'):null,
   lower_limit_iu_ml:value('tw-loq')?n('tw-loq'):null,qc_status:value('tw-qc'),
   correction_reason:value('tw-result-reason')||null})});
- notify('tw-pcr-status',updated.specimen_code+' result saved, awaiting independent review');await loadPCR();
+ notify('tw-pcr-status',updated.specimen_code+' result saved, awaiting source review');await loadPCR();
 });};
 $('tw-verify-save').onclick=()=>{void task('tw-pcr-status',async()=>{
  requireProcedureSubject('pcr');
  var r=pcrRecords.find(x=>x.id===n('tw-verify-id'));if(!r)throw Error('Select submitted result');
  var verified=await api('/api/trial/pcr/'+r.id+'/verify',{method:'POST',body:JSON.stringify({
   expected_revision:r.revision,review_reason:value('tw-review-reason')})});
- notify('tw-pcr-status',verified.specimen_code+' verified by independent reviewer');await loadPCR();
+ notify('tw-pcr-status',verified.specimen_code+' source verified by the named reviewer');await loadPCR();
 });};
 $('tw-stock-save').onclick=()=>{void task('tw-drug-status',async()=>{
  var r=await api('/api/trial/pharmacy/lots',{method:'POST',body:JSON.stringify({
@@ -889,7 +889,7 @@ loadDashboard=async function(){
   }).join('');
   const visits='<div class="dash-card" style="margin:16px 0">'+
    '<h3>Protocol follow-up completeness</h3>'+
-   '<p class="dash-note">Count of submitted and independently verified CRF visits. PCR result verification is tracked separately.</p>'+
+   '<p class="dash-note">Count of submitted and source-verified CRF visits. PCR result verification is tracked separately.</p>'+
    '<div style="overflow-x:auto"><table style="width:100%;font-size:12px;border-collapse:collapse">'+
    '<thead><tr><th>Timepoint</th><th>Submitted</th><th>Verified</th><th>Needs correction</th></tr></thead>'+
    '<tbody>'+rows+'</tbody></table></div></div>';

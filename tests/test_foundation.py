@@ -80,6 +80,15 @@ def test_password_team_workspace_keeps_authentication_and_removes_clinical_role_
             'lot_number':'TEST-LOT-TEAM','expiry_on':'2027-10-01',
             'received_on':'2026-10-01','strength_mg':450,'quantity_received':100})
         assert lot.status_code==200,lot.text
+        form=nurse.post(f'/api/trial/crf/subjects/{sid}/entries',headers=h,json={
+            'section':'C_baseline','occurred_on':'2026-10-03',
+            'payload':{'weight_kg':60,'source_reference':'TEST-BASELINE-TEAM'}})
+        assert form.status_code==200,form.text
+        entry=form.json()['entry_id']
+        assert any(x['id']==entry for x in nurse.get('/api/trial/crf/review-queue').json())
+        reviewed=nurse.post(f'/api/trial/crf/entries/{entry}/review',headers=h,json={
+            'expected_revision':1,'decision':'verified','reason':'Named entry author checked the source record'})
+        assert reviewed.status_code==200,reviewed.text
         assert nurse.post(f'/api/trial/randomization/subjects/{sid}/assign',headers=h,json={
             'investigator_confirmation':True,'stratification_verified':True,
             'signed_randomization_source_ref':'Second request prohibited'}).status_code==409
