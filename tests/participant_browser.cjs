@@ -50,7 +50,11 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
     const subject=subjects.find(x=>x.id===id);Object.assign(subject,{status:'enrolled',study_code:'NCMV001',enrolled_on:data.enrolled_on});
     people.find(x=>x.id===subject.patient_id).study_id=subject.study_code;
     result={subject,study_id:subject.study_code,pcr_orders:7};
-   }else if(p==='/api/trial/randomization/readiness')result={sequence_locked:true,activation_ready:true,allocation_management:'owner_managed'};
+   }else if(p==='/api/trial/action-worklist')result={as_of:'2026-11-18',total:1,counts:{'Enrollment pending':1},
+    actions:[{category:'Enrollment pending',study_code:'TEST-SCREEN-3',detail:'Finish enrollment',
+     patient_id:'TEST-P-3',subject_id:3,route:'study',priority:1,target_on:null}]};
+   else if(p==='/healthz')result={ok:true,app_commit:'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',service:'clinical'};
+   else if(p==='/api/trial/randomization/readiness')result={sequence_locked:true,activation_ready:true,allocation_management:'owner_managed'};
    else if(p.endsWith('/allocation')){
     const id=Number(p.split('/')[5]);result=allocations.get(id)||{randomized:false,study_code:'TEST-STUDY-'+id};
    }else if(p.endsWith('/assign')){
@@ -206,6 +210,9 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
    $('tw-assigned-study-id').textContent.includes('pending'));
   assert.match(await page.textContent('#tw-assigned-study-id'),/pending/);
   await page.fill('#tw-screen-date','2026-10-02');await page.fill('#tw-consent-date','2026-10-02');
+  await page.selectOption('#tw-digg','positive');await page.selectOption('#tw-rigg','positive');
+  await page.selectOption('#tw-donor','living');await page.selectOption('#tw-relationship','living_related');
+  await page.selectOption('#tw-consent-language','English');
   for(const [id,v] of Object.entries({'tw-icf':'ICF v3','tw-pis':'PIS v3','tw-consent-obtained':'Synthetic investigator','tw-consent-source':'TEST-SIGNED-ICF','tw-initials':'TS','tw-screen-age':'50'}))await page.fill('#'+id,v);
   await page.selectOption('#tw-sex','male');await page.selectOption('#tw-ratg','true');await page.check('#tw-eligible');
   await page.click('#tw-screen-save');
@@ -262,6 +269,20 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   assert.equal(await page.inputValue('#tw-rand-patient'),'');
   assert.equal(await page.inputValue('#tw-rand-subject'),'');
   assert.equal(await page.isDisabled('#tw-rand-assign'),true);
+  // Visible phone navigation and a real worklist route, not merely CSS screenshots.
+  await page.setViewportSize({width:393,height:852});
+  await page.evaluate(async()=>{await tab('tasks');});
+  await page.waitForFunction(()=>$('tw-task-items').textContent.includes('TEST-SCREEN-3'));
+  assert.equal(await page.isVisible('#tw-mobile-menu'),true);
+  assert.equal(await page.isVisible('#tw-study-navigation'),false);
+  await page.click('#tw-mobile-menu');
+  assert.equal(await page.isVisible('#tw-study-navigation'),true);
+  assert.equal(await page.getAttribute('#tw-mobile-menu','aria-expanded'),'true');
+  await page.click('#btndashboard');
+  await page.waitForFunction(()=>activeTab==='dashboard');
+  assert.equal(await page.isVisible('#tw-study-navigation'),false);
+  assert.equal(await page.getAttribute('#tw-mobile-menu','aria-expanded'),'false');
+  assert.match(await page.textContent('#tw-live-build'),/aaaaaaaaaa/);
   assert.deepEqual(errors,[]);
   console.log('Real browser passed: scripts, patient identity, source-date autosave, cross-patient draft isolation, allocation persistence, mobile layout and blinded banner');
  }finally{await browser.close();}
