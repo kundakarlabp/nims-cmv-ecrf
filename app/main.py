@@ -230,7 +230,8 @@ def current(request:Request,s:Session=Depends(db)) -> AuthContext:
         and (clinical_path.startswith(('/api/patients','/api/entries',
                                       '/api/trial/screening','/api/trial/subjects',
                                       '/api/trial/pcr','/api/trial/pharmacy',
-                                      '/api/trial/crf','/api/trial/randomization/subjects')))):
+                                      '/api/trial/crf','/api/trial/randomization/subjects',
+                                      '/api/assistant')))):
         if not backup_fresh() or not restore_verified():
             raise HTTPException(503,'Clinical write temporarily paused: backup or restore verification overdue')
 
@@ -761,5 +762,9 @@ app.include_router(randomization_router)
 
 from .backup_channel import router as backup_router
 app.include_router(backup_router)
+
+# Same-origin assistant adapter: inherits named staff session and clinical gates.
+from .assistant_api import router as assistant_router
+app.include_router(assistant_router)
 
 
