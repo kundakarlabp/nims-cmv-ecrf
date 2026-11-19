@@ -158,8 +158,9 @@ def test_additive_migration_matches_models():
     from sqlalchemy.dialects import postgresql
     from app.oauth_models import OAuthBase
     sql=Path('ops/migrations/20261119_assistant_oauth.sql').read_text()
+    normalized=lambda value:'\n'.join(line.rstrip() for line in value.splitlines())
     for table in OAuthBase.metadata.sorted_tables:
-        assert str(CreateTable(table,if_not_exists=True).compile(dialect=postgresql.dialect()))+';' in sql
+        assert normalized(str(CreateTable(table,if_not_exists=True).compile(dialect=postgresql.dialect()))+';') in sql
         for index in table.indexes:
             assert str(CreateIndex(index,if_not_exists=True).compile(dialect=postgresql.dialect()))+';' in sql
     assert 'ALTER TABLE' not in sql and 'DROP ' not in sql
