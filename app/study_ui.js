@@ -297,6 +297,9 @@ tab=async function(name){
   });
  }else{
   await oldTab(name);
+  // An older asynchronous dashboard load may finish after a newer tab opens.
+  // Never let that stale completion hide the newly selected study panel.
+  if(activeTab!==name)return;
   for(const k of Object.keys(perms)){$(k).classList.add('hide');$('btn'+k).classList.remove('selected');}
  }
 };
