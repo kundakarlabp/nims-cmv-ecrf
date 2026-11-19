@@ -166,3 +166,180 @@ def test_additive_migration_matches_models():
         for index in table.indexes:
             assert str(CreateIndex(index,if_not_exists=True).compile(dialect=postgresql.dialect()))+';' in sql
     assert 'ALTER TABLE' not in sql and 'DROP ' not in sql
+
+
+def test_oci_operational_mcp_read_tools_and_freshness(cmv, monkeypatch, tmp_path):
+    """Complete read-only OAuth roundtrip; no real records, writes or OCI keys."""
+    from datetime import datetime, timedelta, timezone
+    from app import mcp_readonly
+    from app.main import app
+    c, csrf, actor = cmv
+    client, form = link(c, csrf, "cmv:read")
+    token = c.post("/oauth/token", data=form).json()["access_token"]
+    headers = {"Authorization": "Bearer " + token}
+    listing = c.post("/mcp", headers=headers, json={
+        "jsonrpc": "2.0", "id": 1, "method": "tools/list"
+    }).json()["result"]["tools"]
+    names = {tool["name"] for tool in listing}
+    expected = {
+        "deployment_status", "backup_status", "restore_verification",
+        "failure_diagnostics", "clinical_write_readiness", "trial_workflow_status"
+    }
+    assert expected <= names
+    assert all(tool["annotations"]["readOnlyHint"]
+               for tool in listing if tool["name"] in expected)
+    assert "register_patient" not in names
+
+    commit = "a" * 40
+    monkeypatch.setenv("APP_COMMIT", commit)
+    monkeypatch.setattr(mcp_readonly, "read_host_status", lambda: {
+        "available": True, "fresh": True, "deployed_commit": commit,
+        "approved_release_commit": commit, "timer_active": "active",
+        "last_update_attempt": "success", "last_deploy_result": "success",
+        "google_drive_backup_configuration_present": True,
+        "google_drive_backup_receipt_present": True,
+        "clinical_transition": "clinical_active",
+    })
+    monkeypatch.setattr(mcp_readonly.main, "CLINICAL_MODE", True)
+    monkeypatch.setattr(mcp_readonly.main, "team_workspace", lambda: False)
+    monkeypatch.setattr(mcp_readonly, "startup_deficiencies", lambda: [])
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    filename = "clinical-" + stamp + "-abcdef123456.tar"
+    ref = "gdrive:1Mnzme95zuQM5WKuHWtsv2-nzhtPUK_EM:" + filename
+    receipt = stamp + " " + ("f" * 64) + " " + ref + "\n"
+    backup = tmp_path / "last_success"
+    restore = tmp_path / "last_restore"
+    backup.write_text(receipt)
+    restore.write_text(receipt)
+    monkeypatch.setenv("CLINICAL_BACKUP_RECEIPT_PATH", str(backup))
+    monkeypatch.setenv("CLINICAL_RESTORE_RECEIPT_PATH", str(restore))
+
+    deploy = rpc(c, token, "deployment_status").json()["result"]["structuredContent"]
+    assert deploy["release_reconciliation"] == "verified"
+    assert deploy["host_command_execution"] is False
+    assert "secret" not in str(deploy).lower()
+
+    state = rpc(c, token, "backup_status").json()["result"]["structuredContent"]
+    assert state["offsite_backup_fresh_8h"] is True
+    assert state["google_drive_receipt_current"] is True
+    assert state["external_google_drive_listing_checked"] is False
+    assert state["backup_receipt_backend"] == "google_drive"
+    assert str(backup) not in str(state)
+    restore_state = rpc(c, token, "restore_verification").json()["result"]["structuredContent"]
+    assert restore_state["isolated_restore_proof_current_30d"] is True
+    assert restore_state["new_restore_performed_by_this_tool"] is False
+
+    readiness = rpc(c, token, "clinical_write_readiness").json()["result"]["structuredContent"]
+    assert readiness["clinical_write_ready"] is True
+    assert readiness["check_type"] == "read_only_preflight_no_patient_write"
+    assert readiness["blocking_reasons"] == []
+
+    monkeypatch.setattr(mcp_readonly, "read_host_status", lambda: {
+        "available": True, "fresh": False,
+    })
+    backup.write_text((datetime.now(timezone.utc) - timedelta(hours=9)).strftime(
+        "%Y%m%dT%H%M%SZ") + " " + ("f" * 64) + " " + ref + "\n")
+    diagnostics = rpc(c, token, "failure_diagnostics").json()["result"]["structuredContent"]
+    assert "host_status_missing_or_stale" in diagnostics["codes"]
+    assert "clinical_backup_receipt_not_fresh" in diagnostics["codes"]
+    blocked = rpc(c, token, "clinical_write_readiness").json()["result"]["structuredContent"]
+    assert blocked["clinical_write_ready"] is False
+    assert "encrypted_offsite_backup_not_verified" in blocked["blocking_reasons"]
+
+
+def test_blinded_workflow_status_exact_match_no_allocations_or_doses(cmv):
+    """MCP sees workflow milestones but never fetches or returns the sealed arm."""
+    from datetime import date, datetime, timezone
+    from app.main import Patient
+    from app.trial_models import (
+        TrialSubject, TrialEligibility, RandomizationPlan, RandomizationSlot,
+        DrugAuthorization,
+    )
+    c, csrf, actor = cmv
+    client, form = link(c, csrf, "cmv:read")
+    token = c.post("/oauth/token", data=form).json()["access_token"]
+    with SessionLocal() as s:
+        p = Patient(name="Synthetic status participant",
+                    cr_number="TEST-MCP-STATUS-001", created_by=actor)
+        s.add(p); s.flush()
+        t = TrialSubject(
+            patient_id=p.id, screening_code="NCMV-S-00200",
+            screening_on=date(2026, 11, 16), status="screened",
+            donor_cmv_igg="positive", recipient_cmv_igg="positive",
+            donor_type="living", ratg_induction=True,
+            consent_on=date(2026, 11, 16), consent_version="Synthetic v5",
+            eligibility_attested=True, created_by=actor,
+        )
+        s.add(t); s.flush()
+        t_id = t.id
+        s.add(TrialEligibility(
+            subject_id=t.id, inclusion={"synthetic": True},
+            exclusion={"synthetic": False}, baseline={"is_eligible": True},
+            reviewed_by=actor, reviewed_on=date(2026, 11, 16),
+        ))
+        s.commit()
+    before = rpc(c, token, "trial_workflow_status", {
+        "identifier": "NCMV-S-00200"
+    }).json()["result"]["structuredContent"]
+    assert before["eligibility"]["status"] == "eligible"
+    assert before["enrollment"]["status"] == "screened"
+    assert before["randomization"]["status"] == "not_applicable"
+    assert before["pharmacy"]["status"] == "not_authorized"
+
+    with SessionLocal() as s:
+        t = s.get(TrialSubject, t_id)
+        t.study_code = "NCMV200"
+        t.status = "enrolled"
+        t.enrolled_on = date(2026, 11, 17)
+        p = s.get(Patient, t.patient_id)
+        p.study_id = t.study_code
+        plan = RandomizationPlan(
+            protocol_version="5.0",
+            statistician_reference="SYNTHETIC-INTERNAL",
+            signed_specification_reference="SYNTHETIC-INTERNAL",
+            sequence_sha256="a" * 64, block_sizes={"synthetic": [4]},
+            active=True, locked_by=actor,
+            locked_at=datetime.now(timezone.utc),
+        )
+        s.add(plan); s.flush()
+        s.add(RandomizationSlot(
+            plan_id=plan.id, stratum="synthetic", position=1,
+            encrypted_arm="NEVER_EXPOSE_SEALED_ARM_900",
+            subject_id=t_id, allocation_code="NEVER_EXPOSE_ALLOCATION_CODE",
+            assigned_by=actor, assigned_at=datetime.now(timezone.utc),
+            signed_source_reference="INTERNAL_SOURCE",
+        ))
+        s.add(DrugAuthorization(
+            subject_id=t_id,
+            prescription_ref="SYNTHETIC-PRESCRIPTION-001",
+            signed_on=date(2026, 11, 17), authorization_by=actor,
+            allocation_reference="NEVER_EXPOSE_ALLOCATION_CODE",
+            renal_assessment_ref="SYNTHETIC-RENAL",
+            authorized_dose_instruction="NEVER_EXPOSE_DOSE_900",
+        ))
+        s.commit()
+    outcome = rpc(c, token, "trial_workflow_status", {
+        "identifier": "NCMV200"
+    })
+    assert outcome.status_code == 200
+    data = outcome.json()["result"]["structuredContent"]
+    assert data["randomization"]["status"] == "completed"
+    assert data["enrollment"]["completed"] is True
+    assert data["pharmacy"]["status"] == "authorized_not_dispensed"
+    assert "NEVER_EXPOSE" not in outcome.text
+    assert "encrypted_arm" not in outcome.text
+    assert "allocation_code" not in outcome.text
+    assert "authorized_dose_instruction" not in outcome.text
+    assert "900" not in outcome.text
+
+
+def test_oci_operations_deny_non_operator_even_with_read_token(cmv):
+    from app import mcp_readonly
+    from app.main import AuthContext
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as e:
+        mcp_readonly.deployment_status(AuthContext(
+            user_id="synthetic-id", role="pg", name="Synthetic PG",
+            csrf_hash="",
+        ))
+    assert e.value.status_code == 403
