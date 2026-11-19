@@ -41,7 +41,7 @@ with SessionLocal() as s:
         try:
             values=m.setup_paths()
             m.run(dc+['image','tag','nims-cmv-api','nims-cmv-clinical-api'])
-            m.provision(dc);m.backup_and_restore(dc)
+            m.provision(dc);m.backup_and_restore(dc, force=True)
             manifests=list((m.PRIVATE/'export').glob('*.json'));assert len(manifests)==1
             record=json.loads(manifests[0].read_text());assert record['restore_verified'] is True
             archive=m.PRIVATE/'export'/(record['id']+'.tar')
