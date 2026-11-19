@@ -122,6 +122,7 @@ def execute(name,args,u,s):
 
 def result(data,error=False):
     data=jsonable_encoder(data)
+    if not isinstance(data,dict):data={'items':data}
     return {'content':[{'type':'text','text':json.dumps(data,separators=(',',':'))}],
             'structuredContent':data,'isError':error}
 
