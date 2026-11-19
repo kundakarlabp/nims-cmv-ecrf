@@ -5,7 +5,7 @@ on:
     types: [completed]
 permissions:
   contents: write
-  actions: write # Allows dispatching a backup only after a real verified staging release.
+  actions: read
 jobs:
   mark:
     if: >-
@@ -50,14 +50,3 @@ jobs:
       - name: Verify running application through public health only
         if: steps.intent.outputs.publish == 'true'
         run: python3 ops/verify_release.py --target "$TARGET" --url https://152-70-77-77.sslip.io --timeout 540
-
-      - name: Request immediate encrypted backup for a genuine verified release
-        if: steps.intent.outputs.publish == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          # Unlike workflow_run on every noop, workflow_dispatch also fires with GITHUB_TOKEN.
-          gh workflow run clinical-backup.yml --repo "$GITHUB_REPOSITORY" --ref main
-

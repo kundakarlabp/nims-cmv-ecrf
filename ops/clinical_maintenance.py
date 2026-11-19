@@ -211,13 +211,13 @@ def routine_backup_window(at):
     return (7,30)<=(local.hour,local.minute)<(17,0)
 
 def backup_and_restore(dc,force=False):
-    # Routine work is daytime-only; initial cutover/recovery can explicitly force it.
-    if not force and not routine_backup_window(datetime.now(UTC)):return
+    # OCI-owned backups continue all day, including outside GitHub Actions hours.
+    # Keep the 8-hour clinical freshness gate satisfied with a 6-hour interval.
     Fernet=ensure_crypto()
     latest=sorted((PRIVATE/'export').glob('*.json'))
     if latest and not force:
         created=datetime.fromisoformat(json.loads(latest[-1].read_text())['created_at'])
-        if datetime.now(UTC)-created<timedelta(hours=2):return
+        if datetime.now(UTC)-created<timedelta(hours=6):return
     cc=clinical(dc)
     raw=run(cc+['exec','-T','db','pg_dump','-U','nims_clinical_owner','-d',
                 'nims_cmv_clinical','-Fc','--no-owner','--no-acl'])
@@ -351,7 +351,13 @@ def main():
             PHASE='owner_requested_fresh_start';owner_workspace_update(dc)
             PHASE='encrypted_backup_and_isolated_restore';print('Clinical maintenance:',PHASE,flush=True)
             backup_and_restore(dc)
-            PHASE='offsite_receipt';accept_receipts()
+            # The existing clinical archive is already sealed and restored on
+            # OCI. Transfer the exact same bytes to the private Drive folder;
+            # no GitHub backup workflow or private repository is involved.
+            PHASE='offsite_receipt'
+            from ops.drive_offsite import sync_latest
+            if not sync_latest(PRIVATE):
+                print('Google Drive recovery waiting for OCI rclone authorization.',flush=True)
             PHASE='clinical_cutover';phase=cutover(dc,values)
             atomic(STATE/'clinical-maintenance.json',json.dumps({'checked_at':datetime.now(UTC).isoformat(),
                 'phase':phase,'database_provisioned':True,'isolated_restore_verified':True}).encode(),0o644)

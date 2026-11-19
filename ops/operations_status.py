@@ -28,6 +28,33 @@ def backup_configuration_present(path):
         return None
 
 
+
+def drive_backup_configuration_present(path):
+    """Report only whether OCI's Drive OAuth config targets the private folder."""
+    try:
+        parser=configparser.ConfigParser(interpolation=None)
+        config=Path(path)
+        if config.stat().st_mode & 0o077:return False
+        with config.open() as source:parser.read_file(source)
+        return (parser.get('nims_cmv_drive','type',fallback='')=='drive'
+                and parser.get('nims_cmv_drive','root_folder_id',fallback='')
+                    =='1Mnzme95zuQM5WKuHWtsv2-nzhtPUK_EM'
+                and bool(parser.get('nims_cmv_drive','token',fallback='')
+                    or parser.get('nims_cmv_drive','service_account_file',fallback='')))
+    except FileNotFoundError:return False
+    except (OSError,UnicodeError,configparser.Error):return None
+
+
+def drive_receipt_present(home):
+    """Receipt presence only, not currentness or a successful cloud probe."""
+    path=Path(home)/'.local/share/nims-cmv-clinical/backup-state/last_success'
+    try:
+        fields=path.read_text().split()
+        return (len(fields)==3 and fields[2].startswith(
+            'gdrive:1Mnzme95zuQM5WKuHWtsv2-nzhtPUK_EM:clinical-'))
+    except FileNotFoundError:return False
+    except (OSError,UnicodeError):return None
+
 def systemctl(*args):
     try:
         value=subprocess.run(['systemctl', *args], capture_output=True, text=True,
@@ -103,6 +130,9 @@ def write_status(root=ROOT, attempt_result='running'):
         'backup_tool_installed':shutil.which('rclone') is not None,
         'encrypted_backup_configuration_present':backup_configuration_present(
             os.environ.get('RCLONE_CONFIG',str(Path.home()/'.config/rclone/rclone.conf'))),
+        'google_drive_backup_configuration_present':drive_backup_configuration_present(
+            os.environ.get('RCLONE_CONFIG',str(Path.home()/'.config/rclone/rclone.conf'))),
+        'google_drive_backup_receipt_present':drive_receipt_present(Path.home()),
         'last_update_attempt':attempt_result,
         'recorded_at':datetime.now(timezone.utc).isoformat(),
         'deployed_commit':commit if re.fullmatch(r'[0-9a-f]{40}',commit) else None,

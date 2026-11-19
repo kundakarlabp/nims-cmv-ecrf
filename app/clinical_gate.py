@@ -26,7 +26,8 @@ def _receipt(path:str, max_age:timedelta, at:datetime, expected_remote:bool):
         if not STAMP_RE.fullmatch(stamp) or not HEX_RE.fullmatch(digest):return False
         if expected_remote and not (reference.startswith("ecrfcrypt:") or
             re.fullmatch(r'github-artifact:1455709378:[1-9][0-9]*',reference) or
-            re.fullmatch(r'github-release:1455709378:[1-9][0-9]*:[1-9][0-9]*',reference)):return False
+            re.fullmatch(r'github-release:1455709378:[1-9][0-9]*:[1-9][0-9]*',reference) or
+            re.fullmatch(r'gdrive:1Mnzme95zuQM5WKuHWtsv2-nzhtPUK_EM:clinical-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}[.]tar',reference)):return False
         event=datetime.strptime(stamp,"%Y%m%dT%H%M%SZ").replace(tzinfo=UTC)
         return timedelta(0)<=at-event<=max_age
     except (OSError,ValueError,UnicodeError):
