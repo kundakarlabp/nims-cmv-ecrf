@@ -17,6 +17,7 @@ from . import assistant_api as service
 from .main import SessionLocal, Entry, Patient, as_dict, sha
 from .oauth_api import bearer_actor, origin, resource, consent_page
 from .oauth_models import MCPReceipt
+from . import mcp_readonly
 from .trial_models import TrialCRFDraft, TrialCRFEntry
 
 router=APIRouter(tags=['private-mcp'])
@@ -31,6 +32,8 @@ class PatientRead(Args):
     patient_id:str=Field(min_length=1,max_length=36)
 class CRFRead(Args):
     subject_id:int=Field(ge=1)
+class WorkflowStatus(Args):
+    identifier:str=Field(min_length=3,max_length=100)
 class Write(Args):
     idempotency_key:str=Field(min_length=8,max_length=100,pattern=r'^[A-Za-z0-9_-]+$')
     confirm:bool=False
@@ -57,6 +60,12 @@ TOOLS={
  'read_patient':(PatientRead,False,'Read a selected registry patient and recorded events.'),
  'search_subject':(Search,False,'Find up to 10 CMV trial participants by CR number, study ID or name.'),
  'read_crf':(CRFRead,False,'Read recorded CRF sections for a selected trial participant.'),
+ 'deployment_status':(Empty,False,'Read sanitized OCI running/deployed release reconciliation and auto-deploy timer. PI/admin only.'),
+ 'backup_status':(Empty,False,'Check the current clinical offsite backup receipt, freshness and Google Drive configuration indicators. PI/admin only.'),
+ 'restore_verification':(Empty,False,'Check the latest isolated database restore proof. This does not run or claim a new restore. PI/admin only.'),
+ 'failure_diagnostics':(Empty,False,'Read allowlisted OCI deployment and clinical backup failure reason codes without logs or secrets. PI/admin only.'),
+ 'clinical_write_readiness':(Empty,False,'Read-only clinical write preflight: database, backup, restore and first-start gates. No patient write. PI/admin only.'),
+ 'trial_workflow_status':(WorkflowStatus,False,'Read eligibility, enrollment, randomization completion and pharmacy status for one exact participant. Never show treatment arm, allocation code or dose.'),
  'register_patient':(Register,True,'Register one patient after user confirmation. Retry only with the same idempotency key and identical input.'),
  'correct_patient_identity':(IdentityWrite,True,'Correct identity using expected CR, revision and a reason after user confirmation.'),
  'create_registry_entry':(RegistryWrite,True,'Save one dated event against an exact CR, study ID or name. Reject ambiguous matches; confirm the selected participant first.'),
@@ -90,6 +99,12 @@ def execute(name,args,u,s):
     if name=='read_patient':return service.read_registry_patient(args.patient_id,u=u,s=s)
     if name=='search_subject':return service.search_subjects(q=args.query,u=u,s=s)
     if name=='read_crf':return service.read_crf(args.subject_id,u=u,s=s)
+    if name=='deployment_status':return mcp_readonly.deployment_status(u)
+    if name=='backup_status':return mcp_readonly.backup_status(u)
+    if name=='restore_verification':return mcp_readonly.restore_verification(u)
+    if name=='failure_diagnostics':return mcp_readonly.failure_diagnostics(u)
+    if name=='clinical_write_readiness':return mcp_readonly.clinical_write_readiness(u,s)
+    if name=='trial_workflow_status':return mcp_readonly.trial_workflow_status(args.identifier,u,s)
     if not args.confirm:raise HTTPException(422,'Explicit user confirmation required before saving')
     if name=='register_patient':
         result=service.register_assisted_patient(args.data,u=u,s=s)
