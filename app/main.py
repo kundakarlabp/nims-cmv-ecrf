@@ -213,8 +213,16 @@ def current(request:Request,s:Session=Depends(db)) -> AuthContext:
     active=s.get(LoginSession,sha(token))
     if not active or active.expires_at.replace(tzinfo=UTC)<now(): raise HTTPException(401,'Session expired')
     user=s.get(User,active.user_id)
+    context=authorize_account(request,s,user,active.mfa_verified)
+    if request.method not in ('GET','HEAD','OPTIONS'):
+        supplied=request.headers.get('x-csrf-token','')
+        if not supplied or not secrets.compare_digest(sha(supplied),active.csrf_hash):
+            raise HTTPException(403,'Missing or invalid CSRF token')
+    return context.model_copy(update={'csrf_hash':active.csrf_hash,'session_hash':active.token_hash})
+
+def authorize_account(request:Request,s:Session,user:User,mfa_verified:bool) -> AuthContext:
     if not user or not user.active: raise HTTPException(401,'Account disabled')
-    if os.getenv('MFA_REQUIRED','false').lower()=='true' and not active.mfa_verified:
+    if os.getenv('MFA_REQUIRED','false').lower()=='true' and not mfa_verified:
         allowed={'/api/me','/api/session','/api/logout','/api/trial/staff/mfa-setup','/api/trial/staff/mfa-confirm'}
         if request.url.path not in allowed:
             raise HTTPException(403,'Complete your authenticator setup to access the clinical workspace')
@@ -246,14 +254,9 @@ def current(request:Request,s:Session=Depends(db)) -> AuthContext:
           '/api/trial/staff/mfa-confirm'}
     ):
         raise HTTPException(403,'Allocation custodian has no patient/eligibility or treatment record access')
-    if request.method not in ('GET','HEAD','OPTIONS'):
-        supplied=request.headers.get('x-csrf-token','')
-        if not supplied or not secrets.compare_digest(sha(supplied),active.csrf_hash):
-            raise HTTPException(403,'Missing or invalid CSRF token')
     return AuthContext(user_id=user.id,role='pi' if shared else user.role,
-                       name=user.display_name,csrf_hash=active.csrf_hash,
-                       pi_authorized=user.pi_authorized,session_hash=active.token_hash,
-                       workspace_full_access=shared)
+                       name=user.display_name,csrf_hash='',
+                       pi_authorized=user.pi_authorized,workspace_full_access=shared)
 
 def audit(s:Session,u:AuthContext,action:str,entity_type:str,entity_id:str,patient_id:str|None,old:dict|None,new:dict|None,reason:str):
     s.add(Audit(actor_id=u.user_id,action=action,entity_type=entity_type,entity_id=entity_id,patient_id=patient_id,old_record=jsonable_encoder(old),new_record=jsonable_encoder(new),reason=reason))
@@ -768,3 +771,9 @@ from .assistant_api import router as assistant_router
 app.include_router(assistant_router)
 
 
+
+# OAuth uses separate additive metadata; the clinical baseline is unchanged.
+from .oauth_api import router as oauth_router
+from .mcp_api import router as mcp_router
+app.include_router(oauth_router)
+app.include_router(mcp_router)

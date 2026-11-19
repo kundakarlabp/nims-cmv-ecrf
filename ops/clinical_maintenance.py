@@ -126,6 +126,15 @@ def provision(dc):
         sql(dc,"SELECT setval(pg_get_serial_sequence('trial_user_invitations','id'), coalesce(max(id),1), count(*)>0) FROM trial_user_invitations;")
     atomic(PRIVATE/'provisioned',b'clinical schema and named accounts ready\n')
 
+def provision_oauth(dc):
+    """Explicit reviewed additive migration, performed by DB owner on the host.
+
+    Separate OAuth metadata never changes the signed clinical table baseline.
+    Repeated runs are safe; application role gets no schema-creation privilege.
+    """
+    migration=ROOT/'ops/migrations/20261119_assistant_oauth.sql'
+    sql(dc,migration.read_text())
+
 def freeze_source_accounts(dc):
     # Freeze both HTTP and database mutation paths before taking the account
     # snapshot. Trigger DDL waits for in-flight writers to finish, then rejects
@@ -348,6 +357,7 @@ def main():
                 run(dc+['image','tag','nims-cmv-api','nims-cmv-clinical-api'])
             PHASE='database_provisioning';print('Clinical maintenance:',PHASE,flush=True)
             provision(dc)
+            PHASE='oauth_schema';provision_oauth(dc)
             PHASE='owner_requested_fresh_start';owner_workspace_update(dc)
             PHASE='encrypted_backup_and_isolated_restore';print('Clinical maintenance:',PHASE,flush=True)
             backup_and_restore(dc)
@@ -365,7 +375,9 @@ def main():
 
 if __name__=='__main__':
     try:
-        if '--prepare' in sys.argv:setup_paths()
+        if '--prepare' in sys.argv:
+            setup_paths()
+            if (STATE/'clinical-active').exists():provision_oauth(docker())
         else:main()
     except Exception:
         # Reason enum only. No raw exception could expose credentials or SQL.

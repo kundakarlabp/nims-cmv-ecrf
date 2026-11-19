@@ -41,7 +41,13 @@ with SessionLocal() as s:
         try:
             values=m.setup_paths()
             m.run(dc+['image','tag','nims-cmv-api','nims-cmv-clinical-api'])
-            m.provision(dc);m.backup_and_restore(dc, force=True)
+            m.provision(dc)
+            baseline=m.sql(dc,"SELECT fingerprint FROM clinical_schema_baseline;")
+            m.provision_oauth(dc);m.provision_oauth(dc)
+            assert m.sql(dc,"SELECT fingerprint FROM clinical_schema_baseline;")==baseline
+            assert m.sql(dc,"SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename LIKE 'assistant_%';").strip()==b'5'
+            assert m.sql(dc,"SELECT has_table_privilege('nims_clinical_app','assistant_oauth_grants','INSERT');").strip()==b't'
+            m.backup_and_restore(dc, force=True)
             manifests=list((m.PRIVATE/'export').glob('*.json'));assert len(manifests)==1
             record=json.loads(manifests[0].read_text());assert record['restore_verified'] is True
             archive=m.PRIVATE/'export'/(record['id']+'.tar')
