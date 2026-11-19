@@ -1,6 +1,6 @@
 # NIMS Kidney Transplant Registry + ICMR CMV eCRF
 
-Private source repository: `kundakarlabp/nims-cmv-ecrf`.
+Public source-only repository: `kundakarlabp/nims-cmv-ecrf`. No patient records, recovery archives or credentials belong in GitHub.
 
 ## CMV clinical-workflow development — 16 November 2026
 
@@ -26,6 +26,20 @@ A private personal Drive folder exists for **synthetic encrypted staging
 backup tests only**. The Oracle VM's rclone OAuth, backup timer and actual
 restore have not been verified by this repository change; no patient data
 is authorized for personal Drive.
+
+## Google Drive clinical recovery migration (19 November 2026)
+
+The clinical offsite destination is now the existing owner-only Google Drive folder
+documented in ops/GOOGLE_DRIVE_BACKUP_SETUP.md. The prior GitHub clinical backup
+workflow and release-triggered backup dispatch are retired to keep public
+repository Actions for code testing and deployment only. The running OCI
+instance must have its OWN authenticated rclone Google Drive remote; a ChatGPT
+Drive connection does not configure the VM. The existing sealed clinical
+recovery archive is uploaded directly to Drive and checked by exact readback
+before any recovery receipt is written. Nothing is stored in public GitHub.
+
+**Configuration/release is not proof of an actual successful Drive backup.**
+Check /operations and the offsite recovery receipt before clinical entry.
 
 ## Simple working arrangement
 
