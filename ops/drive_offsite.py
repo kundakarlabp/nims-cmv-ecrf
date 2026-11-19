@@ -15,7 +15,7 @@ import subprocess
 
 FOLDER_ID = "1Mnzme95zuQM5WKuHWtsv2-nzhtPUK_EM"
 REMOTE = "nims_cmv_drive"
-FILE_RE = re.compile(r"^clinical-([0-9]{8}T[0-9]{6}Z-[0-9a-f]{12})\\.tar$")
+FILE_RE = re.compile(r"^clinical-([0-9]{8}T[0-9]{6}Z-[0-9a-f]{12})\.tar$")
 BUNDLE_RE = re.compile(r"^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}$")
 KEEP_LATEST = 28   # Maximum about 896 MiB at the existing 32 MiB per-bundle cap.
 MAX_BUNDLE_BYTES = 32 * 1024 * 1024
@@ -114,7 +114,7 @@ def sync_latest(private_dir):
         raise RuntimeError("Google Drive readback hash mismatch")
 
     reference = f"gdrive:{FOLDER_ID}:clinical-{manifest['id']}.tar"
-    line = f"{manifest['stamp']} {digest} {reference}\\n".encode()
+    line = f"{manifest['stamp']} {digest} {reference}\n".encode()
     receipt_dir.mkdir(mode=0o755, exist_ok=True)
     # Both receipts refer to the same bundle restored in an isolated DB before
     # uploading and independently read back from Drive.
