@@ -120,3 +120,89 @@ def test_authenticated_synthetic_crf_draft_submit_and_revision_audit():
             assert "crf_submit" in actions and "crf_correct" in actions
     finally:
         Base.metadata.drop_all(ENGINE)
+
+
+
+def test_assistant_registry_lookup_entry_and_identity_correction():
+    """Synthetic route test of exact match, CSRF, audit and revision safety."""
+    from sqlalchemy import select
+    from app.main import Base, ENGINE, SessionLocal, User, PH, Audit, Patient
+
+    Base.metadata.drop_all(ENGINE)
+    Base.metadata.create_all(ENGINE)
+    try:
+        with SessionLocal() as db:
+            db.add(User(username="assistantstaff", display_name="Synthetic staff",
+                        role="pi", password_hash=PH.hash("SyntheticAssistantPassword987!")))
+            db.commit()
+        with TestClient(app) as client:
+            login=client.post("/api/login",json={
+                "username":"assistantstaff","password":"SyntheticAssistantPassword987!"})
+            assert login.status_code==200,login.text
+            h={"X-CSRF-Token":login.json()["csrf_token"]}
+            p=client.post("/api/assistant/patients",headers=h,json={
+                "name":"Synthetic participant A","cr_number":"TEST-ASSISTANT-A"})
+            assert p.status_code==200,p.text
+            pid=p.json()["id"]
+            assert client.get("/api/assistant/patients",
+                              params={"q":"ASSISTANT-A"}).status_code==200
+            assert client.get(f"/api/assistant/patients/{pid}").status_code==200
+            request={"identifier":"TEST-ASSISTANT-A","kind":"lab",
+                     "occurred_on":"2026-11-19","payload":{"creatinine_mg_dl":1.4}}
+            assert client.post("/api/assistant/patient-entry",json=request).status_code==403
+            exact=client.post("/api/assistant/patient-entry",headers=h,json=request)
+            assert exact.status_code==200,exact.text
+            assert exact.json()["patient_id"]==pid
+            assert client.post("/api/assistant/patient-entry",headers=h,json={
+                **request,"identifier":"TEST-ASSISTANT-MISSING"}).status_code==404
+            correction={"expected_revision":1,"expected_cr_number":"TEST-ASSISTANT-A",
+                        "name":"Synthetic corrected participant A",
+                        "cr_number":"TEST-ASSISTANT-NEW",
+                        "reason":"Correction from signed synthetic source record"}
+            assert client.put(f"/api/assistant/patients/{pid}",
+                              headers=h,json=correction).status_code==200
+            assert client.put(f"/api/assistant/patients/{pid}",
+                              headers=h,json=correction).status_code==409
+            assert client.post("/api/assistant/patient-entry",headers=h,
+                               json=request).status_code==404
+            changed=client.post("/api/assistant/patient-entry",headers=h,
+                                json={**request,"identifier":"TEST-ASSISTANT-NEW"})
+            assert changed.status_code==200,changed.text
+            with SessionLocal() as db:
+                actions=[a.action for a in db.scalars(
+                    select(Audit).where(Audit.patient_id==pid)).all()]
+                row=db.get(Patient,pid)
+                assert row.study_id is None
+                assert row.revision==2
+            assert "correct_patient_identity" in actions and actions.count("create")==3
+    finally:
+        Base.metadata.drop_all(ENGINE)
+
+
+def test_assistant_rejects_ambiguous_patient_names_before_write():
+    from app.main import Base, ENGINE, SessionLocal, User, Patient, PH, Audit
+    from sqlalchemy import select
+    Base.metadata.drop_all(ENGINE)
+    Base.metadata.create_all(ENGINE)
+    try:
+        with SessionLocal() as db:
+            user=User(username="assistantambiguous",display_name="Synthetic staff",
+                      role="pi",password_hash=PH.hash("SyntheticAssistantAmbiguous987!"))
+            db.add(user);db.flush()
+            for key in ("TEST-ASSISTANT-1","TEST-ASSISTANT-2"):
+                db.add(Patient(name="Synthetic duplicate name",
+                               cr_number=key,created_by=user.id))
+            db.commit()
+        with TestClient(app) as c:
+            login=c.post("/api/login",json={"username":"assistantambiguous",
+                   "password":"SyntheticAssistantAmbiguous987!"})
+            assert login.status_code==200
+            h={"X-CSRF-Token":login.json()["csrf_token"]}
+            payload={"identifier":"Synthetic duplicate name","kind":"lab",
+                     "occurred_on":"2026-11-19","payload":{"value":9}}
+            x=c.post("/api/assistant/patient-entry",headers=h,json=payload)
+            assert x.status_code==409,x.text
+            with SessionLocal() as db:
+                assert db.scalar(select(Audit.id).limit(1)) is None
+    finally:
+        Base.metadata.drop_all(ENGINE)
