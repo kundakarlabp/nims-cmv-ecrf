@@ -74,6 +74,8 @@ def test_complete_pkce_save_audit_readback_refresh_and_revoke(cmv):
     assert repeated.json()['result']['structuredContent']['saved']['id'] == pid
     found = rpc(c, token, 'search_patient', {'query':'TEST-MCP-001'})
     assert pid in found.text
+    assert isinstance(found.json()['result']['structuredContent'],dict)
+    assert found.json()['result']['structuredContent']['items'][0]['id']==pid
     event = rpc(c, token, 'create_registry_entry', {'data':{'identifier':'TEST-MCP-001',
         'kind':'visit','occurred_on':'2026-11-01','payload':{'note':'Synthetic test only'}},
         'idempotency_key':'synthetic-entry-001','confirm':True})
