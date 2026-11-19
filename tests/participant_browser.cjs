@@ -24,13 +24,22 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   const errors=[],writes=[],drafts=new Map(),contextReads=[];let blinded=false,holdOldDraft=false,releaseOldDraft=null;
   const eligibility=new Map(),allocations=new Map();let assignedFresh=false,holdSearchContext=false,releaseSearchContext=null;
   let holdOldPCR=false,releaseOldPCR=null,holdScreenedContext=false,releaseScreenedContext=null;
+  let signedIn=false;
+  const session=()=>({username:'synthetic-nurse',display_name:'Synthetic nurse',role:'nurse',
+    csrf_token:'synthetic-csrf',password_only:true,workspace_full_access:false,
+    expires_at:new Date(Date.now()+1800000).toISOString(),idle_timeout_seconds:1800});
   page.on('pageerror',e=>errors.push(e.message));
   await page.route('http://cmv-ui.test/**',async route=>{
    const url=new URL(route.request().url());const p=url.pathname;
    if(p==='/')return route.fulfill({contentType:'text/html',body:fs.readFileSync(path.join(base,'app/ui.html'),'utf8')});
    if(p==='/study_ui.js')return route.fulfill({contentType:'application/javascript',body:fs.readFileSync(path.join(base,'app/study_ui.js'),'utf8')});
    const method=route.request().method();let result={};
-   if(p==='/api/patients'){
+   if(p==='/api/session'){
+    if(!signedIn)return route.fulfill({status:401,contentType:'application/json',body:JSON.stringify({detail:'Login required'})});
+    result=session();
+   }else if(p==='/api/login'){signedIn=true;result=session();
+   }else if(p==='/api/session/activity'){result={expires_at:session().expires_at};
+   }else if(p==='/api/patients'){
     if(method==='POST'){
      const data=route.request().postDataJSON();people.push({id:'TEST-P-4',...data});result={id:'TEST-P-4',revision:1};
     }else{const q=(url.searchParams.get('q')||'').toLowerCase();result=people.filter(x=>JSON.stringify(x).toLowerCase().includes(q));}
@@ -95,6 +104,13 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   await page.waitForSelector('#tw-context-subject',{state:'attached'});
   await page.waitForFunction(()=>window.passwordOnlyLogin===true);
   assert.equal(await page.isVisible('#loginOtpLabel'),false);
+  await page.fill('#loginName','synthetic-nurse');
+  await page.fill('#loginPass','Synthetic-fixture-password-only');
+  await page.getByRole('button',{name:'Sign in',exact:true}).click();
+  await page.waitForFunction(()=>$('who').textContent.includes('Synthetic nurse'));
+  await page.reload();
+  await page.waitForFunction(()=>$('who').textContent.includes('Synthetic nurse'));
+  assert.equal(await page.isVisible('#loginPanel'),false,'Refresh must recover the existing staff session');
   await page.evaluate(async()=>{
    $('workspace').classList.remove('hide');$('loginPanel').classList.add('hide');
    $('currentRole').textContent='nurse';applyRoleUI('nurse');await tab('study');
