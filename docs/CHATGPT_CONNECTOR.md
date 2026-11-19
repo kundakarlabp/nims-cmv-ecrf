@@ -51,3 +51,34 @@ build and connect a **private MCP server using OAuth 2.1 with PKCE**. It must:
 
 **This code does not grant ChatGPT patient access**. It prepares an auditable
 application-side workflow without weakening clinical security.
+
+
+## Simplified single-patient workflow (staff session, no extra service)
+
+The adapter now supports registry search, registration, correction and one-step
+exact-match entry:
+
+- `GET /api/assistant/patients?q=TEST-...` and
+  `GET /api/assistant/patients/{patient_id}`: reuse the current registry.
+- `POST /api/assistant/patients`: register using existing PatientIn checks,
+  including staging synthetic restrictions and automatic trial Study ID.
+- `PUT /api/assistant/patients/{patient_id}`: correct name/CR using the known
+  old CR and expected revision, with a reason and existing audit log.
+- `POST /api/assistant/patient-entry`: `{identifier,kind,occurred_on,payload}`
+  where identifier is the **exact** CR number, patient name or study ID.
+  Duplicated patient names are rejected, rather than guessed; the resulting
+  event is saved using the original permission and audit path.
+- `PUT /api/assistant/registry-entries/{entry_id}`: correct a registry event
+  using existing expected revision and reason.
+- `PUT /api/assistant/crf-draft-by-identifier`: save a typed partial CRF
+  draft by exact CR number, name or study ID; no manual subject-ID lookup.
+
+No second identity provider, API password, relay service or new database.
+The staff login, 30-minute idle session, existing permissions and server-side
+revision checks are unchanged. All endpoints remain unavailable to ChatGPT
+until the owner connects an authenticated browser (Work) or separately
+configures a custom MCP OAuth connection. **This is not equivalent to enabling
+direct chat access.**
+
+Use the existing HTTPS dashboard to do clinical work immediately; do not
+copy a password or identifiable clinical source text into GitHub issues.
