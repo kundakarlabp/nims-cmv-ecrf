@@ -82,3 +82,66 @@ direct chat access.**
 
 Use the existing HTTPS dashboard to do clinical work immediately; do not
 copy a password or identifiable clinical source text into GitHub issues.
+
+## Implemented MCP/OAuth adapter — 19 November 2026
+
+The same FastAPI process now exposes **`/mcp`**, a stateless Streamable HTTP
+JSON-RPC endpoint. Existing `/api/assistant` routes continue to use dashboard
+cookies and CSRF; MCP uses independently issued user-bound OAuth bearer tokens.
+The adapter calls the same validated service functions and existing database.
+
+- Discovery: `/.well-known/oauth-protected-resource` and
+  `/.well-known/oauth-authorization-server`.
+- OAuth: `/oauth/register`, `/oauth/authorize`, `/oauth/token`, `/oauth/revoke`.
+  ChatGPT-only exact redirect URIs, S256 PKCE, five-minute single-use codes,
+  15-minute access tokens, rotating 30-day refresh tokens, 90-day grant ceiling.
+  Refresh reuse revokes the entire connection. Tokens and codes are stored only
+  as SHA256 digests. The resource is the exact configured HTTPS origin + `/mcp`.
+- User authorizes read access and optionally write access through the existing
+  dashboard password/MFA flow. This does not change staff roles or dashboard MFA.
+  Account disablement, staff expiry and password changes invalidate access.
+- Every call reuses account authorization and clinical backup/restore checks.
+  Tools cannot randomize, prescribe, verify consent, issue SQL or run commands.
+- Writes require explicit confirmation and an idempotency key. The key is bound
+  to actor policy, tool and input. A crash with an uncertain save is rejected
+  for manual dashboard readback; an uncertain write is never blindly repeated.
+- Successful writes return committed readback and the named actor ID. Existing
+  service audit remains authoritative; drafts remain drafts.
+- Dashboard **ChatGPT connections** opens `/oauth/connections`, where the user
+  can revoke a connection with their existing CSRF-protected dashboard session.
+
+### Release and migration
+
+The reviewed additive migration `ops/migrations/20261119_assistant_oauth.sql`
+creates five OAuth/receipt tables in the existing database without changing any
+clinical table or its baseline fingerprint. The existing deployment preparation
+runs it as the database owner before starting the new API. It is idempotent,
+keeps schema-creation privileges away from the application role, and survives
+application rollback (new tables may remain unused). Token state is covered by
+existing database backups. A restored historical backup requires revoking old
+OAuth grants before reconnecting external clients.
+
+The canonical origin comes from `MCP_PUBLIC_ORIGIN` or the existing `SITE_DOMAIN`.
+Never derive issuer/resource identifiers from request Host or forwarded headers.
+No separate identity-provider subscription, API billing or new VM is needed.
+
+### Connect and acceptance checks
+
+After the exact release SHA is verified live, connect the HTTPS `/mcp` URL in
+ChatGPT using **OAuth** and dynamic client registration (no static secret).
+Approve the dashboard-account link in the authorization page. Attach the actual
+connection to the existing private NIMS CMV plugin; do not invent an App ID.
+
+Use synthetic data for acceptance: initialize/list tools; link read-only and
+check writes fail; link read/write; register `TEST-MCP-...` with a `Synthetic ...`
+name; save one event; compare returned actor/readback against dashboard and
+existing database audit; refresh; revoke; verify access and refresh rejection.
+Do not claim regular-chat execution merely because endpoint tests or CI pass.
+
+Tests: `python -m pytest -q tests/test_mcp_oauth.py`; full `python -m pytest -q`.
+CI additionally exercises migration twice on real disposable PostgreSQL and
+checks that the clinical baseline and restricted-role permissions remain intact.
+
+Official contracts:
+https://developers.openai.com/plugins/build/auth
+https://modelcontextprotocol.io/specification/2025-06-18/basic/transports

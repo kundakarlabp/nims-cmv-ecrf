@@ -535,6 +535,7 @@ const roleWrites={
  pharmacy:['pi','scientist','pharmacy']
 };
 function applyRoleUI(role){
+ if(!$('chatgptConnectionLink')){const a=document.createElement('a');a.id='chatgptConnectionLink';a.href='/oauth/connections';a.textContent='ChatGPT connections';a.style.padding='10px';$('workspace').querySelector('.tabs').append(a);}
  if(!$('operationsLink')){const a=document.createElement('a');a.id='operationsLink';a.href='/operations';a.textContent='System operations';a.style.padding='10px';$('workspace').querySelector('.tabs').append(a);}
  $('operationsLink').classList.toggle('hide',!window.currentAdmin);
  const full=role==='admin';
