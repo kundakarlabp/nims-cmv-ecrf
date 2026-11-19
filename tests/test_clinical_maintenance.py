@@ -2,6 +2,14 @@ import json
 import os
 from pathlib import Path
 import pytest
+from datetime import datetime, timezone
+
+@pytest.mark.parametrize('utc_time,expected',[
+    ('2026-11-19T01:59:00',False),('2026-11-19T02:00:00',True),
+    ('2026-11-19T11:29:00',True),('2026-11-19T11:30:00',False),
+    ('2026-11-19T18:00:00',False)])
+def test_routine_backups_run_only_0730_to_1700_india(utc_time,expected):
+    assert maintenance.routine_backup_window(datetime.fromisoformat(utc_time).replace(tzinfo=timezone.utc)) is expected
 from ops import clinical_maintenance as maintenance
 from app import clinical_gate
 

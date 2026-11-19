@@ -105,6 +105,8 @@ jobs:
           node --check app/study_ui.js
       - name: Test actual registration-mode JavaScript behavior
         run: node --test tests/registration_mode_ui.test.cjs
+      - name: Test refresh recovery and foreground-only idle renewal
+        run: node --test tests/session_ui.test.cjs
       - run: bash -n ops/*.sh
   containers:
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
