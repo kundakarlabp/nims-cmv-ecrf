@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
 import shutil
 import subprocess
 
@@ -86,6 +87,8 @@ def sync_latest(private_dir):
         raise RuntimeError("Invalid clinical bundle name")
     manifest = json.loads(manifest_path.read_text())
     if (manifest.get("id") != manifest_path.stem or
+            not re.fullmatch(r"[0-9]{8}T[0-9]{6}Z", str(manifest.get("stamp", ""))) or
+            not manifest["id"].startswith(manifest["stamp"] + "-") or
             manifest.get("restore_verified") is not True or
             not re.fullmatch(r"[0-9a-f]{64}", manifest.get("sha256", ""))):
         raise RuntimeError("Invalid restored bundle manifest")
@@ -118,9 +121,17 @@ def sync_latest(private_dir):
     receipt_dir.mkdir(mode=0o755, exist_ok=True)
     # Both receipts refer to the same bundle restored in an isolated DB before
     # uploading and independently read back from Drive.
-    from ops.clinical_maintenance import atomic
-    atomic(receipt_dir / "last_success", line, 0o644)
-    atomic(receipt_dir / "last_restore", line, 0o644)
+    for name in ("last_success", "last_restore"):
+        final = receipt_dir / name
+        temporary = receipt_dir / (name + ".tmp-" + secrets.token_hex(6))
+        descriptor = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        try:
+            os.fchmod(descriptor, 0o644)
+            with os.fdopen(descriptor, "wb") as file:
+                file.write(line)
+            os.replace(temporary, final)
+        finally:
+            temporary.unlink(missing_ok=True)
     try:
         _prune_remote()
     except (RuntimeError, ValueError, KeyError, TypeError):
