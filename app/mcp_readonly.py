@@ -115,6 +115,22 @@ def backup_status(u):
     }
 
 
+
+def restore_verification(u):
+    """Report the existing proof only; never simulate an actual new restore."""
+    _operator(u)
+    clinical = bool(main.CLINICAL_MODE)
+    valid = bool(clinical and restore_verified())
+    return {
+        "checked_at": datetime.now(UTC).isoformat(),
+        "clinical_mode": clinical,
+        "isolated_restore_proof_current_30d": valid,
+        "restore_receipt_backend": _receipt_kind("CLINICAL_RESTORE_RECEIPT_PATH"),
+        "verification_scope": "existing_disposable_database_restore_proof",
+        "new_restore_performed_by_this_tool": False,
+        "full_offsite_disaster_recovery_tested_by_this_tool": False,
+    }
+
 def _fresh_start(s):
     if not main.team_workspace():
         return True
