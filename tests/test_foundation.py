@@ -29,6 +29,47 @@ def test_auth_required():
         assert c.get('/api/patients').status_code==401
         assert c.post('/api/login',json={'username':'testadmin','password':'bad'}).status_code==401
 
+def test_session_recovers_csrf_after_refresh_without_extending_idle_deadline():
+    from app.main import LoginSession, sha, now
+    from datetime import timedelta
+    with TestClient(app) as c:
+        headers=auth(c)
+        token=c.cookies.get('nims_session')
+        with SessionLocal() as s:
+            active=s.get(LoginSession,sha(token))
+            assert 1790<(active.expires_at.replace(tzinfo=now().tzinfo)-now()).total_seconds()<=1800
+            active.expires_at=now()+timedelta(minutes=5);s.commit()
+            deadline=active.expires_at
+        r=c.get('/api/session')
+        assert r.status_code==200,r.text
+        assert r.json()['csrf_token']==headers['X-CSRF-Token']
+        assert r.json()['idle_timeout_seconds']==1800
+        assert 'no-store' in r.headers['cache-control']
+        assert c.get('/api/session').json()['csrf_token']==r.json()['csrf_token']
+        with SessionLocal() as s:
+            assert s.get(LoginSession,sha(token)).expires_at.replace(tzinfo=now().tzinfo)==deadline.replace(tzinfo=now().tzinfo)
+        assert c.post('/api/session/activity').status_code==403
+        assert c.post('/api/session/activity',headers=headers).status_code==200
+        with SessionLocal() as s:
+            active=s.get(LoginSession,sha(token))
+            assert (active.expires_at.replace(tzinfo=now().tzinfo)-now()).total_seconds()>1790
+            active.expires_at=now()-timedelta(seconds=1);s.commit()
+        assert c.get('/api/session').status_code==401
+        assert c.post('/api/session/activity',headers=headers).status_code==401
+
+def test_session_recovery_revocation_and_legacy_session():
+    from app.main import LoginSession, sha
+    with TestClient(app) as c:
+        assert c.get('/api/session').status_code==401
+        auth(c)
+        with SessionLocal() as s:
+            active=s.get(LoginSession,sha(c.cookies.get('nims_session')))
+            active.csrf_hash=sha('legacy-random-csrf');s.commit()
+        r=c.get('/api/session');assert r.status_code==200
+        assert c.get('/api/session').json()['csrf_token']==r.json()['csrf_token']
+        assert c.post('/api/logout',headers={'X-CSRF-Token':r.json()['csrf_token']}).status_code==200
+        assert c.get('/api/session').status_code==401
+
 
 def test_password_team_workspace_keeps_authentication_and_removes_clinical_role_handoffs(monkeypatch):
     from app.main import Audit

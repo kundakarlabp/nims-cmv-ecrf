@@ -206,7 +206,13 @@ def ensure_crypto():
     from cryptography.fernet import Fernet
     return Fernet
 
+def routine_backup_window(at):
+    local=at.astimezone(timezone(timedelta(hours=5,minutes=30)))
+    return (7,30)<=(local.hour,local.minute)<(17,0)
+
 def backup_and_restore(dc,force=False):
+    # Routine work is daytime-only; initial cutover/recovery can explicitly force it.
+    if not force and not routine_backup_window(datetime.now(UTC)):return
     Fernet=ensure_crypto()
     latest=sorted((PRIVATE/'export').glob('*.json'))
     if latest and not force:

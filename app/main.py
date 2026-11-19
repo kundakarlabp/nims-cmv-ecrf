@@ -26,6 +26,7 @@ if not DATABASE_URL and os.getenv('DB_HOST'):
 if not DATABASE_URL: DATABASE_URL='sqlite:///./local_uat.sqlite3'
 COOKIE_SECURE=os.getenv('COOKIE_SECURE','true').lower()=='true'
 SESSION_HOURS=int(os.getenv('SESSION_HOURS','12'))
+SESSION_IDLE_SECONDS=30*60
 ENGINE=create_engine(DATABASE_URL, pool_pre_ping=True, connect_args={'check_same_thread': False} if str(DATABASE_URL).startswith('sqlite:') else {})
 SessionLocal=sessionmaker(ENGINE, expire_on_commit=False)
 PH=PasswordHasher(time_cost=3,memory_cost=65536,parallelism=2)
@@ -214,7 +215,7 @@ def current(request:Request,s:Session=Depends(db)) -> AuthContext:
     user=s.get(User,active.user_id)
     if not user or not user.active: raise HTTPException(401,'Account disabled')
     if os.getenv('MFA_REQUIRED','false').lower()=='true' and not active.mfa_verified:
-        allowed={'/api/me','/api/logout','/api/trial/staff/mfa-setup','/api/trial/staff/mfa-confirm'}
+        allowed={'/api/me','/api/session','/api/logout','/api/trial/staff/mfa-setup','/api/trial/staff/mfa-confirm'}
         if request.url.path not in allowed:
             raise HTTPException(403,'Complete your authenticator setup to access the clinical workspace')
     access=s.get(StaffAccess,user.id)
@@ -262,6 +263,7 @@ def permission(u,kind):
 
 REVIEW_ROLES={'pi','consultant','scientist','monitor'}
 def review_permission(u):
+    if u.workspace_full_access:return
     if u.role not in REVIEW_ROLES and not u.pi_authorized: raise HTTPException(403,'Reviewer role required')
 
 def review_state(s:Session,e:Entry):
@@ -402,18 +404,51 @@ def login(data:LoginInput,response:Response,s:Session=Depends(db)):
     if throttle and not setup_required:
         throttle.failures=0
         throttle.locked_until=None
-    token=secrets.token_urlsafe(48);csrf=secrets.token_urlsafe(32)
-    seconds=600 if setup_required else SESSION_HOURS*3600
+    token=secrets.token_urlsafe(48);csrf=sha('nims-csrf:'+token)
+    seconds=600 if setup_required else SESSION_IDLE_SECONDS
     expiry=now()+timedelta(seconds=seconds)
     s.add(LoginSession(token_hash=sha(token),user_id=u.id,csrf_hash=sha(csrf),expires_at=expiry,
                        mfa_verified=bool(mfa and mfa.enabled and otp_ok)))
     s.commit()
-    response.set_cookie('nims_session',token,max_age=seconds,
+    response.set_cookie('nims_session',token,max_age=600 if setup_required else SESSION_HOURS*3600,
         httponly=True,secure=COOKIE_SECURE,samesite='strict',path='/')
     return {'username':u.username,'role':u.role,'display_name':u.display_name,
             'csrf_token':csrf,'mfa_enabled':bool(mfa and mfa.enabled and not password_only()),
             'mfa_setup_required':setup_required,'pi_authorized':u.pi_authorized,
-            'workspace_full_access':team_workspace(),'password_only':password_only()}
+            'workspace_full_access':team_workspace(),'password_only':password_only(),
+            'idle_timeout_seconds':SESSION_IDLE_SECONDS,'expires_at':expiry}
+
+@app.get('/api/session')
+def recover_session(request:Request,response:Response,u:AuthContext=Depends(current),s:Session=Depends(db)):
+    """Recover memory-only CSRF/UI state using the existing HttpOnly cookie.
+
+    Reading or refreshing this endpoint does not extend the idle deadline.
+    The deterministic token is bound to the secret session cookie and remains
+    stable across tabs. Upgrade legacy random-CSRF sessions once on refresh.
+    """
+    active=s.get(LoginSession,u.session_hash)
+    user=s.get(User,u.user_id)
+    csrf=sha('nims-csrf:'+request.cookies['nims_session'])
+    if not secrets.compare_digest(active.csrf_hash,sha(csrf)):
+        active.csrf_hash=sha(csrf);s.commit()
+    response.headers['Cache-Control']='no-store'
+    setup=bool(os.getenv('MFA_REQUIRED','false').lower()=='true' and not active.mfa_verified)
+    return {'user_id':user.id,'username':user.username,'role':user.role,
+            'display_name':user.display_name,'csrf_token':csrf,
+            'pi_authorized':user.pi_authorized,'workspace_full_access':team_workspace(),
+            'password_only':password_only(),'mfa_setup_required':setup,
+            'idle_timeout_seconds':SESSION_IDLE_SECONDS,'expires_at':active.expires_at.replace(tzinfo=UTC)}
+
+@app.post('/api/session/activity')
+def session_activity(request:Request,response:Response,u:AuthContext=Depends(current),s:Session=Depends(db)):
+    """Only foreground user activity renews a valid, CSRF-checked session."""
+    active=s.get(LoginSession,u.session_hash)
+    active.expires_at=now()+timedelta(seconds=SESSION_IDLE_SECONDS)
+    s.commit()
+    response.set_cookie('nims_session',request.cookies['nims_session'],max_age=SESSION_HOURS*3600,
+        httponly=True,secure=COOKIE_SECURE,samesite='strict',path='/')
+    response.headers['Cache-Control']='no-store'
+    return {'expires_at':active.expires_at.replace(tzinfo=UTC)}
 @app.get('/api/me')
 def me(u:AuthContext=Depends(current)):
     return {'user_id':u.user_id,'role':u.role,'display_name':u.name,'pi_authorized':u.pi_authorized}

@@ -945,7 +945,7 @@ async function loadCrfEntries(){
     '<button class="secondary" data-crf-edit="'+x.id+'">Edit</button> ':'')+
    (x.review_status==='pending'&&x.updated_by!==undefined&&
     ['pi','consultant','scientist','monitor'].includes($('currentRole').textContent.trim())&&
-    x.updated_by!==$('currentUserId')?.value?
+    (window.currentWorkspaceFullAccess||x.updated_by!==$('currentUserId')?.value)?
     '<button data-crf-review="'+x.id+'">Review</button>':'')+'</td></tr>').join('')+
   '</tbody></table></div>';
  $('tw-crf-entries')._records=records;
@@ -1025,9 +1025,9 @@ $('tw-crf-entries').addEventListener('click',e=>{
 /* Clinical registration verification lives in the core page, which checks the
    server mode after login AND at every registration attempt. This external
    study workspace must not override or cache that safety check. */
-const savedStudyLogin=window.login;
-window.login=async function(){
- await savedStudyLogin();
+const savedFinishLogin=window.finishLogin;
+window.finishLogin=async function(r){
+ await savedFinishLogin(r);
  if(!$('workspace').classList.contains('hide')&&
     $('currentRole').textContent.trim()==='randomization_custodian'){
     await tab('randomization');
@@ -1533,3 +1533,6 @@ menu.addEventListener('click',event=>{
 });
 
 })();
+
+// Defer cookie-session recovery until all workspace hooks have been installed.
+void restoreSignedInSession();
