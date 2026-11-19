@@ -5,7 +5,6 @@ storage, a new database or a second rclone crypt remote. Backups remain
 automatically encrypted by clinical_maintenance before leaving OCI.
 """
 import configparser
-from datetime import datetime, timezone
 import hashlib
 import json
 import os
@@ -113,8 +112,6 @@ def sync_latest(private_dir):
     verified = _rclone("cat", remote_file)
     if hashlib.sha256(verified).hexdigest() != digest:
         raise RuntimeError("Google Drive readback hash mismatch")
-    if not verified.startswith(b""):
-        raise RuntimeError("Invalid Drive response")
 
     reference = f"gdrive:{FOLDER_ID}:clinical-{manifest['id']}.tar"
     line = f"{manifest['stamp']} {digest} {reference}\\n".encode()
