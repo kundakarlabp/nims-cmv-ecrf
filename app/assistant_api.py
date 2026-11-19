@@ -4,7 +4,6 @@ Authenticated users retain existing CRF permissions, clinical write gates, CSRF,
 and database audit. This module does NOT accept third-party bearer credentials;
 a future private MCP connection must implement scoped user-bound OAuth separately.
 """
-from datetime import date
 from sqlalchemy import select, update, func, or_
 from sqlalchemy.exc import IntegrityError
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -55,7 +54,10 @@ def capabilities(u: AuthContext = Depends(current)):
         "actor_id": u.user_id,
         "requires_csrf_for_writes": True,
         "operations": ["search_subject", "read_crf", "save_crf_draft",
-                       "submit_confirmed_crf", "correct_confirmed_crf"],
+                       "submit_confirmed_crf", "correct_confirmed_crf",
+                       "search_patient", "register_patient", "read_patient",
+                       "correct_patient_identity", "create_registry_entry",
+                       "correct_registry_entry", "save_crf_draft_by_identifier"],
         "unavailable_operations": ["randomize", "prescribe", "dispense",
                                     "verify_consent", "change_trial_allocation"],
         "privacy": "No patient records or session credentials are sent to GitHub or Supabase",
