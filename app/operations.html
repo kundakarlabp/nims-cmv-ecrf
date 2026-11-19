@@ -8,7 +8,13 @@
 <table><tbody id="results"></tbody></table>
 <h2>Current container: clinical configuration checks</h2>
 <p>This evaluates this running container, not a separate clinical server. Passing configuration checks alone does not validate the trial workflow.</p><ul id="checks"></ul>
-<h2>How updates reach the server</h2><p>Tested changes are merged in GitHub and an explicit release is marked. The existing VM timer pulls approved staging releases. A fresh host report and matching deployed commit confirm the connection. This page does not run shell commands or activate clinical mode.</p>
+<h2>GitHub and release controls</h2>
+<p><a href="https://github.com/kundakarlabp/nims-cmv-ecrf" target="_blank" rel="noopener noreferrer">Repository</a>
+<a href="https://github.com/kundakarlabp/nims-cmv-ecrf/actions" target="_blank" rel="noopener noreferrer">Workflow checks</a>
+<a href="https://github.com/kundakarlabp/nims-cmv-ecrf/commits/main" target="_blank" rel="noopener noreferrer">Recent changes</a>
+<a href="https://github.com/kundakarlabp/nims-cmv-ecrf/tags" target="_blank" rel="noopener noreferrer">Approved release tags</a>
+<a href="https://github.com/kundakarlabp/nims-cmv-ecrf/edit/main/ops/staging-release.txt" target="_blank" rel="noopener noreferrer">Prepare release request</a></p>
+<p>To release: review and merge a tested change, then update the release-intent file in GitHub with that reviewed full commit SHA. The OCI timer pulls CI-approved tags, creates a predeployment snapshot and checks application health. This page has no repository write token, shell access, or clinical-data controls. Opening a release link does not deploy code.</p>
 </main><script>
 const label=value=>value===null||value===undefined?'Not reported':typeof value==='boolean'?(value?'Yes':'No'):String(value);
 async function refresh(){
@@ -19,7 +25,17 @@ async function refresh(){
   const response=await fetch('/api/system/operations',{credentials:'same-origin',cache:'no-store'});
   if(!response.ok)throw new Error(response.status===401?'Sign in to the study workspace first.':response.status===403?'System administrator access required.':'Status unavailable.');
   const data=await response.json(),host=data.host||{};
-  const rows=[['Checked at',data.checked_at],['Application commit',data.app_commit],['Database',data.database],['Data mode',data.mode],['Clinical registration enabled',data.clinical_registration_enabled],['Host report available',host.available],['Host report fresh (15 minutes)',host.fresh],['Host report time',host.recorded_at],['Last completed deployment',host.deployed_commit],['GitHub pull timer',host.timer_active],['Timer enabled at boot',host.timer_enabled],['Last update attempt',host.last_update_attempt],['Previous systemd service result',host.last_deploy_result],['Private clinical configuration file present',host.clinical_private_configuration_present],['Backup tool installed',host.backup_tool_installed],['Encrypted backup configuration present (not a restore test)',host.encrypted_backup_configuration_present],['Disk free (MB)',host.disk_free_mb],['Host memory available (MB)',host.memory_available_mb]];
+  const isCommit=value=>typeof value==='string'&&/^[0-9a-f]{40}$/.test(value);
+  let releaseAssessment='Unverified: a recent host status report is required.';
+  if(host.fresh){
+   if(host.last_update_attempt==='failed')releaseAssessment='Host reported an update failure; check the timer and release evidence.';
+   else if(!isCommit(host.approved_release_commit))releaseAssessment='No valid approved release tag reported by the host.';
+   else if(host.approved_release_commit!==host.deployed_commit)releaseAssessment='Approved release is not yet marked deployed; check timer and update result.';
+   else if(!isCommit(data.app_commit))releaseAssessment='Host reports deployment, but running container build SHA is unknown.';
+   else if(data.app_commit!==host.deployed_commit)releaseAssessment='Running application SHA does not match completed host deployment.';
+   else releaseAssessment='Running application SHA matches the latest host-fetched approved release.';
+  }
+  const rows=[['Deployment reconciliation',releaseAssessment],['Checked at',data.checked_at],['Application commit',data.app_commit],['GitHub main last fetched by host (not necessarily released)',host.github_main_commit],['Latest approved staging tag target',host.approved_release_commit],['Database',data.database],['Data mode',data.mode],['Clinical registration enabled',data.clinical_registration_enabled],['Host report available',host.available],['Host report fresh (15 minutes)',host.fresh],['Host report time',host.recorded_at],['Last completed deployment',host.deployed_commit],['GitHub pull timer',host.timer_active],['Timer enabled at boot',host.timer_enabled],['Last update attempt',host.last_update_attempt],['Previous systemd service result',host.last_deploy_result],['Private clinical configuration file present',host.clinical_private_configuration_present],['Backup tool installed',host.backup_tool_installed],['Encrypted backup configuration present (not a restore test)',host.encrypted_backup_configuration_present],['Disk free (MB)',host.disk_free_mb],['Host memory available (MB)',host.memory_available_mb]];
   for(const [key,value] of rows){const row=document.createElement('tr'),heading=document.createElement('th'),cell=document.createElement('td');heading.textContent=key;cell.textContent=label(value);row.append(heading,cell);results.append(row);}
   for(const code of data.current_container_release_deficiencies){const item=document.createElement('li');item.textContent=code.replaceAll('_',' ');checks.append(item);}
   if(!data.current_container_release_deficiencies.length){const item=document.createElement('li');item.textContent='No configuration deficiency reported; independent clinical workflow verification remains required.';checks.append(item);}

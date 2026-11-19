@@ -28,8 +28,9 @@ def read_host_status(path=Path('/run/operations/status.json'), at=None):
                 'encrypted_backup_configuration_present'):
         value_for_key=value.get(key)
         result[key]=value_for_key if type(value_for_key) is bool else None
-    commit=value.get('deployed_commit')
-    result['deployed_commit']=commit if isinstance(commit,str) and SHA.fullmatch(commit) else None
+    for key in ('deployed_commit','github_main_commit','approved_release_commit'):
+        commit=value.get(key)
+        result[key]=commit if isinstance(commit,str) and SHA.fullmatch(commit) else None
     for key, allowed in {
         'clinical_transition':{'awaiting_offsite_readback','clinical_active','clinical_recovery_only','maintenance_failed'},
         'clinical_failed_step':{'preparation','database_provisioning','encrypted_backup_and_isolated_restore','offsite_receipt','clinical_cutover'},

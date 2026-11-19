@@ -139,3 +139,37 @@ def test_backup_configuration_probe_returns_only_presence(tmp_path):
     assert backup_configuration_present(config) is True
     config.write_text('RCLONE_ENCRYPT_V0:\nPRIVATE')
     assert backup_configuration_present(config) is None
+
+
+def test_git_provenance_is_read_only_and_reconciles_only_valid_tags(tmp_path):
+    """Host receipt includes fixed SHA references, not secrets or mutable raw logs."""
+    import subprocess
+    from ops.operations_status import git_commit, latest_approved_release, write_status
+
+    def command(*args):
+        return subprocess.run(['git',*args],cwd=tmp_path,capture_output=True,
+                              text=True,check=True).stdout.strip()
+
+    command('init','-b','main')
+    command('config','user.email','test@example.invalid')
+    command('config','user.name','Test')
+    (tmp_path/'README').write_text('test only')
+    command('add','README')
+    command('commit','-m','safe build')
+    sha=command('rev-parse','HEAD')
+    command('update-ref','refs/remotes/origin/main',sha)
+    assert git_commit(tmp_path,'refs/remotes/origin/main')==sha
+    assert latest_approved_release(tmp_path) is None
+    command('tag','-a',f'cmv-staging-20261119T093000Z-{sha}','-m','approved',sha)
+    assert latest_approved_release(tmp_path)==sha
+
+    write_status(tmp_path)
+    report=read_host_status(tmp_path/'ops/public-status/status.json')
+    assert report['fresh']
+    assert report['github_main_commit']==sha
+    assert report['approved_release_commit']==sha
+    assert not any(key in report for key in ('logs','environment','secret'))
+
+    command('tag','-a','cmv-staging-20261119T094000Z-'+'0'*40,
+            '-m','mismatched release',sha)
+    assert latest_approved_release(tmp_path) is None
