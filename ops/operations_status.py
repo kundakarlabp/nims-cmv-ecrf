@@ -37,6 +37,35 @@ def systemctl(*args):
         return 'unknown'
 
 
+
+def git_commit(root, ref):
+    """Read a fixed or validated local Git reference, never an external command."""
+    try:
+        value=subprocess.run(['git','rev-parse','--verify',ref],cwd=root,
+                             capture_output=True,text=True,timeout=5,check=True).stdout.strip()
+        return value if re.fullmatch(r'[0-9a-f]{40}',value) else None
+    except (OSError,subprocess.SubprocessError):
+        return None
+
+
+def latest_approved_release(root):
+    """Report the newest fetched staging tag; no claim about live CI state."""
+    try:
+        result=subprocess.run(['git','tag','--list','cmv-staging-*','--sort=-refname'],
+                              cwd=root,capture_output=True,text=True,timeout=5,check=True)
+    except (OSError,subprocess.SubprocessError):
+        return None
+    tags=result.stdout.splitlines()
+    if not tags:
+        return None
+    tag=tags[0]
+    match=re.fullmatch(r'cmv-staging-[0-9]{8}T[0-9]{6}Z-([0-9a-f]{40})',tag)
+    if not match:
+        return None
+    target=match.group(1)
+    return target if git_commit(root,tag+'^{commit}')==target else None
+
+
 def write_status(root=ROOT, attempt_result='running'):
     root=Path(root)
     # Persist outside tracked files so rollback to a pre-feature revision
@@ -77,6 +106,8 @@ def write_status(root=ROOT, attempt_result='running'):
         'last_update_attempt':attempt_result,
         'recorded_at':datetime.now(timezone.utc).isoformat(),
         'deployed_commit':commit if re.fullmatch(r'[0-9a-f]{40}',commit) else None,
+        'github_main_commit':git_commit(root,'refs/remotes/origin/main'),
+        'approved_release_commit':latest_approved_release(root),
         'timer_active':systemctl('is-active','nims-cmv-auto-deploy.timer'),
         'timer_enabled':systemctl('is-enabled','nims-cmv-auto-deploy.timer'),
         'last_deploy_result':systemctl('show','nims-cmv-auto-deploy.service',
