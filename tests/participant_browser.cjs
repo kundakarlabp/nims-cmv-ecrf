@@ -33,6 +33,7 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
    const url=new URL(route.request().url());const p=url.pathname;
    if(p==='/')return route.fulfill({contentType:'text/html',body:fs.readFileSync(path.join(base,'app/ui.html'),'utf8')});
    if(p==='/study_ui.js')return route.fulfill({contentType:'application/javascript',body:fs.readFileSync(path.join(base,'app/study_ui.js'),'utf8')});
+   if(p==='/patient_workspace.js')return route.fulfill({contentType:'application/javascript',body:fs.readFileSync(path.join(base,'app/patient_workspace.js'),'utf8')});
    const method=route.request().method();let result={};
    if(p==='/api/session'){
     if(!signedIn)return route.fulfill({status:401,contentType:'application/json',body:JSON.stringify({detail:'Login required'})});
@@ -52,7 +53,8 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
     const id=Number(p.split('/')[4]);
     if(method==='PUT'){
      const data=route.request().postDataJSON();writes.push({p,body:data});
-     eligibility.set(id,{inclusion:data.inclusion,exclusion:data.exclusion,baseline:data,reviewed_on:data.reviewed_on});result={eligible:true};
+     eligibility.set(id,{inclusion:data.inclusion,exclusion:data.exclusion,
+      baseline:{...data,is_eligible:true},reviewed_on:data.reviewed_on});result={eligible:true};
     }else result={eligibility:eligibility.get(id)||null};
    }else if(p.endsWith('/consent-declined')){
     const id=Number(p.split('/')[4]);const subject=subjects.find(x=>x.id===id);
@@ -248,6 +250,7 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
    $('tw-assigned-study-id').textContent.includes('pending'));
   assert.match(await page.textContent('#tw-assigned-study-id'),/pending/);
   await page.fill('#tw-screen-date','2026-10-02');await page.fill('#tw-consent-date','2026-10-02');
+  await page.locator('#tw-more-screening summary').click();
   await page.selectOption('#tw-digg','positive');await page.selectOption('#tw-rigg','positive');
   await page.selectOption('#tw-donor','living');await page.selectOption('#tw-relationship','living_related');
   await page.selectOption('#tw-consent-language','English');
@@ -277,17 +280,17 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   await page.waitForFunction(()=>$('tw-context-allocation').textContent.includes('NCMV001'));
   assert.match(await page.textContent('#tw-assigned-study-id'),/Study ID: NCMV001/);
   assert.equal(people.find(x=>x.id==='TEST-P-4').study_id,'NCMV001');
-  await page.waitForFunction(()=>activeTab==='randomization'&&$('tw-rand-subject').value==='4'&&!$('tw-rand-assign').disabled);
-  assert.match(await page.locator('#tw-rand-subject option:checked').textContent(),/TEST-CR-4/);
+  await page.waitForFunction(()=>activeTab==='study'&&!$('tw-inline-rand-submit').disabled);
+  assert.equal(await page.isVisible('#tw-inline-rand-confirm'),true,'Clinical attestation must remain visible on the enrollment screen');
   assert.equal(await page.locator('#tw-rand-source').count(),0,'No extra reference field is required');
-  assert.equal(await page.isVisible('#tw-rand-eligibility-confirm'),true,'Clinical attestation must remain visible');
-  await page.click('#tw-rand-assign');
-  await page.waitForFunction(()=>$('tw-rand-status').textContent.includes('Check the signed eligibility'));
+  await page.click('#tw-inline-rand-submit');
+  await page.waitForFunction(()=>$('tw-status').textContent.includes('Confirm the signed consent'));
   assert.equal(writes.filter(x=>x.p.endsWith('/assign')).length,0,'Unchecked confirmation cannot release allocation');
-  await page.check('#tw-rand-eligibility-confirm');
+  await page.check('#tw-inline-rand-confirm');
   page.once('dialog',dialog=>{assert.match(dialog.message(),/TEST-CR-4/);return dialog.accept();});
-  await page.click('#tw-rand-assign');
-  await page.waitForFunction(()=>$('tw-context-allocation').textContent.includes('TEST-ALLOC-4')&&$('tw-rand-assign').disabled);
+  await page.click('#tw-inline-rand-submit');
+  await page.waitForFunction(()=>$('tw-context-allocation').textContent.includes('TEST-ALLOC-4')&&$('tw-inline-rand-submit').disabled);
+  assert.equal(await page.isVisible('#tw-progress-step-4'),true,'One patient workflow contains all four trial stages');
   assert.equal(writes.filter(x=>x.p.endsWith('/assign')).length,1,'Only one explicit allocation request');
   assert.equal(writes.find(x=>x.p.endsWith('/assign')).body.signed_randomization_source_ref,
    undefined,'No randomization source text is required');
@@ -325,7 +328,7 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   await page.click('#tw-mobile-menu');
   assert.equal(await page.isVisible('#tw-study-navigation'),true);
   assert.equal(await page.getAttribute('#tw-mobile-menu','aria-expanded'),'true');
-  await page.click('#btndashboard');
+  await page.click('#tw-nav-overview');
   await page.waitForFunction(()=>activeTab==='dashboard');
   assert.equal(await page.isVisible('#tw-study-navigation'),false);
   assert.equal(await page.getAttribute('#tw-mobile-menu','aria-expanded'),'false');
@@ -344,7 +347,9 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
     assert.ok(overflow<=2,'Horizontal page overflow '+overflow+'px in '+section+' at '+width+'px');
    }
   }
+  assert.equal(await page.locator('#tw-progress-stage-notfound').count(),0);
+  assert.equal(await page.locator('#tw-progress-step-4').count(),1,'Patient trial workflow has exactly four stages');
   assert.deepEqual(errors,[]);
-  console.log('Real browser passed: scripts, patient identity, source-date autosave, cross-patient draft isolation, allocation persistence, mobile layout and blinded banner');
+  console.log('Real browser passed: patient-centric navigation, in-page allocation, cross-patient draft isolation and mobile layout');
  }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});
