@@ -385,6 +385,86 @@ emptyPcr.innerHTML='<h3>No scheduled PCR available yet</h3>'+
 pcr.insertBefore(emptyPcr,pcr.children[2]||null);
 document.getElementById('tw-pcr-start').onclick=()=>{void tab('study');};
 
+
+/* Reports intentionally use two distinct sources: registry entries and the
+   protocol eCRF review queue. No raw patient JSON is dumped on the page. */
+function reportSafe(x){return escapeHTML(x===null||x===undefined?'—':String(x));}
+function fieldSummary(payload){
+ const entries=Object.entries(payload||{}).filter(([key])=>!key.startsWith('_'));
+ if(!entries.length)return '<p class="hint">No submitted source fields.</p>';
+ return '<dl class="tw-review-fields">'+entries.map(([key,val])=>
+  '<div><dt>'+reportSafe(key.replaceAll('_',' '))+'</dt><dd>'+
+  reportSafe(typeof val==='object'?JSON.stringify(val):val)+'</dd></div>').join('')+'</dl>';
+}
+function reviewGroup(rows,title,registry){
+ const all=rows||[],pending=all.filter(x=>x.review_status==='pending'||x.review_status==='needs_correction'),
+  earlier=all.filter(x=>x.review_status!=='pending'&&x.review_status!=='needs_correction');
+ const item=row=>{
+  const label=registry?(row.study_id||row.cr_number||'Registry record'):(row.section+' · participant '+row.subject_id);
+  const openTitle=registry?row.kind:row.occurrence_key;
+  const reasonId='reason-'+row.entry_id;
+  const action=registry&&row.review_status==='pending'?
+   '<label>Review reason<input id="'+reportSafe(reasonId)+'" maxlength="500" placeholder="Source checked / correction required"></label>'+
+   '<button onclick="submitReview(\''+reportSafe(row.entry_id)+'\','+Number(row.revision)+',\'verified\')">Verify</button> '+
+   '<button class="secondary" onclick="submitReview(\''+reportSafe(row.entry_id)+'\','+Number(row.revision)+',\'needs_correction\')">Request correction</button>':
+   (!registry?'<button class="secondary" data-review-crf="'+Number(row.subject_id)+'">Open patient eCRF</button>':'');
+  return '<details class="tw-review-item"><summary><span><strong>'+reportSafe(label)+
+   '</strong> · '+reportSafe(openTitle)+' · '+reportSafe(row.occurred_on)+'</span>'+
+   '<span class="tw-review-status">'+reportSafe(row.review_status)+'</span></summary>'+
+   '<div><p class="hint">Revision '+Number(row.revision)+' · source fields</p>'+fieldSummary(row.payload)+action+'</div></details>';
+ };
+ return '<section class="tw-review-group"><h3>'+title+
+  ' <small>('+pending.length+' need attention · '+earlier.length+' reviewed)</small></h3>'+
+  (pending.length?pending.map(item).join(''):'<p class="hint">No source reviews outstanding in this category.</p>')+
+  (earlier.length?'<details class="tw-reviewed-history"><summary>Verified / earlier entries ('+earlier.length+')</summary>'+
+   earlier.map(item).join('')+'</details>':'')+'</section>';
+}
+async function loadReview(){
+ const display=document.getElementById('reviewResults');
+ const metrics=document.getElementById('tw-report-metrics');
+ const visits=document.getElementById('tw-report-visits');
+ display.textContent='Loading source reviews…';
+ const urls=['/api/trial/overview','/api/trial/crf/completeness',
+             '/api/review-queue','/api/trial/crf/review-queue'];
+ const results=await Promise.allSettled(urls.map(url=>api(url)));
+ const good=i=>results[i].status==='fulfilled'?results[i].value:null;
+ const trial=good(0),completion=good(1),registry=good(2),crfs=good(3);
+ const row=(title,value,desc)=>'<div class="tw-metric"><strong>'+reportSafe(value)+
+  '</strong><span>'+title+'</span><div class="hint">'+desc+'</div></div>';
+ metrics.innerHTML=trial?[
+  row('Screened',trial.screened??0,'Screening records'),
+  row('Enrolled',trial.ever_enrolled??trial.enrolled??0,'Approved enrollments'),
+  row('Randomized',trial.randomized??0,'Of 344 target'),
+  row('PCR verified',trial.verified_protocol_pcr_slots??0,'Protocol specimen results')
+ ].join(''):'<p class="hint">Trial metrics are unavailable for this account.</p>';
+ visits.innerHTML=completion?
+  '<div style="overflow-x:auto"><table><thead><tr><th>Follow-up</th><th>Submitted</th>'+
+  '<th>Verified</th><th>Correction needed</th></tr></thead><tbody>'+
+  [1,2,3,4,6,9,12].map(month=>{
+   const slot=completion.visit_completion?.[String(month)]||{};
+   return '<tr><td>Month '+month+'</td><td>'+Number(slot.submitted||0)+
+    '</td><td>'+Number(slot.verified||0)+'</td><td>'+Number(slot.needs_correction||0)+'</td></tr>';
+  }).join('')+'</tbody></table></div>':
+  '<p class="hint">Follow-up completeness is unavailable for this account.</p>';
+ display.innerHTML=(registry?reviewGroup(registry,'Registry source verification',true):
+  '<p class="hint">Registry review records are unavailable for this account.</p>')+
+  (crfs?reviewGroup(crfs,'Study eCRF verification',false):
+   '<p class="hint">eCRF review records are unavailable for this account.</p>');
+}
+document.getElementById('tw-report-reload').onclick=()=>{void loadReview();};
+document.getElementById('reviewResults').addEventListener('click',e=>{
+ const b=e.target.closest('button[data-review-crf]');if(!b)return;
+ void (async()=>{
+  try{
+   const sid=Number(b.dataset.reviewCrf);
+   const record=await api('/api/trial/crf/subjects/'+sid+'/context');
+   if(!record.patient_id)throw Error('Participant could not be resolved');
+   await window.choose(record.patient_id);await tab('crf');
+  }catch(err){document.getElementById('reviewResults').insertAdjacentHTML('afterbegin',
+   '<p class="status err">Could not open selected patient eCRF: '+reportSafe(err.message)+'</p>');}
+ })();
+});
+
 const previousTab=tab;
 tab=async function(name){
  await previousTab(name);syncNavigation();
