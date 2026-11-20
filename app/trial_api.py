@@ -150,12 +150,14 @@ def screen(data:ScreeningIn,u:AuthContext=Depends(current),s:Session=Depends(db)
     if data.donor_relationship:
         if (data.donor_relationship=="deceased")!=(data.donor_type=="deceased"):
             raise HTTPException(422,"Donor relationship conflicts with living/deceased stratum")
-    if os.getenv("CLINICAL_DATA_ENABLED","false").lower()=="true":
+    # Store screening and declined consent even before the signed ICF exists.
+    # Actual consent remains mandatory for eligibility and enrollment.
+    if os.getenv("CLINICAL_DATA_ENABLED","false").lower()=="true" and data.consent_on:
         must=(data.participant_initials,data.age_at_transplant,data.sex_at_birth,
               data.donor_relationship,data.pis_version,data.consent_language,
-              data.consent_obtained_by,data.signed_consent_source_ref)
+              data.consent_obtained_by)
         if any(x is None or x=="" for x in must):
-            raise HTTPException(422,"Complete CRF A source and consent metadata before clinical screening")
+            raise HTTPException(422,"Complete consent details when signed consent is recorded")
     t=TrialSubject(patient_id=p.id,screening_on=data.screening_on,
         donor_cmv_igg=data.donor_cmv_igg,recipient_cmv_igg=data.recipient_cmv_igg,
         donor_type=data.donor_type,ratg_induction=data.ratg_induction,
@@ -250,7 +252,7 @@ class EligibilityReviewIn(BaseModel):
     crcl_cg_ml_min:float=Field(ge=0)
     baseline_cbc_on:date
     reviewed_on:date
-    signed_source_reference:str=Field(min_length=3,max_length=100)
+    signed_source_reference:str|None=Field(default=None,max_length=100)
 
 @router.get("/eligibility-schema")
 def eligibility_schema(u:AuthContext=Depends(current)):
@@ -302,8 +304,9 @@ def eligibility_review(subject_id:int,data:EligibilityReviewIn,
     baseline={"age_years":data.age_years,"anc_per_ul":data.anc_per_ul,
        "platelets_per_ul":data.platelets_per_ul,"hemoglobin_g_dl":data.hemoglobin_g_dl,
        "crcl_cg_ml_min":data.crcl_cg_ml_min,"baseline_cbc_on":data.baseline_cbc_on.isoformat(),
-       "signed_source_reference":data.signed_source_reference,
        "is_eligible":eligible}
+    if data.signed_source_reference:
+        baseline["signed_source_reference"]=data.signed_source_reference
     prior=s.get(TrialEligibility,t.id)
     if prior:
         old=as_dict(prior)
@@ -317,7 +320,8 @@ def eligibility_review(subject_id:int,data:EligibilityReviewIn,
     audit(s,u,"eligibility_review","trial_eligibility",str(t.id),t.patient_id,
         old,{"inclusion":incl,"exclusion":excl,"baseline":baseline,
              "reviewed_by":u.user_id,"reviewed_on":data.reviewed_on},
-        "Verified against "+data.signed_source_reference)
+        "Protocol eligibility checklist confirmed by named account"+
+        (": "+data.signed_source_reference if data.signed_source_reference else ""))
     s.commit()
     return {"subject_id":t.id,"eligible":eligible,
         "reviewed_by":u.user_id,"reviewed_on":data.reviewed_on,
@@ -464,6 +468,32 @@ def enroll(subject_id:int,data:EnrollmentIn,u:AuthContext=Depends(current),s:Ses
         s.rollback()
         raise HTTPException(409,"Study ID or scheduled PCR already exists; refresh this participant")
     return {"subject":subject_view(t),"study_id":new_code,"pcr_orders":len(MONTHS)}
+
+class ConsentDeclinedIn(BaseModel):
+    confirmed:Literal[True]
+
+@router.post("/subjects/{subject_id}/consent-declined")
+def mark_consent_declined(subject_id:int,data:ConsentDeclinedIn,
+                         u:AuthContext=Depends(current),s:Session=Depends(db)):
+    """Retain attributed screening history without enrollment or allocation."""
+    role(u,SCREENERS)
+    t=s.scalar(select(TrialSubject).where(TrialSubject.id==subject_id).with_for_update())
+    if not t:raise HTTPException(404,"Screening record not found")
+    eligible_patient(s,t.patient_id)
+    if t.status!="screened" or t.enrolled_on or t.study_code:
+        raise HTTPException(409,"Only never-enrolled screening records may be closed for declined consent")
+    if t.consent_on or t.consent_version:
+        raise HTTPException(409,"Consent recorded; reconcile source first, do not overwrite signed consent")
+    if s.scalar(select(RandomizationSlot.id).where(RandomizationSlot.subject_id==subject_id).limit(1)):
+        raise HTTPException(409,"Randomized participants cannot be marked consent declined")
+    old=subject_view(t)
+    t.status="consent_declined"
+    t.discontinuation_reason="Written informed consent declined"
+    audit(s,u,"consent_declined","trial_subject",str(t.id),t.patient_id,old,subject_view(t),
+          "Screened; written consent declined; enrollment and randomization prohibited")
+    s.commit()
+    return subject_view(t)
+
 
 class DiscontinueIn(BaseModel):
     status:Literal["withdrawn","deceased","discontinued"]
