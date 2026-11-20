@@ -116,11 +116,19 @@ def test_password_team_workspace_keeps_authentication_and_removes_clinical_role_
         from app.workspace_setup import initialize
         assert initialize()['created'] is True
         assert initialize()['created'] is False  # Never regenerate a plan.
+        before=nurse.get(f'/api/trial/randomization/subjects/{sid}/preflight')
+        assert before.status_code==200 and before.json()['ready'] is True
+        assert before.json()['stratum']=='rATG:living'
+        assert 'assigned_arm_mg' not in before.json() and 'position' not in before.json()
         allocation=nurse.post(f'/api/trial/randomization/subjects/{sid}/assign',headers=h,json={
             'investigator_confirmation':True,'stratification_verified':True,
             'signed_randomization_source_ref':'Named account dashboard request'})
         assert allocation.status_code==200,allocation.text
         assert allocation.json()['assigned_arm_mg'] in ('450','900')
+        after=nurse.get(f'/api/trial/randomization/subjects/{sid}/preflight')
+        assert after.status_code==200 and after.json()['ready'] is False
+        assert after.json()['randomized'] is True
+        assert 'assigned_arm_mg' not in after.json()
         assert nurse.get('/api/trial/randomization/readiness').json()['custodian_required'] is False
         lot=nurse.post('/api/trial/pharmacy/lots',headers=h,json={
             'lot_number':'TEST-LOT-TEAM','expiry_on':'2027-10-01',
@@ -1126,6 +1134,7 @@ def test_concealed_randomization_requires_pi_eligibility_and_one_irreversible_sl
     with TestClient(app) as admin:
         h=auth(admin)
         _,sid=setup_synthetic_trial(admin,h)
+        assert admin.get(f'/api/trial/randomization/subjects/{sid}/preflight').json()['ready'] is False
         for username,role in [('randpi','pi'),('randscientist','scientist'),
                               ('randmonitor','monitor'),('randpharm','pharmacy')]:
             r=admin.post('/api/users',headers=h,json={'username':username,
