@@ -104,7 +104,6 @@ def subject_view(subject):
       # interpreted as negative or eligible during data entry.
       "donor_cmv_igg":subject.donor_cmv_igg,
       "recipient_cmv_igg":subject.recipient_cmv_igg,
-      "age_at_transplant":subject.age_at_transplant,
       "d_plus_r_plus":(True if subject.donor_cmv_igg=="positive" and
         subject.recipient_cmv_igg=="positive" else False
         if subject.donor_cmv_igg=="negative" or subject.recipient_cmv_igg=="negative"
