@@ -1463,6 +1463,10 @@ function renderParticipant(context){
   for(const id of ['age','weight','creatinine','sex'])$(id).value='';
  }
  participantContext=context;participantSubject=context.subject?.id||null;
+ // Synchronize the screening registry picker as soon as a patient is resolved.
+ // The identity change must not await extra patient-banner/network requests.
+ if(Array.from($('tw-patient').options).some(o=>o.value===context.patient_id))
+   $('tw-patient').value=context.patient_id;
  showEnrollmentStudyId();
  $('tw-context-subject').value=participantSubject?String(participantSubject):'';
  const a=context.allocation||{};
