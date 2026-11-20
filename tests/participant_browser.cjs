@@ -48,7 +48,7 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
    else if(p==='/api/trial/screening'){
     const data=route.request().postDataJSON();writes.push({p,body:data});
     const person=people.find(x=>x.id===data.patient_id);
-    result={id:4,patient_id:person.id,cr_number:person.cr_number,screening_code:'TEST-SCREEN-4',status:'screened',enrolled_on:null,donor_type:data.donor_type,ratg_induction:data.ratg_induction};subjects.push(result);
+    result={id:4,patient_id:person.id,cr_number:person.cr_number,screening_code:'TEST-SCREEN-4',status:'screened',enrolled_on:null,donor_type:data.donor_type,ratg_induction:data.ratg_induction,consent_recorded:!!data.consent_on,donor_cmv_igg:data.donor_cmv_igg,recipient_cmv_igg:data.recipient_cmv_igg};subjects.push(result);
    }else if(p.endsWith('/eligibility')){
     const id=Number(p.split('/')[4]);
     if(method==='PUT'){
@@ -274,6 +274,7 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   await page.click('#tw-screen-save');
   await page.waitForFunction(()=>$('tw-checklist-subject').value==='4'&&$('tw-screened').value==='4');
   assert.match(await page.locator('#tw-checklist-subject option:checked').textContent(),/TEST-CR-4/);
+  await page.waitForFunction(()=>$('tw-progress-step-2').open);
   for(const [id,v] of Object.entries({'tw-age':'50','tw-anc':'3000','tw-platelets':'180000','tw-hb':'11','tw-crcl':'68',}))await page.fill('#'+id,v);
   await page.fill('#tw-cbc-date','2026-10-02');await page.fill('#tw-review-on','2026-10-02');
   for(const el of await page.locator('[data-eligibility]').all())await el.selectOption(await el.getAttribute('data-eligibility')==='inclusion'?'true':'false');
