@@ -63,6 +63,10 @@ for(const [key,label,route] of [
  b.className='tw-main-nav';b.textContent=label;b.onclick=()=>{void tab(route);};
  menu.insertBefore(b,firstLegacyNavButton);mainButtons[key]=b;
 }
+// Keep one sign-out action; the original application sign-out is replaced,
+// not duplicated. Leave the legacy button's handler in place for older routes.
+const legacyLogout=[...menu.querySelectorAll('button')].find(b=>b.textContent.trim()==='Log out');
+if(legacyLogout)legacyLogout.classList.add('tw-legacy-nav');
 const signOut=document.createElement('button');signOut.type='button';
 signOut.id='tw-nav-logout';signOut.textContent='Log out';signOut.className='tw-main-nav secondary';
 signOut.onclick=()=>{void logout();};menu.appendChild(signOut);
@@ -83,7 +87,7 @@ for(const [route,label] of [
  const b=document.createElement('button');b.type='button';b.id='tw-sub-'+route;
  b.textContent=label;b.onclick=()=>{void tab(route);};subnav.appendChild(b);subButtons[route]=b;
 }
-root.insertBefore(subnav,context.nextSibling);
+root.insertBefore(subnav,context);
 
 // Progressive accordion stages keep the existing inputs and event handlers intact.
 const study=document.getElementById('study'),columns=study.querySelector('.study-columns');
@@ -247,5 +251,85 @@ window.register=async function(){
  const before=selected;await previousRegister();
  if(selected&&selected!==before){await updatePatientBanner();await tab('study');}
 };
+
+/* A single two-column shell fixes the grid-row gaps in the current app.
+   Existing sections remain in the DOM with the same IDs and API handlers. */
+const legacyGrid=root.querySelector('.grid');
+const directory=legacyGrid.querySelector('section.panel:first-child');
+directory.id='tw-directory-panel';
+directory.classList.add('hide');
+const registration=directory.querySelector('#registerPanel');
+const directoryFinder=document.createElement('section');
+directoryFinder.className='tw-directory-finder';
+const searchLabel=document.createElement('label');
+searchLabel.textContent='Find a patient';
+searchLabel.appendChild(document.getElementById('search'));
+directoryFinder.append(searchLabel,document.getElementById('patients'));
+const directoryLayout=document.createElement('div');
+directoryLayout.className='tw-directory-columns';
+directory.insertBefore(directoryLayout,directory.firstChild);
+directoryLayout.append(directoryFinder,registration);
+directory.querySelector('h2')?.remove();
+for(const id of ['review','registry','entry','dose','due']){
+ const node=document.getElementById(id);
+ if(node){node.classList.add('tw-workspace-panel');root.appendChild(node);}
+}
+root.appendChild(directory);
+document.getElementById('review').classList.add('panel');
+document.getElementById('review').querySelector('h2').textContent='Reports & source verification';
+document.getElementById('review').insertAdjacentHTML('afterbegin',
+ '<div class="tw-page-heading"><div><span class="tw-eyebrow">STUDY REPORTS</span>'+
+ '<h2>Reports & verification</h2><p class="hint">Live study metrics, scheduled follow-up completeness and source verification.</p></div>'+
+ '<button id="tw-report-reload" type="button" class="secondary">Refresh reports</button></div>'+
+ '<div id="tw-report-metrics" class="tw-report-metrics" aria-live="polite"></div>'+
+ '<section class="tw-report-completeness"><h3>Protocol follow-up completeness</h3>'+
+ '<p class="hint">Seven protocol months; submitted forms and source verification are reported separately from PCR results.</p>'+
+ '<div id="tw-report-visits"></div></section>'+
+ '<h3 class="tw-report-subtitle">Entries requiring source review</h3>');
+document.getElementById('review').querySelector('h2:not(.tw-page-heading h2)')?.classList.add('hide');
+const main=document.createElement('main');main.id='tw-workspace-main';
+root.appendChild(main);
+for(const node of [...root.children]){
+ if(node!==menu&&node.id!=='tw-mobile-menu'&&node!==main)main.appendChild(node);
+}
+// Patient identity, tabs and clinical status stay adjacent in one continuous column.
+main.prepend(banner,subnav,context);
+legacyGrid.classList.add('hide');
+// Put the one authoritative CR/name/study-ID search in the page header.
+// Moving the actual controls preserves the validated search and selection handlers.
+const header=document.querySelector('body>header'),brand=header.querySelector('div:first-child');
+header.classList.add('tw-app-header');
+brand.querySelector('h1').textContent='NIMS CMV Trial · eCRF';
+const site=document.createElement('span');site.className='tw-site-name';site.textContent='NIMS Hyderabad';
+brand.insertBefore(site,document.getElementById('environmentStatus'));
+brand.insertAdjacentHTML('afterbegin','<span class="tw-hospital-mark" aria-hidden="true">+</span>');
+const searchHeader=document.createElement('div');searchHeader.id='tw-header-search';
+const searchInput=document.getElementById('tw-context-find');
+const searchResult=document.getElementById('tw-context-find-results');
+const findLabel=searchInput.closest('label'),resultLabel=searchResult.closest('label');
+searchHeader.append(findLabel,resultLabel);
+header.insertBefore(searchHeader,document.getElementById('who'));
+searchInput.placeholder='Search patient name, CR number or study ID';
+searchInput.setAttribute('aria-label','Search patient name, CR number or study ID');
+findLabel.firstChild.textContent='';
+resultLabel.firstChild.textContent='Select matching patient';
+const showMatches=()=>{searchHeader.classList.toggle('tw-searching',searchInput.value.trim().length>=3);};
+searchInput.addEventListener('input',showMatches);
+searchResult.addEventListener('change',()=>{searchHeader.classList.remove('tw-searching');});
+const menuToggle=document.getElementById('tw-mobile-menu');
+header.insertBefore(menuToggle,searchHeader);
+// Hide secondary status labels on everyday views but preserve them for
+// environment and release diagnostics.
+const details=document.createElement('details');details.id='tw-system-details';
+details.innerHTML='<summary>System information</summary>';
+details.append(document.getElementById('environmentStatus'),document.getElementById('tw-live-build'));
+document.getElementById('security').append(details);
+// Keep ChatGPT and system operations under account tools, not as odd menu items.
+const links=document.createElement('div');links.id='tw-account-links';
+document.getElementById('security').append(links);
+for(const id of ['chatgptConnectionLink','operationsLink']){
+ const link=document.getElementById(id);if(link)links.appendChild(link);
+}
+
 syncNavigation();
 })();
