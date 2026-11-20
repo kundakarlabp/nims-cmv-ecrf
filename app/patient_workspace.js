@@ -259,6 +259,63 @@ style.textContent+=`
  #course #tw-course-actions{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
 `;
+
+style.textContent+=`
+#tw-trial-history{margin:0;border:0}
+#tw-trial-history>summary{font-size:12px;padding:10px 13px;margin:4px 0 11px;
+ color:#46658b;background:#f8faff;border:1px solid #dfe8f4;border-radius:10px;cursor:pointer}
+#tw-completed-trial{margin:9px 0 14px;padding:18px;border:1px solid #cce1d3;
+ background:#f5fbf7;border-radius:12px}
+#tw-completed-trial.hide{display:none!important}
+#tw-completed-trial h3{font-size:18px;color:#1f4937;margin:7px 0}
+#tw-completed-trial .hint{margin:6px 0 12px}
+.tw-completed-badge{display:inline-block;padding:4px 9px;background:#def4e5;
+ color:#206f48;border-radius:20px;font-size:11px;font-weight:700}
+.tw-completed-actions{display:flex;gap:8px;flex-wrap:wrap}
+.tw-completed-actions>button{min-height:43px;margin:0}
+.tw-eligibility-group{border:1px solid #dfe7f3;border-radius:10px;margin:10px 0;overflow:hidden}
+.tw-eligibility-group>summary{display:flex;justify-content:space-between;gap:8px;
+ align-items:center;padding:12px;background:#f5f7fc;cursor:pointer;font-weight:700;font-size:13px}
+.tw-eligibility-group>summary strong{font-size:12px;color:#567393;white-space:nowrap}
+.tw-eligibility-group[data-complete="true"]>summary{background:#eef9f1}
+.tw-eligibility-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 12px;padding:8px}
+#tw-eligibility-fields .tw-eligibility-grid label{display:grid;
+ grid-template-columns:minmax(0,1fr) minmax(105px,130px);padding:6px 8px;
+ min-height:48px;border-bottom:1px solid #e9eef5}
+.tw-eligibility-progress{padding:9px 11px;background:#eff5ff;color:#3b5c89;
+ font-weight:700;font-size:12px;border-radius:8px}
+.tw-course-warning{padding:12px 14px;margin:10px 0;background:#fff8f2;
+ border:1px solid #f0c2a9;border-radius:10px;color:#79442b;font-size:13px}
+.tw-course-warning p{font-size:12px;line-height:1.5}
+.tw-overview-header,.tw-section-title{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.tw-overview-header h2{margin:4px 0;font-size:21px}
+.tw-overview-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:13px 0}
+.tw-overview-kpi{background:#fff;border:1px solid #e0e8f3;border-radius:12px;padding:16px}
+.tw-overview-kpi strong{font-size:25px;color:#25466b;display:block}
+.tw-overview-kpi span{font-size:12px;color:#586e88}
+.tw-compact-overview-card{padding:16px;background:#fff;border:1px solid #e0e8f3;border-radius:12px;margin:10px 0}
+.tw-section-title h3{font-size:15px;margin:0 0 7px}
+.tw-section-title span{font-size:12px;color:#667b93}
+.tw-recruit-track{height:9px;background:#e9eff8;border-radius:20px;margin:9px 0;overflow:hidden}
+.tw-recruit-track>div{height:100%;background:#3c66d6}
+.tw-overview-action{width:100%;text-align:left;display:flex;align-items:start;flex-direction:column;
+ gap:4px;background:#f8faff;color:#28476d;border:1px solid #e5ebf4;margin:6px 0;padding:11px 13px}
+.tw-overview-action span{font-size:12px}
+.tw-overview-action strong{font-size:13px}
+.tw-overview-more{margin:12px 0;padding:13px 16px;background:#fff;border:1px solid #e1e8f2;border-radius:12px}
+.tw-overview-more>summary{cursor:pointer;font-size:13px;font-weight:700;color:#3d628c}
+.tw-overview-minis{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:12px 0}
+.tw-overview-minis>div{background:#f5f8fd;padding:10px;border-radius:9px}
+.tw-overview-minis strong{font-size:21px;display:block;color:#314f77}
+.tw-overview-minis span{font-size:11px;color:#60758e}
+@media(max-width:750px){
+ .tw-eligibility-grid{grid-template-columns:1fr}
+ .tw-overview-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .tw-overview-minis{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .tw-completed-actions{flex-direction:column}
+ .tw-completed-actions button{width:100%}
+}
+`;
 document.head.appendChild(style);
 
 // Legacy route buttons retain their IDs and DOM state for the existing router.
@@ -373,6 +430,25 @@ guidance.innerHTML='<h3>What happens next</h3><ul>'+
  '<li id="tw-next-pcr">Seven CMV PCR targets scheduled from transplant date</li>'+
  '<li id="tw-next-rand">One irreversible concealed allocation after final confirmation</li></ul>';
 trialLayout.append(columns,guidance);
+// After allocation, replace long completed entry forms with current trial actions.
+const completedTrial=document.createElement('section');
+completedTrial.id='tw-completed-trial';completedTrial.className='hide';
+completedTrial.innerHTML='<div class="tw-completed-badge">Trial initiated</div>'+
+ '<h3 id="tw-completed-title">Enrolled participant</h3>'+
+ '<p class="hint">Screening and allocation remain in the permanent study history.</p>'+
+ '<div class="tw-completed-actions">'+
+ '<button type="button" data-tw-workflow-link="pcr">Visits & PCR</button>'+
+ '<button type="button" data-tw-workflow-link="drug">Treatment & safety</button>'+
+ '<button type="button" data-tw-workflow-link="course">Clinical record</button></div>';
+const historicalTrial=document.createElement('details');
+historicalTrial.id='tw-trial-history';historicalTrial.open=true;
+historicalTrial.innerHTML='<summary>Screening, eligibility, enrollment and randomization history</summary>';
+study.insertBefore(completedTrial,progressTrack);
+study.insertBefore(historicalTrial,progressTrack);
+historicalTrial.append(progressTrack,trialLayout,after);
+completedTrial.querySelectorAll('[data-tw-workflow-link]').forEach(b=>{
+ b.onclick=()=>{void tab(b.dataset.twWorkflowLink);};
+});
 const activity=document.createElement('details');activity.id='tw-activity';
 activity.innerHTML='<summary>Recent activity (audit history)</summary>'+
  '<div id="tw-activity-rows" aria-live="polite"><p class="hint">Select a patient.</p></div>';
@@ -556,6 +632,8 @@ async function updatePatientBanner(){
 async function updateWorkflow(){
  const id=selected,request=++workflowRequest;
  if(!id){
+  completedTrial.classList.add('hide');historicalTrial.open=true;
+  subButtons.study.textContent='Start trial';
   for(let i=0;i<steps.length;i++){
    steps[i].dataset.stepStatus='pending';
    document.getElementById('tw-result-'+(i+1)).textContent='Pending';
@@ -593,6 +671,14 @@ async function updateWorkflow(){
   document.getElementById('tw-next-id').classList.toggle('done',!!s?.study_code);
   document.getElementById('tw-next-pcr').classList.toggle('done',!!s?.enrolled_on);
   document.getElementById('tw-next-rand').classList.toggle('done',randomized);
+  const complete=Boolean(s?.enrolled_on&&randomized);
+  completedTrial.classList.toggle('hide',!complete);
+  historicalTrial.open=!complete;
+  subButtons.study.textContent=complete?'Trial summary':'Start trial';
+  if(complete){
+   document.getElementById('tw-completed-title').textContent=
+    (s.study_code||'Study participant')+' · Randomized';
+  }
   const key=(s?.id||'none')+':'+s?.status+':'+eligible+':'+randomized;
   if(lastPatient!==id||lastKey!==key){
    let next=status.findIndex(x=>!x.complete&&!x.blocked);
