@@ -1616,22 +1616,72 @@ tab=async function(name){
   await task('tw-course-status',async()=>{await loadSubjects();await loadClinicalCourse();});
  }else{await courseTab(name);if(activeTab!=='course'){$('course').classList.add('hide');$('btncourse').classList.remove('selected');}}
 };
+/* Patient course: independent reads fail gracefully. Never treat a network
+   failure as evidence that no clinical records exist. */
+let clinicalCourseRequest=0;
 async function loadClinicalCourse(earlier=false){
- const target=$('tw-course-records');
- if(!participantSubject){target.textContent='Choose a participant above.';$('tw-course-more').classList.add('hide');return;}
- const sid=participantSubject;
- const schema=await api('/api/trial/crf/schema');
- $('tw-course-actions').innerHTML=Object.entries(schema.forms).filter(([k])=>
-  ['C_baseline','E_followup','D_adherence','M_medication','N_laboratory','O_infection','P_transplant','G_cmv_event','H_adverse_event','I_clinical_outcome'].includes(k))
-  .map(([k,v])=>'<button class="secondary" data-course-form="'+txt(k)+'">'+txt(v.title)+'</button>').join(' ');
- const suffix=earlier&&timelineCursor?'?before_on='+encodeURIComponent(timelineCursor.before_on)+'&before_id='+timelineCursor.before_id:'';
- const r=await api('/api/trial/crf/subjects/'+sid+'/timeline'+suffix);
- if(sid!==participantSubject)return;
- const html=r.entries.map(row=>'<details class="study-card"><summary>'+txt(row.occurred_on)+' · '+txt(row.title)+' · '+txt(row.review_status)+' · revision '+row.revision+'</summary><dl>'+
-  Object.entries(row.payload).filter(([k])=>!k.startsWith('_')).map(([k,v])=>'<dt>'+txt(row.fields[k]?.label||k)+'</dt><dd>'+txt(v)+'</dd>').join('')+'</dl></details>').join('');
- if(earlier)target.insertAdjacentHTML('beforeend',html);else target.innerHTML='<p class="hint">'+txt(r.note)+'</p>'+(html||'No submitted clinical records yet.');
- timelineCursor=r.next_cursor;$('tw-course-more').classList.toggle('hide',!timelineCursor);
+ const target=$('tw-course-records'),status=$('tw-course-status');
+ const sid=participantSubject,request=++clinicalCourseRequest;
+ if(!sid){target.textContent='Choose a participant above.';
+  $('tw-course-more').classList.add('hide');return;}
+ const history=earlier?target.innerHTML:'';
+ if(!earlier)target.innerHTML='<p class="hint">Loading clinical records…</p>';
+ status.classList.add('hide');
+ const suffix=earlier&&timelineCursor?'?before_on='+encodeURIComponent(timelineCursor.before_on)+
+  '&before_id='+timelineCursor.before_id:'';
+ const [schemaResult,recordsResult]=await Promise.allSettled([
+  api('/api/trial/crf/schema'),
+  api('/api/trial/crf/subjects/'+sid+'/timeline'+suffix)
+ ]);
+ if(request!==clinicalCourseRequest||sid!==participantSubject)return;
+ const actions=$('tw-course-actions');
+ if(schemaResult.status==='fulfilled'){
+  const schema=schemaResult.value;
+  actions.innerHTML=Object.entries(schema.forms).filter(([k])=>
+   ['C_baseline','E_followup','D_adherence','M_medication','N_laboratory',
+    'O_infection','P_transplant','G_cmv_event','H_adverse_event','I_clinical_outcome'].includes(k))
+   .map(([k,v])=>'<button class="secondary" data-course-form="'+txt(k)+'">'+
+     txt(v.title)+'</button>').join(' ');
+ }else{
+  actions.innerHTML='<div class="tw-course-warning">The clinical entry menu could not load. '+
+    'Existing records may still be available. <button class="secondary" type="button" '+
+    'data-course-retry>Retry</button></div>';
+ }
+ if(recordsResult.status==='rejected'){
+  const message=recordsResult.reason?.message||'Unable to retrieve clinical history.';
+  target.innerHTML=(earlier?history:'')+
+   '<div class="tw-course-warning" role="alert"><strong>Clinical records could not be loaded.</strong>'+
+   '<p>'+txt(message)+'</p><button type="button" data-course-retry>Retry clinical records</button></div>';
+  if(!earlier)$('tw-course-more').classList.add('hide');
+  show('tw-course-status','Clinical record fetch failed. This does not mean records are absent.',true);
+  return;
+ }
+ const records=recordsResult.value;
+ const entries=records.entries||[];
+ const cards=entries.map(row=>
+  '<details class="study-card"><summary>'+txt(row.occurred_on)+
+  ' · '+txt(row.title)+' · '+txt(row.review_status)+' · revision '+row.revision+
+  '</summary><dl>'+Object.entries(row.payload||{}).filter(([k])=>!k.startsWith('_'))
+    .map(([k,v])=>'<dt>'+txt(row.fields?.[k]?.label||k)+
+    '</dt><dd>'+txt(v===null?'Not documented':typeof v==='object'?JSON.stringify(v):v)+'</dd>')
+    .join('')+'</dl></details>').join('');
+ if(earlier)target.innerHTML=history+cards;
+ else target.innerHTML='<p class="hint">'+txt(records.note||'Dated, source-verified records')+'</p>'+
+  (cards||'<p class="hint">No submitted clinical records for this participant.</p>');
+ timelineCursor=records.next_cursor;
+ $('tw-course-more').classList.toggle('hide',!timelineCursor);
+ if(schemaResult.status==='rejected')
+  show('tw-course-status','Clinical history loaded; entry menu unavailable. Select Retry to reload.',true);
 }
+$('tw-course-records').addEventListener('click',event=>{
+ if(event.target.closest('[data-course-retry]'))
+  void task('tw-course-status',()=>loadClinicalCourse());
+});
+$('tw-course-actions').addEventListener('click',event=>{
+ if(event.target.closest('[data-course-retry]'))
+  void task('tw-course-status',()=>loadClinicalCourse());
+});
+
 $('tw-course-actions').onclick=e=>{const button=e.target.closest('[data-course-form]');if(!button)return;
  void task('tw-course-status',async()=>{await tab('crf');if(activeTab!=='crf')return;
   $('tw-crf-section').value=button.dataset.courseForm;crfRender();await populateCrfLinkedIdentifiers();await crfRestoreDraft();await loadCrfEntries();});
