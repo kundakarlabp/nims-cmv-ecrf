@@ -24,7 +24,7 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   const errors=[],writes=[],drafts=new Map(),contextReads=[];let blinded=false,holdOldDraft=false,releaseOldDraft=null;
   const eligibility=new Map(),allocations=new Map();let assignedFresh=false,holdSearchContext=false,releaseSearchContext=null;
   let holdOldPCR=false,releaseOldPCR=null,holdScreenedContext=false,releaseScreenedContext=null;
-  let signedIn=false;
+  let signedIn=false,courseFailures=0;
   const session=()=>({username:'synthetic-nurse',display_name:'Synthetic nurse',role:'nurse',
     csrf_token:'synthetic-csrf',password_only:true,workspace_full_access:false,
     expires_at:new Date(Date.now()+1800000).toISOString(),idle_timeout_seconds:1800});
@@ -116,7 +116,10 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
      }
     }
    }else if(p.endsWith('/entries'))result={entries:[]};
-   else if(p.endsWith('/timeline'))result={entries:[],next_cursor:null,note:'Synthetic test timeline'};
+   else if(p.endsWith('/timeline')){
+    if(courseFailures>0){courseFailures--;return route.abort('failed');}
+    result={entries:[],next_cursor:null,note:'Synthetic test timeline'};
+   }
    return route.fulfill({contentType:'application/json',body:JSON.stringify(result)});
   });
   await page.goto('http://cmv-ui.test/');
@@ -195,8 +198,14 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   releaseOldDraft();
   await page.waitForTimeout(150);
   assert.equal(await page.inputValue('#twcrf-source_reference'),'');
+  courseFailures=2;
   await page.evaluate(async()=>{await tab('course');});
   assert.match(await page.textContent('#tw-context-allocation'),/900 mg/);
+  assert.match(await page.textContent('#tw-course-records'),/could not be loaded/i);
+  assert.doesNotMatch(await page.textContent('#tw-course-records'),/No submitted clinical records/);
+  await page.click('#tw-course-records [data-course-retry]');
+  await page.waitForFunction(()=>$('tw-course-records').textContent.includes('Synthetic test timeline'));
+  assert.doesNotMatch(await page.textContent('#tw-course-records'),/could not be loaded/i);
   await page.setViewportSize({width:390,height:844});
   assert.equal(await page.locator('#tw-participant-context').evaluate(el=>getComputedStyle(el).gridColumnStart),'1');
   blinded=true;
@@ -275,6 +284,9 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   await page.waitForFunction(()=>$('tw-checklist-subject').value==='4'&&$('tw-screened').value==='4');
   assert.match(await page.locator('#tw-checklist-subject option:checked').textContent(),/TEST-CR-4/);
   await page.waitForFunction(()=>$('tw-progress-step-2').open);
+  assert.equal(await page.locator('#tw-review-inclusion-count').count(),1);
+  assert.equal(await page.inputValue('[data-eligibility="inclusion"][data-key="written_consent"]'),'true',
+   'Recorded signed consent is suggested without guessing unknown results');
   for(const [id,v] of Object.entries({'tw-age':'50','tw-anc':'3000','tw-platelets':'180000','tw-hb':'11','tw-crcl':'68',}))await page.fill('#'+id,v);
   await page.fill('#tw-cbc-date','2026-10-02');await page.fill('#tw-review-on','2026-10-02');
   for(const el of await page.locator('[data-eligibility]').all())await el.selectOption(await el.getAttribute('data-eligibility')==='inclusion'?'true':'false');
@@ -306,7 +318,11 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   page.once('dialog',dialog=>{assert.match(dialog.message(),/TEST-CR-4/);return dialog.accept();});
   await page.click('#tw-inline-rand-submit');
   await page.waitForFunction(()=>$('tw-context-allocation').textContent.includes('TEST-ALLOC-4')&&$('tw-inline-rand-submit').disabled);
-  assert.equal(await page.isVisible('#tw-progress-step-4'),true,'One patient workflow contains all four trial stages');
+  await page.waitForFunction(()=>$('tw-completed-trial')?.classList.contains('hide')===false);
+  assert.equal(await page.isVisible('#tw-completed-trial'),true,'Randomized participant sees active follow-up actions');
+  assert.equal(await page.locator('#tw-progress-step-4').count(),1,'Completed randomization remains in study history');
+  assert.equal(await page.locator('#tw-trial-history').evaluate(el=>el.open),false,
+   'Completed eligibility and randomization collapse from the main workspace');
   assert.equal(writes.filter(x=>x.p.endsWith('/assign')).length,1,'Only one explicit allocation request');
   assert.equal(writes.find(x=>x.p.endsWith('/assign')).body.signed_randomization_source_ref,
    undefined,'No randomization source text is required');
@@ -362,6 +378,11 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   assert.equal(await page.getAttribute('#tw-mobile-menu','aria-expanded'),'true');
   await page.click('#tw-nav-overview');
   await page.waitForFunction(()=>activeTab==='dashboard');
+  await page.waitForFunction(()=>document.querySelectorAll('.tw-overview-kpi').length===4);
+  assert.equal(await page.locator('.dash-hero').count(),0,
+    'Overview no longer duplicates a giant registry verification percentage');
+  assert.equal(await page.locator('.tw-overview-action').count(),1,
+    'Actionable study tasks replace long duplicated overview charts');
   assert.equal(await page.isVisible('#tw-study-navigation'),false);
   assert.equal(await page.getAttribute('#tw-mobile-menu','aria-expanded'),'false');
   await page.waitForFunction(()=>$('tw-live-build').textContent.includes('aaaaaaaaaa'));

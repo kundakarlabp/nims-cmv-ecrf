@@ -693,27 +693,47 @@ async function loadEligibilityReview(){
  const b=e.baseline||{};
  for(const [id,key] of Object.entries({'tw-age':'age_years','tw-anc':'anc_per_ul','tw-platelets':'platelets_per_ul','tw-hb':'hemoglobin_g_dl','tw-crcl':'crcl_cg_ml_min','tw-cbc-date':'baseline_cbc_on'}))$(id).value=b[key]??'';
  $('tw-review-on').value=e.reviewed_on||today();
- prefillObjectiveEligibility();
+ prefillObjectiveEligibility();updateEligibilityProgress();
 }
 for(const id of ['tw-checklist-subject','tw-screened'])$(id).onchange=()=>{void task('tw-status',async()=>{
  const sid=n(id);if(!sid)return;
  await selectParticipantSubject(sid);await selectEnrollmentPatient();
 });};
+/* Full signed checklist retained, grouped for quick, accountable review. */
+function updateEligibilityProgress(){
+ for(const group of ['inclusion','exclusion']){
+  const controls=[...document.querySelectorAll('[data-eligibility="'+group+'"]')];
+  const done=controls.filter(x=>x.value!=='').length,total=controls.length;
+  const label=$('tw-review-'+group+'-count');
+  if(label)label.textContent=done+' / '+total+' reviewed'+(done===total?' ✓':'');
+  const wrap=$('tw-review-'+group+'-group');
+  if(wrap)wrap.dataset.complete=String(done===total);
+ }
+ const done=[...document.querySelectorAll('[data-eligibility]')].filter(x=>x.value!=='').length;
+ const total=document.querySelectorAll('[data-eligibility]').length;
+ const status=$('tw-eligibility-progress');
+ if(status)status.textContent=done+' of '+total+
+  ' items assessed · verify all source records before approving eligibility.';
+}
 async function loadEligibilitySchema(){
  eligibilityItems=await api('/api/trial/eligibility-schema');
  const makeFields=(group,items,label)=>{
-  return '<h4>'+label+'</h4>'+Object.entries(items).map(([key,value])=>
-   '<label>'+txt(value)+'<select data-eligibility="'+group+'" data-key="'+txt(key)+'">'+
-   '<option value="">Not assessed</option><option value="true">Yes</option>'+
-   '<option value="false">No</option></select></label>').join('');
+  return '<details class="tw-eligibility-group" id="tw-review-'+group+'-group" open>'+
+   '<summary><span>'+label+'</span><strong id="tw-review-'+group+
+     '-count">0 / '+Object.keys(items).length+' reviewed</strong></summary>'+
+   '<div class="tw-eligibility-grid">'+Object.entries(items).map(([key,description])=>
+    '<label>'+txt(description)+'<select data-eligibility="'+group+'" data-key="'+txt(key)+'">'+
+    '<option value="">Not assessed</option><option value="true">Yes</option>'+
+    '<option value="false">No</option></select></label>').join('')+'</div></details>';
  };
  $('tw-eligibility-fields').innerHTML=
-  '<p class="hint">Objective items are suggested from the recorded values. Check the source and explicitly review every clinical criterion.</p>'+
-  makeFields('inclusion',eligibilityItems.inclusion,'Inclusion: all must be Yes')+
-  makeFields('exclusion',eligibilityItems.exclusion,'Exclusion: all must be No');
+  '<p class="hint">Source-verified values are suggested where available. Review all clinical criteria explicitly.</p>'+
+  '<div class="tw-eligibility-progress" id="tw-eligibility-progress" role="status"></div>'+
+  makeFields('inclusion',eligibilityItems.inclusion,'Inclusion criteria — all Yes')+
+  makeFields('exclusion',eligibilityItems.exclusion,'Exclusion criteria — all No');
  for(const el of document.querySelectorAll('[data-eligibility]'))
-  el.addEventListener('change',()=>{el.dataset.autoChecked='';});
- prefillObjectiveEligibility();
+  el.addEventListener('change',()=>{el.dataset.autoChecked='';updateEligibilityProgress();});
+ prefillObjectiveEligibility();updateEligibilityProgress();
 }
 /* Populate only deterministic eligibility values from recorded source measurements.
    Clinical judgement criteria remain unanswered until a staff member reviews them. */
@@ -741,10 +761,13 @@ function prefillObjectiveEligibility(){
  if(anc!==null&&platelets!==null&&hb!==null)
   set('exclusion','blood_counts_below_threshold',anc<1500||platelets<50000||hb<7);
  if(crcl!==null)set('exclusion','crcl_below_10',crcl<10);
- if(subject.donor_cmv_igg)set('inclusion','donor_cmv_positive',subject.donor_cmv_igg==='positive');
- if(subject.recipient_cmv_igg)set('inclusion','recipient_cmv_positive',subject.recipient_cmv_igg==='positive');
+ if(['positive','negative'].includes(subject.donor_cmv_igg))
+  set('inclusion','donor_cmv_positive',subject.donor_cmv_igg==='positive');
+ if(['positive','negative'].includes(subject.recipient_cmv_igg))
+  set('inclusion','recipient_cmv_positive',subject.recipient_cmv_igg==='positive');
  if(typeof subject.consent_recorded==='boolean')
   set('inclusion','written_consent',subject.consent_recorded);
+ updateEligibilityProgress();
 }
 for(const id of ['tw-age','tw-anc','tw-platelets','tw-hb','tw-crcl'])
  $(id).addEventListener('input',prefillObjectiveEligibility);
@@ -1156,67 +1179,80 @@ window.finishLogin=async function(r){
     await loadSubjects();
  }
 };
-const originalStudyDashboard=loadDashboard;
+/* One compact operational overview. Extended inventory and CRF verification
+   stay in Reports; no duplicate giant charts or misleading percentage tiles. */
 loadDashboard=async function(){
- await originalStudyDashboard();
  const target=$('dashboardResults');
- try{
-  const [trial,forms,actions,build]=await Promise.all([
-   api('/api/trial/overview'),api('/api/trial/crf/completeness'),
-   api('/api/trial/action-worklist?limit=8'),api('/healthz')
-  ]);
-  $('tw-live-build').textContent='Running server · '+(build.app_commit?
-    'commit '+build.app_commit.slice(0,10):
-    'build '+String(build.build_fingerprint||'unavailable').slice(0,12))+
-    ' · '+(build.service||'mode unavailable');
-  const lab=trial.pcr||{}, drug=trial.drug_accountability||{};
-  const cards=[
-   ['Screened',trial.screened,'Coded screening records'],
-   ['Enrolled',trial.ever_enrolled,'Includes withdrawn/closed participants'],
-   ['Randomized',trial.randomized,'Approved protocol recruitment target: 344; Study ID capacity: 350'],
-   ['PCR scheduled',trial.scheduled_pcr_slots,'Seven protocol slots per enrolled subject'],
-   ['PCR verified',trial.verified_protocol_pcr_slots,'Independent review completed'],
-   ['Stock remaining',drug.tablets_in_stock,'450-mg tablets in study inventory'],
-   ['Unreconciled issues',drug.tablets_not_yet_reconciled,'Not necessarily taken or lost']
-  ];
-  const kpi='<div class="dash-kpis">'+cards.map((x,i)=>
-    '<div class="dash-card dash-kpi"><span class="accent" style="background:'+
-    ['#405fe4','#27ba9c','#7460d9','#6e87bc','#2495aa','#ac8a37','#d77b42'][i]+'"></span>'+
-    '<span class="num">'+Number(x[1]||0).toLocaleString('en-IN')+'</span>'+
-    '<div class="label">'+txt(x[0])+'</div><div class="explain">'+txt(x[2])+'</div></div>'
-  ).join('')+'</div>';
-  const months=['1','2','3','4','6','9','12'];
-  const rows=months.map(m=>{
-   const slot=forms.visit_completion[m]||{};
-   return '<tr><td>Month '+m+'</td><td>'+(slot.submitted||0)+'</td>'+
-    '<td>'+(slot.verified||0)+'</td>'+
-    '<td>'+(slot.needs_correction||0)+'</td></tr>';
-  }).join('');
-  const visits='<div class="dash-card" style="margin:16px 0">'+
-   '<h3>Protocol follow-up completeness</h3>'+
-   '<p class="dash-note">Count of submitted and source-verified CRF visits. PCR result verification is tracked separately.</p>'+
-   '<div style="overflow-x:auto"><table style="width:100%;font-size:12px;border-collapse:collapse">'+
-   '<thead><tr><th>Timepoint</th><th>Submitted</th><th>Verified</th><th>Needs correction</th></tr></thead>'+
-   '<tbody>'+rows+'</tbody></table></div></div>';
-  const note='<p class="warn-demo">Study status is computed from persisted records. '+
-   'Enrollment and PCR completion do not imply endpoint adjudication or data lock. '+
-   'Medication exposure, renal adjustment and adjudication require source verification.</p>';
-  const operations='<div class="dash-card" style="margin:12px 0">'+
-   '<h3>Actions requiring attention</h3><p class="dash-note">'+
-   Number(actions.total||0)+' outstanding worklist item(s) · next '+Number((actions.actions||[]).length)+' shown. '+
-   'Each item links to an existing participant; no actions are automatically approved.</p>'+
-   (actions.actions||[]).slice(0,5).map(a=>'<p class="dash-note">'+
-    '<strong>'+txt(a.study_code)+' · '+txt(a.category)+'</strong> · '+txt(a.detail)+'</p>').join('')+
-   '<button id="tw-open-task-list" type="button">Open daily worklist</button></div>';
-  target.insertAdjacentHTML('afterbegin',
-    '<h3 style="margin-top:8px">Clinical trial progress</h3>'+note+kpi+operations+visits+
-    '<h3 style="margin:20px 0 12px">Registry and entry-review activity</h3>');
-  $('tw-open-task-list').onclick=()=>{void tab('tasks');};
- }catch(err){
-  target.insertAdjacentHTML('afterbegin','<p class="dash-note">Clinical trial metrics unavailable: '+txt(err.message)+'</p>');
- }
+ target.innerHTML='<p class="hint">Loading trial overview…</p>';
+ const results=await Promise.allSettled([
+  api('/api/trial/overview'),
+  api('/api/trial/action-worklist?limit=8'),
+  api('/api/dashboard'),
+  api('/healthz')
+ ]);
+ const good=i=>results[i].status==='fulfilled'?results[i].value:null;
+ const trial=good(0),actions=good(1),registry=good(2),build=good(3);
+ if(build)$('tw-live-build').textContent='Running server · '+
+  (build.app_commit?'commit '+build.app_commit.slice(0,10):
+  'build '+String(build.build_fingerprint||'unavailable').slice(0,12))+
+  ' · '+(build.service||'mode unavailable');
+ const valueOrDash=x=>Number.isFinite(Number(x))?Number(x).toLocaleString('en-IN'):'—';
+ const rows=[
+  ['Screened',trial?.screened],['Enrolled',trial?.ever_enrolled??trial?.enrolled],
+  ['Randomized',trial?.randomized],['PCR verified',trial?.verified_protocol_pcr_slots]
+ ];
+ const counts='<div class="tw-overview-metrics">'+rows.map(([label,count])=>
+  '<div class="tw-overview-kpi"><strong>'+valueOrDash(count)+'</strong>'+
+  '<span>'+txt(label)+'</span></div>').join('')+'</div>';
+ const randomized=Number(trial?.randomized)||0;
+ const recruitment=trial?'<section class="tw-compact-overview-card">'+
+  '<div class="tw-section-title"><h3>Recruitment</h3><span>'+randomized+' / 344 randomized</span></div>'+
+  '<div class="tw-recruit-track" role="progressbar" aria-label="Recruitment progress" '+
+  'aria-valuemin="0" aria-valuemax="344" aria-valuenow="'+Math.min(344,randomized)+'">'+
+  '<div style="width:'+Math.min(100,100*randomized/344)+'%"></div></div>'+
+  '<p class="hint">Stratified allocation; screening and enrollment are distinct stages.</p></section>':
+  '<p class="hint">Recruitment metrics are temporarily unavailable. <button type="button" id="tw-overview-retry">Retry</button></p>';
+ const work=actions?.actions||[];
+ const worklist='<section class="tw-compact-overview-card"><div class="tw-section-title">'+
+  '<h3>Needs attention</h3><span>'+valueOrDash(actions?.total)+' open</span></div>'+
+  (actions?work.slice(0,5).map(action=>
+    '<button type="button" class="tw-overview-action" data-open-patient="'+txt(action.patient_id)+'" '+
+    'data-open-route="'+txt(action.route==='randomization'?'study':action.route)+'">'+
+    '<strong>'+txt(action.study_code)+' · '+txt(action.category)+'</strong>'+
+    '<span>'+txt(action.detail)+'</span></button>').join('')||
+    '<p class="hint">No pending trial actions in this worklist.</p>':
+    '<p class="hint">The action worklist could not be loaded. Try Refresh.</p>')+
+  '<button type="button" class="secondary" id="tw-overview-worklist">Open full worklist</button></section>';
+ const review=registry?.review||{};
+ const extras='<details class="tw-overview-more"><summary>Inventory, follow-up and data verification</summary>'+
+  '<div class="tw-overview-minis">'+[
+   ['PCR scheduled',trial?.scheduled_pcr_slots],
+   ['Tablets in stock',trial?.drug_accountability?.tablets_in_stock],
+   ['Unreconciled tablets',trial?.drug_accountability?.tablets_not_yet_reconciled],
+   ['Registry records verified',review.verified],
+   ['Registry corrections needed',review.needs_correction]
+  ].map(([name,val])=>'<div><strong>'+valueOrDash(val)+'</strong><span>'+txt(name)+'</span></div>').join('')+
+  '</div><p class="hint">Source verification is not a measure of recruitment or endpoint adjudication.</p>'+
+  '<button id="tw-overview-reports" type="button" class="secondary">Open Reports & verification</button></details>';
+ target.innerHTML='<div class="tw-overview-header"><div><h2>Trial overview</h2>'+
+  '<p class="hint">Live study progress and the next actions.</p></div>'+
+  '<button type="button" class="secondary" id="tw-overview-refresh">Refresh</button></div>'+
+  counts+recruitment+worklist+extras;
+ target.querySelector('#tw-overview-worklist').onclick=()=>{void tab('tasks');};
+ target.querySelector('#tw-overview-reports').onclick=()=>{void tab('review');};
+ target.querySelector('#tw-overview-refresh').onclick=()=>{void loadDashboard();};
+ const retry=target.querySelector('#tw-overview-retry');
+ if(retry)retry.onclick=()=>{void loadDashboard();};
+ target.querySelectorAll('[data-open-patient]').forEach(button=>button.onclick=()=>{
+  void task('tw-status',async()=>{
+   const id=button.dataset.openPatient,route=button.dataset.openRoute;
+   if(!id)throw Error('Worklist item lacks a patient identifier');
+   await window.choose(id);
+   if(selected!==id)throw Error('Could not verify selected patient');
+   await tab(['pcr','drug','crf','course','study'].includes(route)?route:'study');
+  });
+ });
 };
-
 
 async function populateCrfLinkedIdentifiers(){
  if(!currentCrfSpec||!crfLoadedSubject)return;
@@ -1616,22 +1652,104 @@ tab=async function(name){
   await task('tw-course-status',async()=>{await loadSubjects();await loadClinicalCourse();});
  }else{await courseTab(name);if(activeTab!=='course'){$('course').classList.add('hide');$('btncourse').classList.remove('selected');}}
 };
-async function loadClinicalCourse(earlier=false){
- const target=$('tw-course-records');
- if(!participantSubject){target.textContent='Choose a participant above.';$('tw-course-more').classList.add('hide');return;}
- const sid=participantSubject;
- const schema=await api('/api/trial/crf/schema');
- $('tw-course-actions').innerHTML=Object.entries(schema.forms).filter(([k])=>
-  ['C_baseline','E_followup','D_adherence','M_medication','N_laboratory','O_infection','P_transplant','G_cmv_event','H_adverse_event','I_clinical_outcome'].includes(k))
-  .map(([k,v])=>'<button class="secondary" data-course-form="'+txt(k)+'">'+txt(v.title)+'</button>').join(' ');
- const suffix=earlier&&timelineCursor?'?before_on='+encodeURIComponent(timelineCursor.before_on)+'&before_id='+timelineCursor.before_id:'';
- const r=await api('/api/trial/crf/subjects/'+sid+'/timeline'+suffix);
- if(sid!==participantSubject)return;
- const html=r.entries.map(row=>'<details class="study-card"><summary>'+txt(row.occurred_on)+' · '+txt(row.title)+' · '+txt(row.review_status)+' · revision '+row.revision+'</summary><dl>'+
-  Object.entries(row.payload).filter(([k])=>!k.startsWith('_')).map(([k,v])=>'<dt>'+txt(row.fields[k]?.label||k)+'</dt><dd>'+txt(v)+'</dd>').join('')+'</dl></details>').join('');
- if(earlier)target.insertAdjacentHTML('beforeend',html);else target.innerHTML='<p class="hint">'+txt(r.note)+'</p>'+(html||'No submitted clinical records yet.');
- timelineCursor=r.next_cursor;$('tw-course-more').classList.toggle('hide',!timelineCursor);
+function clinicalReadableSource(value,depth=0){
+ if(value===null||value===undefined||value==='')return 'Not documented';
+ if(typeof value==='string'){
+  const raw=value.trim();
+  if((raw.startsWith('{')&&raw.endsWith('}'))||(raw.startsWith('[')&&raw.endsWith(']'))){
+   try{const parsed=JSON.parse(raw);if(parsed&&typeof parsed==='object')
+     return clinicalReadableSource(parsed,depth+1);}catch(_ignored){}
+  }
+  return value;
+ }
+ if(Array.isArray(value))return value.map(x=>clinicalReadableSource(x,depth+1)).join('; ');
+ if(typeof value==='object'){
+  if(depth>=4)return 'Additional structured source details retained in the audited entry';
+  return Object.entries(value).filter(([key])=>!key.startsWith('_')).map(([key,v])=>
+   key.replaceAll('_',' ')+': '+clinicalReadableSource(v,depth+1)).join(' · ');
+ }
+ return String(value);
 }
+/* Patient course: independent reads fail gracefully. Never treat a network
+   failure as evidence that no clinical records exist. */
+let clinicalCourseRequest=0;
+async function loadClinicalCourse(earlier=false){
+ const target=$('tw-course-records'),status=$('tw-course-status');
+ const sid=participantSubject,request=++clinicalCourseRequest;
+ if(!sid){target.textContent='Choose a participant above.';
+  $('tw-course-more').classList.add('hide');return;}
+ const history=earlier?target.innerHTML:'';
+ if(!earlier)target.innerHTML='<p class="hint">Loading clinical records…</p>';
+ status.classList.add('hide');
+ const suffix=earlier&&timelineCursor?'?before_on='+encodeURIComponent(timelineCursor.before_on)+
+  '&before_id='+timelineCursor.before_id:'';
+ const [schemaResult,recordsResult]=await Promise.allSettled([
+  api('/api/trial/crf/schema'),
+  api('/api/trial/crf/subjects/'+sid+'/timeline'+suffix)
+ ]);
+ if(request!==clinicalCourseRequest||sid!==participantSubject)return;
+ const actions=$('tw-course-actions');
+ if(schemaResult.status==='fulfilled'){
+  const schema=schemaResult.value;
+  const groups=[
+   ['Follow-up & investigations',['E_followup','N_laboratory'],true],
+   ['Treatment & adherence',['D_adherence','M_medication'],false],
+   ['Baseline & transplant',['C_baseline','P_transplant'],false],
+   ['Infections, adverse events & outcomes',
+    ['O_infection','G_cmv_event','H_adverse_event','I_clinical_outcome'],false]
+  ];
+  actions.innerHTML=groups.map(([label,keys,open])=>{
+   const buttons=keys.filter(key=>schema.forms[key]).map(key=>
+    '<button class="secondary" data-course-form="'+txt(key)+'">'+
+      txt(schema.forms[key].title)+'</button>').join('');
+   return buttons?'<details class="tw-course-group" '+(open?'open':'')+'>'+
+    '<summary>'+txt(label)+'</summary><div class="tw-course-group-actions">'+buttons+
+    '</div></details>':'';
+  }).join('');
+ }else{
+  actions.innerHTML='<div class="tw-course-warning">The clinical entry menu could not load. '+
+    'Existing records may still be available. <button class="secondary" type="button" '+
+    'data-course-retry>Retry</button></div>';
+ }
+ if(recordsResult.status==='rejected'){
+  const message=recordsResult.reason?.message||'Unable to retrieve clinical history.';
+  target.innerHTML=(earlier?history:'')+
+   '<div class="tw-course-warning" role="alert"><strong>Clinical records could not be loaded.</strong>'+
+   '<p>'+txt(message)+'</p><button type="button" data-course-retry>Retry clinical records</button></div>';
+  if(!earlier)$('tw-course-more').classList.add('hide');
+  show('tw-course-status','Clinical record fetch failed. This does not mean records are absent.',true);
+  return;
+ }
+ const records=recordsResult.value;
+ const entries=records.entries||[];
+ const cards=entries.map(row=>
+  '<details class="study-card"><summary>'+txt(row.occurred_on)+
+  ' · '+txt(row.title)+' · '+txt(row.review_status)+' · revision '+row.revision+
+  '</summary><dl>'+Object.entries(row.payload||{}).filter(([k])=>!k.startsWith('_'))
+    .map(([k,v])=>{
+      const readable=clinicalReadableSource(v);
+      return '<dt>'+txt(row.fields?.[k]?.label||k)+'</dt><dd>'+
+       (readable.length>240?'<details><summary>Read source detail</summary><div class="tw-course-source">'+
+          txt(readable)+'</div></details>':txt(readable))+'</dd>';
+    })
+    .join('')+'</dl></details>').join('');
+ if(earlier)target.innerHTML=history+cards;
+ else target.innerHTML='<p class="hint">'+txt(records.note||'Dated, source-verified records')+'</p>'+
+  (cards||'<p class="hint">No submitted clinical records for this participant.</p>');
+ timelineCursor=records.next_cursor;
+ $('tw-course-more').classList.toggle('hide',!timelineCursor);
+ if(schemaResult.status==='rejected')
+  show('tw-course-status','Clinical history loaded; entry menu unavailable. Select Retry to reload.',true);
+}
+$('tw-course-records').addEventListener('click',event=>{
+ if(event.target.closest('[data-course-retry]'))
+  void task('tw-course-status',()=>loadClinicalCourse());
+});
+$('tw-course-actions').addEventListener('click',event=>{
+ if(event.target.closest('[data-course-retry]'))
+  void task('tw-course-status',()=>loadClinicalCourse());
+});
+
 $('tw-course-actions').onclick=e=>{const button=e.target.closest('[data-course-form]');if(!button)return;
  void task('tw-course-status',async()=>{await tab('crf');if(activeTab!=='crf')return;
   $('tw-crf-section').value=button.dataset.courseForm;crfRender();await populateCrfLinkedIdentifiers();await crfRestoreDraft();await loadCrfEntries();});

@@ -146,7 +146,46 @@ html{font-size:16px;overflow-x:hidden}body{overflow-x:hidden}
 <div id="due" class="hide"><h2 style="margin-top:20px">Scheduled CMV PCR worklist</h2><p class="hint">Targets at 1, 2, 3, 4, 6, 9 and 12 months. Visit windows and reminder messages have not been authorized or configured.</p><button onclick="loadDue()">Refresh worklist</button><pre id="dueResults"></pre></div>
 </section></div></section></div><script>
 let csrf='', selected=null, timer=null;let $=id=>document.getElementById(id);function show(id,msg,error=false){let el=$(id);el.classList.remove('hide');el.classList.toggle('err',error);el.textContent=msg}function hide(id){$(id).classList.add('hide')}function escapeHTML(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-async function api(path,options={}){let method=options.method||'GET';let headers={...options.headers};if(!['GET','HEAD'].includes(method))headers['X-CSRF-Token']=csrf;if(options.body)headers['Content-Type']='application/json';let r=await fetch(path,{...options,headers,credentials:'same-origin'});let data=await r.json();if(!r.ok){const error=Error((typeof data.detail==='string'?data.detail:JSON.stringify(data.detail))||('HTTP '+r.status));error.status=r.status;throw error;}return data}
+/* Retry only safe reads after transient network/server faults.
+   Never retry clinical writes: the server may have committed before disconnect. */
+async function api(path,options={}){
+ const method=(options.method||'GET').toUpperCase(),readOnly=['GET','HEAD'].includes(method);
+ const headers={...options.headers};
+ if(!readOnly)headers['X-CSRF-Token']=csrf;
+ if(options.body)headers['Content-Type']='application/json';
+ for(let attempt=0;attempt<(readOnly?2:1);attempt++){
+  const controller=new AbortController();
+  const timer=setTimeout(()=>controller.abort(),15000);
+  try{
+   const response=await fetch(path,{...options,headers,credentials:'same-origin',
+       signal:options.signal||controller.signal});
+   const raw=await response.text();
+   let data=null;try{data=raw?JSON.parse(raw):null;}catch(_ignored){}
+   if(!response.ok){
+    const message=(typeof data?.detail==='string'?data.detail:
+       data?.detail?JSON.stringify(data.detail):'HTTP '+response.status);
+    const err=Error(response.status===401?'Session expired. Sign in again.':
+      response.status===403?'Access denied: '+message:
+      response.status>=500?'Server error ('+response.status+'): '+message:message);
+    err.status=response.status;
+    if(readOnly&&attempt===0&&[502,503,504].includes(response.status)){
+     await new Promise(resolve=>setTimeout(resolve,350));continue;
+    }
+    throw err;
+   }
+   if(data===null)throw Error('Invalid or empty server response. Use Refresh to retry.');
+   return data;
+  }catch(err){
+   if(err.status)throw err;
+   if(readOnly&&attempt===0){await new Promise(resolve=>setTimeout(resolve,350));continue;}
+   const failure=Error(err.name==='AbortError'?
+     'Request timed out. Check connectivity and select Retry.':
+     'Connection interrupted. Check the network and select Retry. ('+
+       (readOnly?'Read not completed':'Write outcome uncertain; verify before resubmitting')+')');
+   failure.network=true;throw failure;
+  }finally{clearTimeout(timer);}
+ }
+}
 /* Authoritative environment check. This is in the main page, not a deferred
    plugin, so registration cannot depend on a later script or stale login hook. */
 let lastVerifiedDataMode=null;

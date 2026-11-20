@@ -100,7 +100,14 @@ def subject_view(subject):
       "enrolled_on":subject.enrolled_on,"pcr_anchor_on":subject.pcr_anchor_on,
       "pcr_anchor_basis":subject.pcr_anchor_basis,"protocol_reference":subject.protocol_reference,
       "donor_type":subject.donor_type,"ratg_induction":subject.ratg_induction,
-      "d_plus_r_plus":subject.donor_cmv_igg=="positive" and subject.recipient_cmv_igg=="positive",
+      # Preserve each source-verified result; unknown must not be silently
+      # interpreted as negative or eligible during data entry.
+      "donor_cmv_igg":subject.donor_cmv_igg,
+      "recipient_cmv_igg":subject.recipient_cmv_igg,
+      "d_plus_r_plus":(True if subject.donor_cmv_igg=="positive" and
+        subject.recipient_cmv_igg=="positive" else False
+        if subject.donor_cmv_igg=="negative" or subject.recipient_cmv_igg=="negative"
+        else None),
       "consent_recorded":bool(subject.consent_on and subject.consent_version),
       "eligibility_attested":subject.eligibility_attested,
       "randomization_status":"SEE_RESTRICTED_ALLOCATION_MODULE",

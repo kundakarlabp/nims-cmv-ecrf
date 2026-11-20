@@ -24,6 +24,26 @@ def auth(client,username='testadmin',password='ThisIsALongTestingPassword123!'):
     r=client.post('/api/login',json={'username':username,'password':password});assert r.status_code==200,r.text
     return {'X-CSRF-Token':r.json()['csrf_token']}
 
+def test_cmv_serostatus_requires_source_verified_positive_or_negative():
+    from types import SimpleNamespace
+    from app.trial_api import subject_view
+    source=dict(id=7,screening_code='TEST-S-7',study_code=None,status='screened',
+                screening_on=None,enrolled_on=None,pcr_anchor_on=None,
+                pcr_anchor_basis=None,protocol_reference=None,donor_type='deceased',
+                ratg_induction=False,age_at_transplant=48,consent_on=None,
+                consent_version=None,eligibility_attested=False)
+    both_positive=subject_view(SimpleNamespace(**source,donor_cmv_igg='positive',
+                                                  recipient_cmv_igg='positive'))
+    assert both_positive['d_plus_r_plus'] is True
+    assert both_positive['donor_cmv_igg']=='positive'
+    unknown_donor=subject_view(SimpleNamespace(**source,donor_cmv_igg='unknown',
+                                                  recipient_cmv_igg='positive'))
+    assert unknown_donor['d_plus_r_plus'] is None
+    assert unknown_donor['donor_cmv_igg']=='unknown'
+    verified_negative=subject_view(SimpleNamespace(**source,donor_cmv_igg='negative',
+                                                      recipient_cmv_igg='positive'))
+    assert verified_negative['d_plus_r_plus'] is False
+
 def test_auth_required():
     with TestClient(app) as c:
         assert c.get('/api/patients').status_code==401
