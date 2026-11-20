@@ -367,6 +367,11 @@ def main():
             PHASE='owner_requested_fresh_start';owner_workspace_update(dc)
             PHASE='encrypted_backup_and_isolated_restore';print('Clinical maintenance:',PHASE,flush=True)
             backup_and_restore(dc)
+            # A PI/admin may complete the same ciphertext readback through the
+            # authenticated ChatGPT connector when OCI has no Drive OAuth
+            # token.  Promote only acknowledgements that match the exact
+            # locally restored bundle before evaluating the clinical gate.
+            accept_receipts()
             # The existing clinical archive is already sealed and restored on
             # OCI. Transfer the exact same bytes to the private Drive folder;
             # no GitHub backup workflow or private repository is involved.

@@ -54,3 +54,24 @@ def test_existing_clinical_stack_can_recover_when_offsite_proof_is_stale(tmp_pat
     monkeypatch.setattr(maintenance,'run',run)
     assert maintenance.cutover(['docker'],{'CLINICAL_SITE_DOMAIN':'clinical.test.invalid'})=='clinical_recovery_only'
     assert any('up' in a and 'api' in a for a in calls)
+
+def test_main_accepts_connector_readback_before_cutover(tmp_path,monkeypatch):
+    root=tmp_path/'repo';root.mkdir();state=root/'.deploy-state'
+    private=tmp_path/'private';private.mkdir()
+    monkeypatch.setattr(maintenance,'ROOT',root)
+    monkeypatch.setattr(maintenance,'STATE',state)
+    monkeypatch.setattr(maintenance,'PRIVATE',private)
+    monkeypatch.setattr(maintenance.os,'chdir',lambda path:None)
+    order=[]
+    monkeypatch.setattr(maintenance,'docker',lambda:['docker'])
+    monkeypatch.setattr(maintenance,'run',lambda *args,**kwargs:b'')
+    monkeypatch.setattr(maintenance,'setup_paths',lambda:{'CLINICAL_SITE_DOMAIN':'clinical.test.invalid'})
+    monkeypatch.setattr(maintenance,'provision',lambda dc:None)
+    monkeypatch.setattr(maintenance,'provision_oauth',lambda dc:None)
+    monkeypatch.setattr(maintenance,'owner_workspace_update',lambda dc:None)
+    monkeypatch.setattr(maintenance,'backup_and_restore',lambda dc:order.append('backup'))
+    monkeypatch.setattr(maintenance,'accept_receipts',lambda:order.append('accept'))
+    monkeypatch.setattr(maintenance,'cutover',lambda dc,values:order.append('cutover') or 'clinical_active')
+    monkeypatch.setattr('ops.drive_offsite.sync_latest',lambda private:order.append('sync') or False)
+    maintenance.main()
+    assert order==['backup','accept','sync','cutover']
