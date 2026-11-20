@@ -262,6 +262,7 @@ style.textContent+=`
 
 style.textContent+=`
 #tw-trial-history{margin:0;border:0}
+#tw-trial-history.tw-in-progress>summary{display:none}
 #tw-trial-history>summary{font-size:12px;padding:10px 13px;margin:4px 0 11px;
  color:#46658b;background:#f8faff;border:1px solid #dfe8f4;border-radius:10px;cursor:pointer}
 #tw-completed-trial{margin:9px 0 14px;padding:18px;border:1px solid #cce1d3;
@@ -449,6 +450,7 @@ completedTrial.innerHTML='<div class="tw-completed-badge">Trial initiated</div>'
  '<button type="button" data-tw-workflow-link="course">Clinical record</button></div>';
 const historicalTrial=document.createElement('details');
 historicalTrial.id='tw-trial-history';historicalTrial.open=true;
+historicalTrial.classList.add('tw-in-progress');
 historicalTrial.innerHTML='<summary>Screening, eligibility, enrollment and randomization history</summary>';
 study.insertBefore(completedTrial,progressTrack);
 study.insertBefore(historicalTrial,progressTrack);
@@ -459,7 +461,7 @@ completedTrial.querySelectorAll('[data-tw-workflow-link]').forEach(b=>{
 const activity=document.createElement('details');activity.id='tw-activity';
 activity.innerHTML='<summary>Recent activity (audit history)</summary>'+
  '<div id="tw-activity-rows" aria-live="polite"><p class="hint">Select a patient.</p></div>';
-study.insertBefore(activity,after);
+study.insertBefore(activity,registerDetails);
 let auditRequest=0;
 async function loadActivity(){
  const id=selected,request=++auditRequest,target=document.getElementById('tw-activity-rows');
@@ -666,6 +668,7 @@ async function updateWorkflow(){
  const id=selected,request=++workflowRequest;
  if(!id){
   completedTrial.classList.add('hide');historicalTrial.open=true;
+  historicalTrial.classList.add('tw-in-progress');
   lastHistoricalState=null;subButtons.study.textContent='Start trial';
   for(let i=0;i<steps.length;i++){
    steps[i].dataset.stepStatus='pending';
@@ -706,6 +709,7 @@ async function updateWorkflow(){
   document.getElementById('tw-next-rand').classList.toggle('done',randomized);
   const complete=Boolean(s?.enrolled_on&&randomized);
   completedTrial.classList.toggle('hide',!complete);
+  historicalTrial.classList.toggle('tw-in-progress',!complete);
   const historyKey=String(id)+':'+complete;
   if(lastHistoricalState!==historyKey){
    historicalTrial.open=!complete;
