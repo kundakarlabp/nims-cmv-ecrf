@@ -34,6 +34,8 @@ style.textContent=
  '#study .tw-progress-stage[data-step-status="blocked"] .tw-progress-result{color:#b04b33}'+
  '#study .tw-progress-stage>.study-card{border:0;border-radius:0;margin:0;padding:16px 19px}'+
  '#study .tw-progress-stage>.study-card>h3{display:none}'+
+ '#tw-eligibility-fields label{display:grid;grid-template-columns:minmax(0,1fr) minmax(120px,165px);gap:10px;align-items:center;padding:6px 8px;border-bottom:1px solid #e9edf4;margin:0;min-height:48px}'+
+ '#tw-eligibility-fields select{width:100%;max-width:165px}'+
  '#study #tw-inline-rand-submit:disabled{background:#c2cedc;cursor:not-allowed}'+
  '#study #tw-register-details{max-width:1030px;margin-top:16px}'+
  '#study #tw-register-details summary{cursor:pointer;color:#405b7e;font-size:13px}'+
@@ -50,13 +52,14 @@ document.head.appendChild(style);
 // Legacy route buttons retain their IDs and DOM state for the existing router.
 for(const b of menu.querySelectorAll('button[id^="btn"]'))b.classList.add('tw-legacy-nav');
 const mainButtons={};
+const firstLegacyNavButton=menu.firstElementChild;
 for(const [key,label,route] of [
  ['overview','Overview','dashboard'],['patients','Patients','study'],
  ['worklist','Worklist','tasks'],['reports','Review & reports','review'],
  ['staff','Staff access','staff'],['account','My account','security']]){
  const b=document.createElement('button');b.type='button';b.id='tw-nav-'+key;
  b.className='tw-main-nav';b.textContent=label;b.onclick=()=>{void tab(route);};
- menu.insertBefore(b,menu.firstChild);mainButtons[key]=b;
+ menu.insertBefore(b,firstLegacyNavButton);mainButtons[key]=b;
 }
 const signOut=document.createElement('button');signOut.type='button';
 signOut.id='tw-nav-logout';signOut.textContent='Log out';signOut.className='tw-main-nav secondary';
