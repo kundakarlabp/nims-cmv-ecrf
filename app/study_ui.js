@@ -1296,11 +1296,47 @@ let participantSubject=null,participantContext=null,participantRequest=0,timelin
 const contextBox=document.createElement('section');
 contextBox.id='tw-participant-context';contextBox.className='study-card';
 contextBox.style.cssText='grid-column:2;min-width:0;margin:0;';
-contextBox.innerHTML=choose('Current study participant','tw-context-subject',[])+
+contextBox.innerHTML=
+ '<label>Find patient by CR number, name or Study ID<input id="tw-context-find" type="search" autocomplete="off" placeholder="Enter at least 3 characters"></label>'+
+ '<label>Matching registry records<select id="tw-context-find-results"><option value="">Search to find a patient</option></select></label>'+
+ choose('Current study participant','tw-context-subject',[])+
  '<strong id="tw-context-allocation">Select a participant to view verified allocation.</strong>'+
  '<p id="tw-context-detail" class="hint"></p><div id="tw-context-error" role="alert"></div>'+
  btn('Open patient course','tw-open-course');
 root.insertBefore(contextBox,root.querySelector('.grid'));
+/* The same authoritative registry search is available above every study tab.
+   An explicit match is required; a search never selects the first patient. */
+let contextFindVersion=0,contextFindTimer=null;
+$('tw-context-find').oninput=()=>{
+ const q=value('tw-context-find'),version=++contextFindVersion;
+ clearTimeout(contextFindTimer);
+ $('tw-context-find-results').innerHTML='<option value="">'+
+  (q.length<3?'Enter at least 3 characters':'Searching…')+'</option>';
+ if(q.length<3)return;
+ contextFindTimer=setTimeout(()=>{void task('tw-context-error',async()=>{
+  const rows=await api('/api/patients?limit=100&q='+encodeURIComponent(q));
+  if(version!==contextFindVersion)return;
+  $('tw-context-find-results').innerHTML='<option value="">'+
+   (rows.length?'Choose an exact match':'No matching active registry record')+'</option>'+
+   rows.map(p=>'<option value="'+txt(p.id)+'">'+txt(registryLabel(p))+'</option>').join('');
+  $('tw-context-find-results').value='';
+ });},250);
+};
+$('tw-context-find-results').onchange=()=>{void task('tw-context-error',async()=>{
+ const id=value('tw-context-find-results');
+ if(!id)return;
+ if(activeTab==='entry')await saveDraftNow();
+ await window.choose(id);
+ if(selected!==id)throw Error('Could not confirm patient selection; no entry was changed');
+ // Refresh the active tab from the resolved shared participant context.
+ if(activeTab==='study')await selectEnrollmentPatient();
+ if(activeTab==='pcr')await loadPCR();
+ if(activeTab==='drug')await loadDrug();
+ if(activeTab==='randomization')await loadRandSubject();
+ if(activeTab==='course')await loadClinicalCourse();
+ $('tw-context-find').value='';
+ $('tw-context-find-results').innerHTML='<option value="">Patient selected · search again to switch</option>';
+});};
 css.textContent+='@media(max-width:860px){#workspace>#tw-participant-context,#workspace>.panel{grid-column:1!important}}';
 panel('course','Patient course',
  '<p class="hint">Dated source records supplement the approved CRF. Record each changed regimen separately; distinguish orders from doses actually given. Blank results remain unknown.</p>'+

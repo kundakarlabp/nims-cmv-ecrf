@@ -7,7 +7,7 @@ const base=path.join(__dirname,'..');
 const subjects=[1,2].map(id=>({id,study_code:'TEST-STUDY-'+id,screening_code:'TEST-SCREEN-'+id,
  status:'enrolled',enrolled_on:'2026-10-02',donor_type:'living',ratg_induction:true,patient_id:'TEST-P-'+id,cr_number:'TEST-CR-'+id}));
 subjects.push({id:3,screening_code:'TEST-SCREEN-3',status:'screened',enrolled_on:null,donor_type:'living',ratg_induction:true,patient_id:'TEST-P-3',cr_number:'TEST-CR-3'});
-const people=[1,2,3].map(id=>({id:'TEST-P-'+id,name:'Synthetic participant '+id,cr_number:'TEST-CR-'+id}));
+const people=[1,2,3].map(id=>({id:'TEST-P-'+id,name:'Synthetic participant '+id,cr_number:'TEST-CR-'+id,study_id:id<3?'TEST-STUDY-'+id:null}));
 const f=(label,type='text',required=false)=>({label,type,required});
 const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplementary:true,fields:{
  start_on:f('Effective date','date',true),source_reference:f('Source','text',true),
@@ -120,6 +120,20 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
    const ids=Array.from(document.querySelectorAll('[id]'),el=>el.id);
    return ids.filter((id,index)=>ids.indexOf(id)!==index);
   }),[],'Every page and control ID must be unique; Enrollment must not collide with registry Study ID');
+  // Global clinical patient search remains accessible from every tab and
+  // resolves one exact record by CR, name or assigned Study ID.
+  for(const query of ['TEST-CR-2','Synthetic participant 2','TEST-STUDY-2']){
+   await page.fill('#tw-context-find',query);
+   await page.waitForFunction(()=>$('tw-context-find-results').querySelector('option[value="TEST-P-2"]'));
+   assert.equal(await page.locator('#tw-context-find-results option[value="TEST-P-2"]').count(),1);
+  }
+  await page.selectOption('#tw-context-find-results','TEST-P-2');
+  await page.waitForFunction(()=>$('tw-context-subject').value==='2'&&selected==='TEST-P-2');
+  assert.equal(await page.inputValue('#tw-patient'),'TEST-P-2');
+  await page.evaluate(async()=>{await tab('pcr');});
+  await page.waitForFunction(()=>$('tw-pcr-subject').value==='2');
+  await page.evaluate(async()=>{await tab('crf');});
+  await page.waitForFunction(()=>$('tw-crf-subject').value==='2');
   await page.selectOption('#tw-context-subject','1');
   await page.waitForFunction(()=>$('tw-context-allocation').textContent.includes('450 mg'));
   assert.equal(await page.evaluate(()=>selected),'TEST-P-1');
