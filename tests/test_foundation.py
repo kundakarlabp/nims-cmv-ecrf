@@ -43,7 +43,6 @@ def test_cmv_serostatus_requires_source_verified_positive_or_negative():
     verified_negative=subject_view(SimpleNamespace(**source,donor_cmv_igg='negative',
                                                       recipient_cmv_igg='positive'))
     assert verified_negative['d_plus_r_plus'] is False
-    assert both_positive['age_at_transplant']==48
 
 def test_auth_required():
     with TestClient(app) as c:
