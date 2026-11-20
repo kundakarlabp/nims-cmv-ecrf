@@ -195,7 +195,7 @@ def execute(name,args,u,s):
     if name=='connection_status':
         return {'connected':True,'actor_id':u.user_id,'account':u.name,
                 'database':'existing dashboard database','transport':'streamable-http',
-                'randomization_tool_available':False}
+                'randomization_tool_available':True}
     if name=='search_patient':return service.find_registry_patients(q=args.query,u=u,s=s)
     if name=='read_patient':return service.read_registry_patient(args.patient_id,u=u,s=s)
     if name=='search_subject':return service.search_subjects(q=args.query,u=u,s=s)
@@ -212,7 +212,7 @@ def execute(name,args,u,s):
     if name=='patient_audit_history':return dashboard_main.audit_history(args.patient_id,u=u,s=s)
     if name=='followup_due':return dashboard_main.due(u=u,s=s)
     if name=='valganciclovir_dose_preview':return dashboard_main.dose_preview(args.data,u=u)
-    if name=='action_worklist':return trial_api.action_worklist(u=u,s=s)
+    if name=='action_worklist':return trial_api.action_worklist(limit=80,u=u,s=s)
     if name=='participant_context':return trial_crf.subject_context(args.subject_id,u=u,s=s)
     if name=='participant_timeline':return trial_crf.clinical_timeline(args.subject_id,u=u,s=s)
     if name=='eligibility_schema':return trial_api.eligibility_schema(u=u)
