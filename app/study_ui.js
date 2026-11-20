@@ -1454,7 +1454,7 @@ $('tw-context-find-results').onchange=()=>{void task('tw-context-error',async()=
  await window.choose(id);
  if(selected!==id)throw Error('Could not confirm patient selection; no entry was changed');
  // Refresh the active tab from the resolved shared participant context.
- if(activeTab==='study')await selectEnrollmentPatient();
+ if(activeTab==='study'){await selectEnrollmentPatient();await refreshInlineRandomization();}
  if(activeTab==='pcr')await loadPCR();
  if(activeTab==='drug')await loadDrug();
  if(activeTab==='randomization')await loadRandSubject();
@@ -1569,6 +1569,7 @@ $('tw-context-subject').onchange=()=>{
  await selectParticipantSubject(n('tw-context-subject'));
  if(activeTab==='study'){
   await selectEnrollmentPatient();
+  await refreshInlineRandomization();
   window.dispatchEvent(new Event('cmv:workflow-updated'));
  }
  if(activeTab==='crf'){crfRender();await populateCrfLinkedIdentifiers();await crfRestoreDraft();await loadCrfEntries();}
