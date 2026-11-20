@@ -48,7 +48,7 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
    else if(p==='/api/trial/screening'){
     const data=route.request().postDataJSON();writes.push({p,body:data});
     const person=people.find(x=>x.id===data.patient_id);
-    result={id:4,patient_id:person.id,cr_number:person.cr_number,screening_code:'TEST-SCREEN-4',status:'screened',enrolled_on:null,donor_type:data.donor_type,ratg_induction:data.ratg_induction};subjects.push(result);
+    result={id:4,patient_id:person.id,cr_number:person.cr_number,screening_code:'TEST-SCREEN-4',status:'screened',enrolled_on:null,donor_type:data.donor_type,ratg_induction:data.ratg_induction,consent_recorded:!!data.consent_on,donor_cmv_igg:data.donor_cmv_igg,recipient_cmv_igg:data.recipient_cmv_igg};subjects.push(result);
    }else if(p.endsWith('/eligibility')){
     const id=Number(p.split('/')[4]);
     if(method==='PUT'){
@@ -65,7 +65,16 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
     const subject=subjects.find(x=>x.id===id);Object.assign(subject,{status:'enrolled',study_code:'NCMV001',enrolled_on:data.enrolled_on});
     people.find(x=>x.id===subject.patient_id).study_id=subject.study_code;
     result={subject,study_id:subject.study_code,pcr_orders:7};
-   }else if(p==='/api/trial/action-worklist')result={as_of:'2026-11-18',total:1,counts:{'Enrollment pending':1},
+   }else if(p==='/api/trial/overview')result={screened:3,ever_enrolled:2,randomized:2,verified_protocol_pcr_slots:1,
+      pcr:{},drug_accountability:{}};
+   else if(p==='/api/trial/crf/completeness')result={visit_completion:Object.fromEntries(
+      [1,2,3,4,6,9,12].map(m=>[m,{submitted:0,verified:0,needs_correction:0}]))};
+   else if(p==='/api/review-queue')result=[{entry_id:'TEST-ENTRY-1',study_id:'TEST-STUDY-1',
+      kind:'admission',occurred_on:'2026-10-02',revision:1,review_status:'verified',payload:{ward:'Nephrology'}}];
+   else if(p==='/api/trial/crf/review-queue')result=[{id:1,subject_id:1,section:'C_baseline',
+      occurrence_key:'single',occurred_on:'2026-10-02',revision:1,review_status:'pending',
+      payload:{weight_kg:65}}];
+   else if(p==='/api/trial/action-worklist')result={as_of:'2026-11-18',total:1,counts:{'Enrollment pending':1},
     actions:[{category:'Enrollment pending',study_code:'TEST-SCREEN-3',detail:'Finish enrollment',
      patient_id:'TEST-P-3',subject_id:3,route:'study',priority:1,target_on:null}]};
    else if(p==='/healthz')result={ok:true,app_commit:'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',service:'clinical'};
@@ -126,6 +135,9 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
    $('currentRole').textContent='nurse';applyRoleUI('nurse');await tab('study');
   });
   assert.deepEqual(errors,[],'Actual deferred script must initialize without JavaScript errors');
+  assert.equal(await page.locator('#tw-nav-logout').count(),1,'Only one main Log out control');
+  assert.equal(await page.locator('#tw-workspace-main').count(),1,'Sections are grouped in one workspace column');
+  assert.equal(await page.isVisible('#tw-header-search'),true,'Global search is in the header');
   assert.deepEqual(await page.evaluate(()=>{
    const ids=Array.from(document.querySelectorAll('[id]'),el=>el.id);
    return ids.filter((id,index)=>ids.indexOf(id)!==index);
@@ -144,6 +156,9 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   await page.waitForFunction(()=>$('tw-pcr-subject').value==='2');
   await page.evaluate(async()=>{await tab('crf');});
   await page.waitForFunction(()=>$('tw-crf-subject').value==='2');
+  // The secondary linked-study selector is intentionally behind an optional
+  // disclosure; routine users select patients through the header search.
+  await page.locator('#tw-record-switch summary').click();
   await page.selectOption('#tw-context-subject','1');
   await page.waitForFunction(()=>$('tw-context-allocation').textContent.includes('450 mg'));
   assert.equal(await page.evaluate(()=>selected),'TEST-P-1');
@@ -259,6 +274,7 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   await page.click('#tw-screen-save');
   await page.waitForFunction(()=>$('tw-checklist-subject').value==='4'&&$('tw-screened').value==='4');
   assert.match(await page.locator('#tw-checklist-subject option:checked').textContent(),/TEST-CR-4/);
+  await page.waitForFunction(()=>$('tw-progress-step-2').open);
   for(const [id,v] of Object.entries({'tw-age':'50','tw-anc':'3000','tw-platelets':'180000','tw-hb':'11','tw-crcl':'68',}))await page.fill('#'+id,v);
   await page.fill('#tw-cbc-date','2026-10-02');await page.fill('#tw-review-on','2026-10-02');
   for(const el of await page.locator('[data-eligibility]').all())await el.selectOption(await el.getAttribute('data-eligibility')==='inclusion'?'true':'false');
@@ -321,6 +337,22 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   assert.equal(await page.isDisabled('#tw-rand-assign'),true);
   // Visible phone navigation and a real worklist route, not merely CSS screenshots.
   await page.setViewportSize({width:393,height:852});
+  await page.evaluate(async()=>{await tab('review');});
+  await page.waitForFunction(()=>document.querySelectorAll('#tw-report-metrics .tw-metric').length===4);
+  assert.equal(await page.isVisible('#tw-directory-panel'),false,'Review page must not show legacy registry sidebar');
+  assert.match(await page.textContent('#tw-report-visits'),/Month 12/);
+  assert.match(await page.textContent('#reviewResults'),/Study eCRF verification/);
+  assert.equal(await page.locator('#reviewResults pre').count(),0,'No raw JSON dump in reports');
+  await page.evaluate(async()=>{await tab('pcr');});
+  assert.equal(await page.isVisible('#tw-pcr-empty'),false,'Enrolled patient PCR remains available');
+  await page.selectOption('#tw-context-subject','3');
+  await page.waitForFunction(()=>$('tw-context-subject').value==='3');
+  await page.evaluate(async()=>{await tab('pcr');});
+  assert.equal(await page.isVisible('#tw-pcr-empty'),true,'Screened-only patient shows helpful PCR empty state');
+  await page.evaluate(async()=>{await tab('study');});
+  assert.equal(await page.locator('#tw-track-1').count(),1,'Four-stage progress track is visible');
+  assert.equal(await page.locator('#tw-next-steps li').count(),3,'Protocol next-step information remains contextual');
+  await page.evaluate(async()=>{await tab('tasks');});
   await page.evaluate(async()=>{await tab('tasks');});
   await page.waitForFunction(()=>$('tw-task-items').textContent.includes('TEST-SCREEN-3'));
   assert.equal(await page.isVisible('#tw-mobile-menu'),true);
@@ -339,9 +371,9 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   await page.waitForFunction(()=>activeTab==='study'&&selected==='TEST-P-3');
   // Layout must remain within the mobile viewport; data tables scroll inside
   // their own containers, never force the whole clinical page horizontally.
-  for(const width of [360,393,768]){
+  for(const width of [360,393,768,980,1180,1440]){
    await page.setViewportSize({width,height:852});
-   for(const section of ['dashboard','tasks','study','pcr','drug','crf','randomization','course']){
+   for(const section of ['dashboard','tasks','study','pcr','drug','crf','randomization','course','review','registry']){
     await page.evaluate(async name=>{await tab(name);},section);
     const overflow=await page.evaluate(()=>document.documentElement.scrollWidth-innerWidth);
     assert.ok(overflow<=2,'Horizontal page overflow '+overflow+'px in '+section+' at '+width+'px');
