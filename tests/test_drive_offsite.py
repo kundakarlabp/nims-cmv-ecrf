@@ -77,9 +77,11 @@ def test_corrupt_google_drive_readback_is_not_accepted(tmp_path, monkeypatch):
             return b""
         if action == "cat":
             return b"unverified wrong remote bytes"
+        if action == "lsjson":
+            return b"[]"
         raise AssertionError(action)
     monkeypatch.setattr(drive, "_rclone", corrupted)
-    with pytest.raises(RuntimeError, match="readback hash mismatch"):
+    with pytest.raises(RuntimeError, match="readback size/hash mismatch"):
         drive.sync_latest(root)
     assert not (root / "backup-state/last_success").exists()
     assert not (root / "backup-state/last_restore").exists()
@@ -115,3 +117,74 @@ def test_pruning_never_removes_unrelated_drive_objects(monkeypatch):
     assert len(removed) == 3
     assert all("clinical-" in name for name in removed)
     assert not any("randomization" in x or "other-project" in x for x in removed)
+
+
+def test_existing_exact_remote_file_is_reused_and_read_back(tmp_path, monkeypatch):
+    root, _, manifest, raw = fixture(tmp_path, monkeypatch)
+    target = "nims_cmv_drive:clinical-" + manifest["id"] + ".tar"
+    calls = []
+    def existing(action, *args):
+        calls.append(action)
+        if action == "lsjson":
+            return json.dumps([{"Name": target.split(":", 1)[1]}]).encode()
+        if action == "cat":
+            assert args[0] == target
+            return raw
+        raise AssertionError("Already existing archive must not be overwritten")
+    monkeypatch.setattr(drive, "_rclone", existing)
+    assert drive.sync_latest(root)
+    assert "copyto" not in calls
+    assert "cat" in calls
+
+
+def test_existing_corrupt_remote_does_not_get_overwritten_or_receipted(tmp_path, monkeypatch):
+    root, _, manifest, _ = fixture(tmp_path, monkeypatch)
+    name = "clinical-" + manifest["id"] + ".tar"
+    def corrupt_existing(action, *args):
+        if action == "lsjson":
+            return json.dumps([{"Name": name}]).encode()
+        if action == "cat":
+            return b"wrong remote content"
+        raise AssertionError("Corrupt existing archive must not be overwritten")
+    monkeypatch.setattr(drive, "_rclone", corrupt_existing)
+    with pytest.raises(RuntimeError, match="readback size/hash mismatch"):
+        drive.sync_latest(root)
+    assert not (root / "backup-state/last_success").exists()
+
+
+def test_existing_local_receipt_cannot_skip_remote_readback(tmp_path, monkeypatch):
+    root, _, manifest, raw = fixture(tmp_path, monkeypatch)
+    folder = root / "backup-state"
+    folder.mkdir()
+    (folder / "last_success").write_text(
+        manifest["stamp"] + " " + manifest["sha256"] +
+        " gdrive:" + drive.FOLDER_ID + ":clinical-" + manifest["id"] + ".tar\n"
+    )
+    remote = {}
+    calls = []
+    def missing_remote(action, *args):
+        calls.append(action)
+        if action == "lsjson":
+            return json.dumps([{"Name": key.split(":", 1)[1]} for key in remote]).encode()
+        if action == "copyto":
+            remote[args[1]] = Path(args[0]).read_bytes()
+            return b""
+        if action == "cat":
+            return remote[args[0]]
+        raise AssertionError(action)
+    monkeypatch.setattr(drive, "_rclone", missing_remote)
+    assert drive.sync_latest(root)
+    assert calls.count("copyto") == 1
+    assert calls.count("cat") == 1
+
+
+def test_ambiguous_duplicate_drive_names_rejected(tmp_path, monkeypatch):
+    root, _, manifest, _ = fixture(tmp_path, monkeypatch)
+    name = "clinical-" + manifest["id"] + ".tar"
+    def duplicate(action, *args):
+        if action == "lsjson":
+            return json.dumps([{"Name": name}, {"Name": name}]).encode()
+        raise AssertionError("No remote archive should be read or overwritten")
+    monkeypatch.setattr(drive, "_rclone", duplicate)
+    with pytest.raises(RuntimeError, match="Ambiguous duplicate"):
+        drive.sync_latest(root)
