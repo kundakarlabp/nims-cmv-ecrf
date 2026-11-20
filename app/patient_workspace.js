@@ -34,6 +34,8 @@ style.textContent=
  '#study .tw-progress-stage[data-step-status="blocked"] .tw-progress-result{color:#b04b33}'+
  '#study .tw-progress-stage>.study-card{border:0;border-radius:0;margin:0;padding:16px 19px}'+
  '#study .tw-progress-stage>.study-card>h3{display:none}'+
+ '#tw-more-screening{margin:12px 0;padding:10px 13px;border:1px solid #e2e8f2;border-radius:9px}'+
+ '#tw-more-screening>summary{cursor:pointer;font-size:13px;font-weight:650;color:#3f5e85}'+
  '#tw-eligibility-fields label{display:grid;grid-template-columns:minmax(0,1fr) minmax(120px,165px);gap:10px;align-items:center;padding:6px 8px;border-bottom:1px solid #e9edf4;margin:0;min-height:48px}'+
  '#tw-eligibility-fields select{width:100%;max-width:165px}'+
  '#study #tw-inline-rand-submit:disabled{background:#c2cedc;cursor:not-allowed}'+
@@ -99,6 +101,21 @@ for(const [index,card] of [...columns.children].entries()){
  steps.push(detail);
 }
 steps[0].open=true;
+// Keep enrollment-critical fields visible; optional source metadata stays
+// accessible without lengthening the routine screening path.
+const moreScreening=document.createElement('details');
+moreScreening.id='tw-more-screening';moreScreening.className='tw-extra-screening';
+const extraHeading=document.createElement('summary');
+extraHeading.textContent='Additional screening details (optional)';
+moreScreening.appendChild(extraHeading);
+const screeningCard=steps[0].querySelector('.study-card');
+const screeningSave=document.getElementById('tw-screen-save');
+screeningCard.insertBefore(moreScreening,screeningSave);
+for(const id of ['tw-pis','tw-consent-language','tw-consent-obtained','tw-initials',
+                 'tw-screen-age','tw-sex','tw-relationship']){
+ const control=document.getElementById(id);
+ if(control?.closest('label'))moreScreening.appendChild(control.closest('label'));
+}
 const register=document.getElementById('tw-register');
 const registerDetails=document.createElement('details');registerDetails.id='tw-register-details';
 const registerSummary=document.createElement('summary');
