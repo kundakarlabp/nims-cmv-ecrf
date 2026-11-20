@@ -1656,6 +1656,24 @@ tab=async function(name){
   await task('tw-course-status',async()=>{await loadSubjects();await loadClinicalCourse();});
  }else{await courseTab(name);if(activeTab!=='course'){$('course').classList.add('hide');$('btncourse').classList.remove('selected');}}
 };
+function clinicalReadableSource(value,depth=0){
+ if(value===null||value===undefined||value==='')return 'Not documented';
+ if(typeof value==='string'){
+  const raw=value.trim();
+  if((raw.startsWith('{')&&raw.endsWith('}'))||(raw.startsWith('[')&&raw.endsWith(']'))){
+   try{const parsed=JSON.parse(raw);if(parsed&&typeof parsed==='object')
+     return clinicalReadableSource(parsed,depth+1);}catch(_ignored){}
+  }
+  return value;
+ }
+ if(Array.isArray(value))return value.map(x=>clinicalReadableSource(x,depth+1)).join('; ');
+ if(typeof value==='object'){
+  if(depth>=4)return 'Additional structured source details retained in the audited entry';
+  return Object.entries(value).filter(([key])=>!key.startsWith('_')).map(([key,v])=>
+   key.replaceAll('_',' ')+': '+clinicalReadableSource(v,depth+1)).join(' · ');
+ }
+ return String(value);
+}
 /* Patient course: independent reads fail gracefully. Never treat a network
    failure as evidence that no clinical records exist. */
 let clinicalCourseRequest=0;
@@ -1702,8 +1720,12 @@ async function loadClinicalCourse(earlier=false){
   '<details class="study-card"><summary>'+txt(row.occurred_on)+
   ' · '+txt(row.title)+' · '+txt(row.review_status)+' · revision '+row.revision+
   '</summary><dl>'+Object.entries(row.payload||{}).filter(([k])=>!k.startsWith('_'))
-    .map(([k,v])=>'<dt>'+txt(row.fields?.[k]?.label||k)+
-    '</dt><dd>'+txt(v===null?'Not documented':typeof v==='object'?JSON.stringify(v):v)+'</dd>')
+    .map(([k,v])=>{
+      const readable=clinicalReadableSource(v);
+      return '<dt>'+txt(row.fields?.[k]?.label||k)+'</dt><dd>'+
+       (readable.length>240?'<details><summary>Read source detail</summary><div class="tw-course-source">'+
+          txt(readable)+'</div></details>':txt(readable))+'</dd>';
+    })
     .join('')+'</dl></details>').join('');
  if(earlier)target.innerHTML=history+cards;
  else target.innerHTML='<p class="hint">'+txt(records.note||'Dated, source-verified records')+'</p>'+
