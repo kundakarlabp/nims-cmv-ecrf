@@ -53,7 +53,8 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
     const id=Number(p.split('/')[4]);
     if(method==='PUT'){
      const data=route.request().postDataJSON();writes.push({p,body:data});
-     eligibility.set(id,{inclusion:data.inclusion,exclusion:data.exclusion,baseline:data,reviewed_on:data.reviewed_on});result={eligible:true};
+     eligibility.set(id,{inclusion:data.inclusion,exclusion:data.exclusion,
+      baseline:{...data,is_eligible:true},reviewed_on:data.reviewed_on});result={eligible:true};
     }else result={eligibility:eligibility.get(id)||null};
    }else if(p.endsWith('/consent-declined')){
     const id=Number(p.split('/')[4]);const subject=subjects.find(x=>x.id===id);
