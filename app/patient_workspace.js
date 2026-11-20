@@ -325,15 +325,75 @@ courseShortcut.className='secondary';courseShortcut.type='button';
 courseShortcut.textContent='Other dated clinical entries';courseShortcut.onclick=()=>{void tab('entry');};
 document.getElementById('course').insertAdjacentElement('afterbegin',courseShortcut);
 
+
+// Compact patient progress indicator, matching the approved screen. The true
+// status is read from existing persisted records; buttons never save automatically.
+const progressTrack=document.createElement('nav');
+progressTrack.id='tw-progress-track';progressTrack.setAttribute('aria-label','Start trial stages');
+const progressLabels=['Screening','Eligibility','Enroll','Randomize'];
+const progressButtons=[];
+for(let i=0;i<4;i++){
+ const b=document.createElement('button');b.type='button';b.id='tw-track-'+(i+1);
+ b.innerHTML='<span>'+(i+1)+'</span><span>'+progressLabels[i]+'</span>';
+ b.onclick=()=>{steps.forEach((step,j)=>{step.open=j===i;});};
+ progressTrack.appendChild(b);progressButtons.push(b);
+}
+study.insertBefore(progressTrack,columns);
+const trialLayout=document.createElement('div');trialLayout.id='tw-trial-layout';
+study.insertBefore(trialLayout,columns);
+const guidance=document.createElement('aside');guidance.id='tw-next-steps';
+guidance.innerHTML='<h3>What happens next</h3><ul>'+
+ '<li id="tw-next-id">Permanent NCMV Study ID generated after confirmed enrollment</li>'+
+ '<li id="tw-next-pcr">Seven CMV PCR targets scheduled from transplant date</li>'+
+ '<li id="tw-next-rand">One irreversible concealed allocation after final confirmation</li></ul>';
+trialLayout.append(columns,guidance);
+const activity=document.createElement('details');activity.id='tw-activity';
+activity.innerHTML='<summary>Recent activity (audit history)</summary>'+
+ '<div id="tw-activity-rows" aria-live="polite"><p class="hint">Select a patient.</p></div>';
+study.insertBefore(activity,after);
+let auditRequest=0;
+async function loadActivity(){
+ const id=selected,request=++auditRequest,target=document.getElementById('tw-activity-rows');
+ if(!id){target.textContent='Select a patient to see recorded changes.';return;}
+ try{
+  const rows=await api('/api/patients/'+encodeURIComponent(id)+'/audit');
+  if(selected!==id||request!==auditRequest)return;
+  target.innerHTML=rows.length?rows.slice(0,12).map(row=>
+   '<div class="tw-activity-line"><strong>'+escapeHTML(String(row.action||'Change').replaceAll('_',' '))+'</strong>'+
+   '<span>'+escapeHTML(String(row.created_at||'').replace('T',' ').slice(0,16))+'</span>'+
+   '<span>'+escapeHTML(String(row.entity_type||'Record'))+'</span></div>').join(''):
+   '<p class="hint">No attributed events recorded yet.</p>';
+ }catch(e){
+  if(selected===id&&request===auditRequest)
+   target.textContent='Activity details are unavailable for this account; the audit record remains on the server.';
+ }
+}
+// The linked study-record picker stays available, but not as a second
+// mandatory patient selection on every clinical page.
+const switchRecord=document.createElement('details');switchRecord.id='tw-record-switch';
+const switchLabel=document.createElement('summary');switchLabel.textContent='Change linked study record';
+switchRecord.appendChild(switchLabel);
+switchRecord.appendChild(document.getElementById('tw-context-subject').closest('label'));
+context.insertBefore(switchRecord,document.getElementById('tw-context-error'));
+const avatar=document.createElement('span');avatar.className='tw-avatar';avatar.setAttribute('aria-hidden','true');
+banner.insertBefore(avatar,banner.firstChild);
+const pcr=document.getElementById('pcr'),emptyPcr=document.createElement('div');
+emptyPcr.id='tw-pcr-empty';emptyPcr.className='study-card hide';
+emptyPcr.innerHTML='<h3>No scheduled PCR available yet</h3>'+
+ '<p class="hint">Select an enrolled patient. Screening records do not have protocol PCR specimens until enrollment assigns a Study ID and the seven targets.</p>'+
+ '<button id="tw-pcr-start" type="button">Open Start Trial</button>';
+pcr.insertBefore(emptyPcr,pcr.children[2]||null);
+document.getElementById('tw-pcr-start').onclick=()=>{void tab('study');};
+
 const previousTab=tab;
 tab=async function(name){
  await previousTab(name);syncNavigation();
- if(activeTab==='study')await updateWorkflow();
+ if(activeTab==='study'){await updateWorkflow();void loadActivity();}
 };
 const previousChoose=window.choose;
 window.choose=async function(id){
  await previousChoose(id);
- if(selected===id){await updatePatientBanner();if(activeTab==='study')await updateWorkflow();}
+ if(selected===id){await updatePatientBanner();if(activeTab==='study'){await updateWorkflow();void loadActivity();}}
 };
 
 let bannerRequest=0,workflowRequest=0,lastPatient=null,lastKey=null;
@@ -385,7 +445,9 @@ async function updateWorkflow(){
   const checked=Boolean(eligibility?.eligibility);
   const randomized=Boolean(clinical.allocation?.randomized);
   const status=[
-   {complete:!!s,blocked:s?.status==='consent_declined',label:s?'Saved':'Not started'},
+   {complete:!!s&&!!s.consent_recorded&&s.status!=='consent_declined',
+    blocked:s?.status==='consent_declined',
+    label:s?.status==='consent_declined'?'Consent declined':s?.consent_recorded?'Consent recorded':s?'Consent pending':'Not started'},
    {complete:eligible,blocked:checked&&!eligible,label:eligible?'Confirmed':checked?'Not eligible':'Pending'},
    {complete:!!s?.enrolled_on,blocked:s?.status==='consent_declined',label:s?.enrolled_on?'Enrolled':'Pending'},
    {complete:randomized,blocked:s?.status==='consent_declined',label:randomized?'Randomized':'Pending'}
@@ -395,6 +457,15 @@ async function updateWorkflow(){
    steps[i].dataset.stepStatus=stage.complete?'complete':stage.blocked?'blocked':'pending';
    document.getElementById('tw-result-'+(i+1)).textContent=stage.label;
   }
+  progressButtons.forEach((b,i)=>{
+   b.classList.toggle('done',status[i].complete);
+   b.classList.toggle('current',!status[i].complete&&!status[i].blocked &&
+     status.slice(0,i).every(x=>x.complete));
+   b.querySelector('span:first-child').textContent=status[i].complete?'✓':String(i+1);
+  });
+  document.getElementById('tw-next-id').classList.toggle('done',!!s?.study_code);
+  document.getElementById('tw-next-pcr').classList.toggle('done',!!s?.enrolled_on);
+  document.getElementById('tw-next-rand').classList.toggle('done',randomized);
   const key=(s?.id||'none')+':'+s?.status+':'+eligible+':'+randomized;
   if(lastPatient!==id||lastKey!==key){
    let next=status.findIndex(x=>!x.complete&&!x.blocked);
@@ -417,6 +488,17 @@ function syncNavigation(){
  banner.classList.toggle('hide',!isPatient);
  context.classList.toggle('hide',!isPatient||!['pi','consultant','scientist','pg','nurse','technician','microbiology','pharmacy','monitor'].includes(document.getElementById('currentRole').textContent.trim()));
  subnav.classList.toggle('hide',!isPatient);
+ directory.classList.toggle('hide',name!=='registry');
+ legacyGrid.classList.add('hide');
+ const enrolledPatient=Boolean(document.getElementById('tw-pcr-subject').value);
+ pcr.classList.toggle('tw-not-enrolled',name==='pcr'&&!enrolledPatient);
+ emptyPcr.classList.toggle('hide',name!=='pcr'||enrolledPatient);
+ const searchHeader=document.getElementById('tw-header-search');
+ if(searchHeader)searchHeader.classList.toggle('hide',root.classList.contains('hide')||!csrf);
+ const toolsHome=document.getElementById('tw-account-links');
+ if(toolsHome)for(const id of ['chatgptConnectionLink','operationsLink']){
+  const link=document.getElementById(id);if(link&&link.parentNode!==toolsHome)toolsHome.appendChild(link);
+ }
  const target=['study','randomization'].includes(name)?'study':
   ['crf','entry'].includes(name)?'course':name==='dose'?'drug':name;
  for(const [key,b] of Object.entries(subButtons))b.classList.toggle('selected',key===target);
