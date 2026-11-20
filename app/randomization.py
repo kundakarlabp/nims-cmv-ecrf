@@ -235,45 +235,74 @@ class RandomizeInput(BaseModel):
     signed_randomization_source_ref:str=Field(min_length=8,max_length=160)
     stratification_verified:Literal[True]
 
-@router.post("/subjects/{subject_id}/assign")
-def assign(subject_id:int,data:RandomizeInput,u:AuthContext=Depends(current),
-           s:Session=Depends(db)):
-    if u.role!="pi" and not u.pi_authorized:raise HTTPException(403,"Only PI may release the next allocation after enrollment")
-    from .trial_api import active_subject, eligible_patient
-    subject=active_subject(s,subject_id)
-    if not subject.enrolled_on or subject.confirmed_by is None:
-        raise HTTPException(409,"PI-approved enrollment required before randomization")
+def _next_slot_for_subject(s:Session,subject,*,lock:bool=False):
+    """Use identical server-side prerequisites for read-only preflight and release.
+
+    Preflight never decrypts or reserves an arm. The release rechecks within
+    its locked transaction; the UI readiness indicator grants no authority.
+    """
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    local_today=datetime.now(ZoneInfo("Asia/Kolkata")).date()
+    if subject.status!="enrolled" or not subject.enrolled_on or subject.confirmed_by is None:
+        raise HTTPException(409,"Approved active enrollment required before randomization")
     if not subject.consent_on or subject.consent_on>subject.enrolled_on:
         raise HTTPException(422,"Signed consent must precede randomization")
     if CLINICAL_MODE:
         from .main import Patient
-        from zoneinfo import ZoneInfo
-        from datetime import datetime
         transplant=s.get(Patient,subject.patient_id).transplant_date
-        local_today=datetime.now(ZoneInfo("Asia/Kolkata")).date()
-        if not transplant or (local_today-transplant).days>10:
-            raise HTTPException(422,"Randomization outside protocol 10-day post-transplant initiation window")
-    eligibility=s.get(TrialEligibility,subject_id)
+        days=(local_today-transplant).days if transplant else None
+        if days is None or not 0<=days<=10:
+            raise HTTPException(422,"Randomization outside protocol day 0–10 after transplantation")
+    eligibility=s.get(TrialEligibility,subject.id)
     if (not eligibility or not eligibility.baseline.get("is_eligible")
         or not all(eligibility.inclusion.values())
         or any(eligibility.exclusion.values())
-        or eligibility.reviewed_on>date.today()):
+        or eligibility.reviewed_on>local_today):
         raise HTTPException(422,"Fresh signed, complete eligibility review required")
-    if allocation_for(s,subject_id):
+    if allocation_for(s,subject.id):
         raise HTTPException(409,"Participant already randomized; never rerandomize")
-    plan=s.scalar(select(RandomizationPlan).where(RandomizationPlan.active.is_(True)).limit(1).with_for_update())
-    if not plan:raise HTTPException(503,"No independently locked allocation sequence")
+    statement=select(RandomizationPlan).where(RandomizationPlan.active.is_(True)).limit(1)
+    if lock:statement=statement.with_for_update()
+    plan=s.scalar(statement)
+    if not plan:raise HTTPException(503,"No locked allocation sequence")
     allocated=s.scalar(select(func.count(RandomizationSlot.id)).where(
         RandomizationSlot.subject_id.is_not(None))) or 0
-    if allocated>=344:raise HTTPException(409,'Protocol recruitment target reached; no further allocation allowed')
+    if allocated>=344:raise HTTPException(409,"Protocol recruitment target reached; no further allocation allowed")
     if not plan_enabled(plan):
         raise HTTPException(403,"Clinical randomization awaits approved release and sequence fingerprint")
     key=stratum(subject)
-    row=s.scalar(select(RandomizationSlot)
+    statement=(select(RandomizationSlot)
         .where(RandomizationSlot.plan_id==plan.id,RandomizationSlot.stratum==key,
                RandomizationSlot.subject_id.is_(None))
-        .order_by(RandomizationSlot.position).limit(1).with_for_update())
+        .order_by(RandomizationSlot.position).limit(1))
+    if lock:statement=statement.with_for_update()
+    row=s.scalar(statement)
     if not row:raise HTTPException(409,"Sequence exhausted in this stratum; refer to statistician")
+    return plan,key,row
+
+@router.get("/subjects/{subject_id}/preflight")
+def randomization_preflight(subject_id:int,u:AuthContext=Depends(current),
+                            s:Session=Depends(db)):
+    """No write, no decrypted arm and no released or future block information."""
+    from .trial_api import find_subject
+    subject=find_subject(s,subject_id)
+    try:
+        _,key,_=_next_slot_for_subject(s,subject)
+    except HTTPException as exc:
+        return {"ready":False,"randomized":bool(allocation_for(s,subject_id)),
+                "study_code":subject.study_code,"reason":str(exc.detail)}
+    return {"ready":True,"randomized":False,"study_code":subject.study_code,
+            "stratum":key,"reason":"Protocol checks passed. Verify signed source and confirm irreversible allocation."}
+
+@router.post("/subjects/{subject_id}/assign")
+def assign(subject_id:int,data:RandomizeInput,u:AuthContext=Depends(current),
+           s:Session=Depends(db)):
+    if u.role!="pi" and not u.pi_authorized:
+        raise HTTPException(403,"Only an authorized clinical workspace account may release an allocation")
+    from .trial_api import active_subject
+    subject=active_subject(s,subject_id)
+    plan,key,row=_next_slot_for_subject(s,subject,lock=True)
     # Verify the sealed assignment *before* consuming the irreversible slot.
     try:
         assigned_arm=cipher().decrypt(row.encrypted_arm.encode("ascii")).decode("ascii")

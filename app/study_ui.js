@@ -177,7 +177,7 @@ panel('randomization','Concealed randomization',
  '<div class="study-card" id="tw-rand-assign-panel"><h3>Release next concealed allocation</h3>'+
  choose('Enrolled participant · CR number / study ID','tw-rand-subject',[])+
  '<div id="tw-rand-subject-status" class="hint">Choose an eligible enrolled subject.</div>'+
- field('Signed randomization source / investigator confirmation','tw-rand-source')+
+ field('Signed investigator authorization / randomization source reference (required)','tw-rand-source')+
  '<label><input type="checkbox" id="tw-rand-eligibility-confirm" style="width:auto"> '+
  'I verified signed consent, complete current eligibility and both stratification factors.</label>'+
  btn('Randomize participant (irreversible)','tw-rand-assign')+
@@ -1185,8 +1185,10 @@ async function loadRandomization(){
  $('tw-rand-assign-panel').classList.toggle('hide',role!=='pi'&&!shared);
  $('tw-rand-registry-panel').classList.toggle('hide',isCustodian);
  $('tw-rand-assign').disabled=true;
- $('tw-rand-source').parentElement.classList.toggle('hide',shared);
- $('tw-rand-eligibility-confirm').parentElement.classList.toggle('hide',shared);
+ // Shared accounts must explicitly provide an actual signed source and
+ // verify eligibility and stratum; never silently synthesize a source.
+ $('tw-rand-source').parentElement.classList.remove('hide');
+ $('tw-rand-eligibility-confirm').parentElement.classList.remove('hide');
  $('tw-rand-custodian-panel').classList.toggle('hide',!isCustodian);
  $('tw-rand-groups-panel').classList.toggle('hide',!isCustodian);
  if(!isCustodian){
@@ -1198,8 +1200,8 @@ async function loadRandomization(){
  $('tw-rand-overview').textContent=
   (r.allocation_management==='owner_managed'?'Owner-managed allocation · no separate custodian approval. ':'')+
   'Sequence: '+(r.sequence_locked?'locked · SHA-256 '+r.sequence_sha256:'not loaded')+
-  ' | Reserved positions: '+r.planned_randomizations+
-  ' | Randomized: '+r.randomized+
+  ' | Sealed capacity across 4 strata: '+r.planned_randomizations+
+  ' | Trial allocation limit: 344 | Already randomized: '+r.randomized+
   ' | Release: '+(r.activation_ready?'configured':'blocked')+
   ' | Mode: '+(r.clinical_mode?'clinical':'test environment');
  if(isCustodian){
@@ -1222,27 +1224,38 @@ async function loadRandSubject(){
  if(searchVersion!==registrySearchRequest||request!==participantRequest||subject!==participantSubject||subject!==n('tw-rand-subject'))return;
  if(Array.from($('tw-rand-patient').options).some(o=>o.value===selected))$('tw-rand-patient').value=selected;
  updateRandomizationProgress();
+ // The server performs identical read-only prerequisite checks for the UI
+ // and for irreversible allocation. No future arm is read or returned.
+ const check=r.randomized?null:await api('/api/trial/randomization/subjects/'+subject+'/preflight');
+ if(searchVersion!==registrySearchRequest||request!==participantRequest||
+    subject!==participantSubject||subject!==n('tw-rand-subject'))return;
  target.textContent=r.randomized?
   'Already randomized · '+r.allocation_code+
     (r.assigned_arm_mg?' · '+r.assigned_arm_mg+' mg nominal':'')+
     '. Repeat randomization is prohibited.':
-  'Not randomized · study ID '+r.study_code+
-  '. Verify signed eligibility, consent and induction/donor type before release.';
- $('tw-rand-assign').disabled=r.randomized;
+  (check.ready?'Ready for signed investigator confirmation · study ID '+r.study_code+
+   ' · '+check.stratum+'. Enter the actual signed source reference and confirm below.':
+   'Not ready · study ID '+r.study_code+' · '+check.reason);
+ $('tw-rand-assign').disabled=r.randomized||!check?.ready;
 }
 $('tw-rand-subject').onchange=()=>{void task('tw-rand-status',loadRandSubject);};
 $('tw-rand-assign').onclick=()=>{void task('tw-rand-status',async()=>{
  const sid=n('tw-rand-subject');
  if(!sid)throw Error('Select an enrolled participant');
- if(!window.currentWorkspaceFullAccess&&!$('tw-rand-eligibility-confirm').checked)
-  throw Error('Check the signed eligibility/stratum confirmation before requesting an allocation');
- const source=window.currentWorkspaceFullAccess?'Named account requested allocation in the dashboard':value('tw-rand-source');
+ if(!$('tw-rand-eligibility-confirm').checked)
+  throw Error('Check the signed eligibility, consent and stratum confirmation before requesting an allocation');
+ const source=value('tw-rand-source');
  if(source.length<8)throw Error('Enter signed source reference (at least 8 characters)');
  if(!confirm($('tw-rand-subject').selectedOptions[0].textContent+'\nPermanently allocate the NEXT concealed assignment in the approved stratum? '+
       'You cannot select or undo this treatment arm.'))return;
- const r=await api('/api/trial/randomization/subjects/'+sid+'/assign',{
-  method:'POST',body:JSON.stringify({investigator_confirmation:true,
-   stratification_verified:true,signed_randomization_source_ref:source})});
+ // Double-taps cannot send concurrent releases from this tab.
+ $('tw-rand-assign').disabled=true;
+ let r;
+ try{
+  r=await api('/api/trial/randomization/subjects/'+sid+'/assign',{
+   method:'POST',body:JSON.stringify({investigator_confirmation:true,
+    stratification_verified:true,signed_randomization_source_ref:source})});
+ }catch(e){await loadRandSubject();throw e;}
  notify('tw-rand-status','Randomization completed: '+r.study_code+
   ' · '+r.allocation_code+' · '+r.assigned_arm_mg+
   ' mg nominal arm. Follow signed renal-adjusted prescription and record allocation code at MSS.');

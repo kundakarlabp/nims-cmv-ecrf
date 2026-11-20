@@ -66,6 +66,10 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
    else if(p==='/api/trial/randomization/readiness')result={sequence_locked:true,activation_ready:true,allocation_management:'owner_managed'};
    else if(p.endsWith('/allocation')){
     const id=Number(p.split('/')[5]);result=allocations.get(id)||{randomized:false,study_code:'TEST-STUDY-'+id};
+   }else if(p.endsWith('/preflight')){
+    const id=Number(p.split('/')[5]);
+    result=allocations.has(id)?{ready:false,randomized:true,reason:'Already randomized'}:
+     {ready:true,randomized:false,study_code:'TEST-STUDY-'+id,stratum:'rATG:living',reason:'Signed confirmation required'};
    }else if(p.endsWith('/assign')){
     const id=Number(p.split('/')[5]);writes.push({p,body:route.request().postDataJSON()});assignedFresh=true;
     result={randomized:true,study_code:'TEST-STUDY-'+id,allocation_code:'TEST-ALLOC-'+id,assigned_arm_mg:'450'};allocations.set(id,result);
@@ -272,10 +276,19 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   await page.click('#tw-enroll-randomize');
   await page.waitForFunction(()=>activeTab==='randomization'&&$('tw-rand-subject').value==='4'&&!$('tw-rand-assign').disabled);
   assert.match(await page.locator('#tw-rand-subject option:checked').textContent(),/TEST-CR-4/);
+  assert.equal(await page.isVisible('#tw-rand-source'),true,'Source field must be visible in owner-managed workspace');
+  assert.equal(await page.isVisible('#tw-rand-eligibility-confirm'),true,'Clinical attestation must remain visible');
+  await page.click('#tw-rand-assign');
+  await page.waitForFunction(()=>$('tw-rand-status').textContent.includes('Check the signed eligibility'));
+  assert.equal(writes.filter(x=>x.p.endsWith('/assign')).length,0,'Unchecked confirmation cannot release allocation');
+  await page.fill('#tw-rand-source','TEST-SIGNED-RAND-SOURCE-4');
+  await page.check('#tw-rand-eligibility-confirm');
   page.once('dialog',dialog=>{assert.match(dialog.message(),/TEST-CR-4/);return dialog.accept();});
   await page.click('#tw-rand-assign');
   await page.waitForFunction(()=>$('tw-context-allocation').textContent.includes('TEST-ALLOC-4')&&$('tw-rand-assign').disabled);
   assert.equal(writes.filter(x=>x.p.endsWith('/assign')).length,1,'Only one explicit allocation request');
+  assert.equal(writes.find(x=>x.p.endsWith('/assign')).body.signed_randomization_source_ref,
+   'TEST-SIGNED-RAND-SOURCE-4','True signed source must be forwarded; no fabricated default');
   assert.ok(writes.some(x=>x.p==='/api/trial/screening'&&x.body.patient_id==='TEST-P-4'));
   assert.ok(writes.some(x=>x.p==='/api/trial/subjects/4/eligibility'));
   assert.ok(writes.some(x=>x.p==='/api/trial/subjects/4/enroll'&&x.body.pcr_anchor_on==='2026-10-01'));
