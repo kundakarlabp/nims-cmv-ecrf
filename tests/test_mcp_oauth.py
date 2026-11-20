@@ -298,6 +298,11 @@ def test_full_dashboard_tools_and_encrypted_drive_transfer(cmv, monkeypatch, tmp
     assert by_name["enroll_participant"]["annotations"]["readOnlyHint"] is False
     assert "change_password" not in by_name and "mfa_setup" not in by_name
     assert "lock_sequence" not in by_name and "generate_sequence" not in by_name
+    connection = rpc(c, token, "connection_status").json()["result"]
+    assert connection["structuredContent"]["randomization_tool_available"] is True
+    worklist = rpc(c, token, "action_worklist").json()["result"]
+    assert not worklist.get("isError"), worklist
+    assert isinstance(worklist["structuredContent"]["actions"], list)
 
     export = tmp_path / "export"
     ack = tmp_path / "ack"
