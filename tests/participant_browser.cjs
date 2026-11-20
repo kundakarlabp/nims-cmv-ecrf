@@ -326,7 +326,7 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   await page.click('#tw-mobile-menu');
   assert.equal(await page.isVisible('#tw-study-navigation'),true);
   assert.equal(await page.getAttribute('#tw-mobile-menu','aria-expanded'),'true');
-  await page.click('#btndashboard');
+  await page.click('#tw-nav-overview');
   await page.waitForFunction(()=>activeTab==='dashboard');
   assert.equal(await page.isVisible('#tw-study-navigation'),false);
   assert.equal(await page.getAttribute('#tw-mobile-menu','aria-expanded'),'false');
@@ -345,7 +345,9 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
     assert.ok(overflow<=2,'Horizontal page overflow '+overflow+'px in '+section+' at '+width+'px');
    }
   }
+  assert.equal(await page.locator('#tw-progress-stage-notfound').count(),0);
+  assert.equal(await page.locator('#tw-progress-step-4').count(),1,'Patient trial workflow has exactly four stages');
   assert.deepEqual(errors,[]);
-  console.log('Real browser passed: scripts, patient identity, source-date autosave, cross-patient draft isolation, allocation persistence, mobile layout and blinded banner');
+  console.log('Real browser passed: patient-centric navigation, in-page allocation, cross-patient draft isolation and mobile layout');
  }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});
