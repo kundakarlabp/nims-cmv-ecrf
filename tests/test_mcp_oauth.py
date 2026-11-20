@@ -445,3 +445,119 @@ def test_oci_operations_deny_non_operator_even_with_read_token(cmv):
             csrf_hash="",
         ))
     assert e.value.status_code == 403
+
+
+def test_nontrial_archive_removes_active_registry_and_preserves_audit(cmv):
+    """Disposable synthetic records only; no clinical records are modified."""
+    from app.main import Patient, Entry, Audit, patient_archived
+    c, csrf, actor = cmv
+    client, form = link(c, csrf)
+    token = c.post('/oauth/token', data=form).json()['access_token']
+    registered = rpc(c, token, 'register_patient', {
+        'data':{'name':'Synthetic archival test','cr_number':'TEST-ARCHIVE-001'},
+        'idempotency_key':'synthetic-archive-register-001','confirm':True,
+    }).json()['result']['structuredContent']['saved']
+    pid=registered['id']
+    visit=rpc(c, token, 'create_registry_entry', {
+        'data':{'identifier':'TEST-ARCHIVE-001','kind':'visit','occurred_on':'2026-11-01',
+                'payload':{'note':'Disposable synthetic archive test'}},
+        'idempotency_key':'synthetic-archive-visit-001','confirm':True,
+    })
+    assert not visit.json()['result'].get('isError')
+    before=c.get('/api/dashboard').json()
+    assert before['patients']==1 and before['entries']==1
+
+    details={'expected_revision':1,'expected_cr_number':'TEST-ARCHIVE-001',
+             'reason':'Remove synthetic connectivity test from active dashboard',
+             'confirm_archive':True}
+    denied=rpc(c, token, 'archive_patient', {
+        'patient_id':pid,'data':details,'idempotency_key':'archive-denied-001',
+        'confirm':False,
+    }).json()['result']
+    assert denied['isError'] is True
+    assert rpc(c,token,'search_patient',{'query':'TEST-ARCHIVE-001'}).json()[
+        'result']['structuredContent']['items']
+
+    wrong=rpc(c,token,'archive_patient',{
+        'patient_id':pid,'data':dict(details,expected_cr_number='WRONG'),
+        'idempotency_key':'archive-wrong-001','confirm':True
+    }).json()['result']
+    assert wrong['isError'] is True
+    assert wrong['structuredContent']['status']==409
+
+    arguments={'patient_id':pid,'data':details,
+               'idempotency_key':'archive-approved-001','confirm':True}
+    saved=rpc(c,token,'archive_patient',arguments).json()['result']
+    assert not saved.get('isError'), saved
+    assert saved['structuredContent']['saved']['archived'] is True
+    assert saved['structuredContent']['readback']['archived'] is True
+    retry=rpc(c,token,'archive_patient',arguments).json()['result']
+    assert retry['structuredContent']['saved']==saved['structuredContent']['saved']
+    assert rpc(c,token,'search_patient',{'query':'TEST-ARCHIVE-001'}).json()[
+        'result']['structuredContent']['items']==[]
+    assert rpc(c,token,'read_patient',{'patient_id':pid}).json()[
+        'result']['structuredContent']['status']==404
+    after=c.get('/api/dashboard').json()
+    assert after['patients']==0 and after['entries']==0
+    assert c.get('/api/review-queue').json()==[]
+
+    with SessionLocal() as s:
+        assert s.get(Patient,pid) is not None
+        assert s.query(Entry).filter(Entry.patient_id==pid).count()==1
+        assert patient_archived(s,pid)
+        markers=s.query(Audit).filter(Audit.patient_id==pid,
+                                     Audit.action=='archive_patient').all()
+        assert len(markers)==1 and markers[0].actor_id==actor
+
+    blocked=rpc(c,token,'create_registry_entry',{
+        'data':{'identifier':'TEST-ARCHIVE-001','kind':'visit','occurred_on':'2026-11-02',
+                'payload':{'note':'Forbidden archived entry'}},
+        'idempotency_key':'archive-blocked-new-001','confirm':True
+    }).json()['result']
+    assert blocked['isError'] is True
+    assert blocked['structuredContent']['status']==404
+
+
+def test_screened_participant_cannot_be_archived(cmv):
+    from datetime import date
+    from app.main import Patient
+    from app.trial_models import TrialSubject
+    c,csrf,actor=cmv
+    client,form=link(c,csrf)
+    token=c.post('/oauth/token',data=form).json()['access_token']
+    with SessionLocal() as s:
+        p=Patient(name='Synthetic already screened',cr_number='TEST-ARCHIVE-SCREEN',
+                  created_by=actor)
+        s.add(p);s.flush();pid=p.id
+        s.add(TrialSubject(patient_id=pid,screening_code='NCMV-S-00300',
+            screening_on=date(2026,11,19),status='screened',
+            donor_cmv_igg='positive',recipient_cmv_igg='positive',
+            donor_type='living',ratg_induction=True,created_by=actor))
+        s.commit()
+    request={'patient_id':pid,'data':{
+        'expected_revision':1,'expected_cr_number':'TEST-ARCHIVE-SCREEN',
+        'reason':'Attempt to archive screened participant for test',
+        'confirm_archive':True},
+        'idempotency_key':'archive-reject-screened-001','confirm':True}
+    attempt=rpc(c,token,'archive_patient',request).json()['result']
+    assert attempt['isError'] is True
+    assert attempt['structuredContent']['status']==409
+    assert len(rpc(c,token,'search_patient',{'query':'TEST-ARCHIVE-SCREEN'}).json()[
+        'result']['structuredContent']['items'])==1
+
+
+def test_archive_denies_unprivileged_role_and_retains_existing_data(cmv):
+    from app.main import AuthContext
+    from app.assistant_api import RegistryArchiveInput, archive_registry_patient
+    from fastapi import HTTPException
+    c,csrf,actor=cmv
+    with SessionLocal() as s:
+        with pytest.raises(HTTPException) as error:
+            archive_registry_patient('synthetic-id',
+                RegistryArchiveInput(expected_revision=1,
+                    expected_cr_number='TEST-ARCHIVE',
+                    reason='Synthetic unauthorized archive attempt',
+                    confirm_archive=True),
+                u=AuthContext(user_id=actor,role='pg',name='Synthetic PG',
+                              csrf_hash=''),s=s)
+        assert error.value.status_code==403
