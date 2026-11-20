@@ -233,6 +233,32 @@ body>header.tw-app-header{display:grid;grid-template-columns:minmax(205px,1fr) m
  #reviewResults .tw-review-fields{grid-template-columns:1fr}
 }
 `;
+
+style.textContent+=`
+#pcr.tw-not-enrolled>*:not(h2):not(.hint):not(#tw-pcr-empty):not(#tw-pcr-status){display:none!important}
+#pcr #tw-pcr-empty{padding:18px;border:1px solid #dbe6f3;border-radius:12px;background:#f6f9ff;margin:8px 0}
+#pcr #tw-pcr-empty h3{margin:0 0 7px}
+.tw-clinical-section{border:1px solid #e1e8f2;border-radius:11px;margin:10px 0;overflow:hidden;background:#fff;min-width:0}
+.tw-clinical-section>summary{padding:12px 14px;cursor:pointer;background:#f6f8fd;
+ color:#314d73;font-size:13px;font-weight:700;list-style:revert}
+.tw-clinical-section>.study-card{margin:0;border:0;box-shadow:none}
+#drug>.study-columns,#pcr>.study-columns{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+#drug>.study-columns .tw-clinical-section,#pcr>.study-columns .tw-clinical-section{align-self:start;margin:0}
+#tw-advanced-payload{max-width:100%;margin:9px 0}
+#tw-advanced-payload #advancedPayload{padding:8px 12px}
+#course #tw-course-actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}
+#course #tw-course-actions button{white-space:normal;text-align:left;padding:9px 11px;margin:0;font-size:12px}
+#course #tw-course-records>.study-card{margin:9px 0}
+#course #tw-course-records summary{cursor:pointer}
+#course #tw-course-records dl{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+#course #tw-course-records dt{font-size:11px;color:#536988}
+#course #tw-course-records dd{margin:0;overflow-wrap:anywhere;font-size:12px}
+@media(max-width:1250px){#tw-workspace-main #tw-participant-context{grid-column:1!important}}
+@media(max-width:750px){
+ #drug>.study-columns,#pcr>.study-columns{grid-template-columns:minmax(0,1fr)}
+ #course #tw-course-actions{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+`;
 document.head.appendChild(style);
 
 // Legacy route buttons retain their IDs and DOM state for the existing router.
@@ -378,6 +404,23 @@ context.insertBefore(switchRecord,document.getElementById('tw-context-error'));
 const avatar=document.createElement('span');avatar.className='tw-avatar';avatar.setAttribute('aria-hidden','true');
 banner.insertBefore(avatar,banner.firstChild);
 const pcr=document.getElementById('pcr'),emptyPcr=document.createElement('div');
+function disclosure(card){
+ const heading=card.querySelector('h3');
+ if(!heading)return;
+ const wrap=document.createElement('details');wrap.className='tw-clinical-section';
+ const summary=document.createElement('summary');summary.textContent=heading.textContent;
+ card.parentNode.insertBefore(wrap,card);
+ wrap.append(summary,card);heading.classList.add('hide');
+}
+for(const card of [...pcr.querySelectorAll('section.study-card')])disclosure(card);
+const drug=document.getElementById('drug');
+for(const card of [...drug.querySelectorAll('section.study-card')])disclosure(card);
+const genericPayload=document.getElementById('advancedPayload');
+const payloadDetails=document.createElement('details');
+payloadDetails.className='tw-clinical-section';payloadDetails.id='tw-advanced-payload';
+const payloadSummary=document.createElement('summary');payloadSummary.textContent='Advanced structured data (optional)';
+genericPayload.parentNode.insertBefore(payloadDetails,genericPayload);
+payloadDetails.append(payloadSummary,genericPayload);
 emptyPcr.id='tw-pcr-empty';emptyPcr.className='study-card hide';
 emptyPcr.innerHTML='<h3>No scheduled PCR available yet</h3>'+
  '<p class="hint">Select an enrolled patient. Screening records do not have protocol PCR specimens until enrollment assigns a Study ID and the seven targets.</p>'+
@@ -451,6 +494,7 @@ async function loadReview(){
   (crfs?reviewGroup(crfs,'Study eCRF verification',false):
    '<p class="hint">eCRF review records are unavailable for this account.</p>');
 }
+window.loadReview=loadReview;
 document.getElementById('tw-report-reload').onclick=()=>{void loadReview();};
 document.getElementById('reviewResults').addEventListener('click',e=>{
  const b=e.target.closest('button[data-review-crf]');if(!b)return;
