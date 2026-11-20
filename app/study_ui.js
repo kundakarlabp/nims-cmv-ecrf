@@ -1557,7 +1557,12 @@ async function selectParticipantSubject(id){
  }catch(e){if(request===participantRequest){clearParticipant();$('tw-context-error').textContent=e.message;}throw e;}
  return request===participantRequest;
 }
-$('tw-context-subject').onchange=()=>{void task('tw-context-error',async()=>{
+$('tw-context-subject').onchange=()=>{
+ // Invalidate old-patient procedure buttons before asynchronous context reads.
+ resetPCRControls();resetDrugControls();
+ $('tw-inline-rand-submit').disabled=true;
+ $('tw-rand-assign').disabled=true;
+ const switchPromise=task('tw-context-error',async()=>{
  const previous=participantSubject;
  try{if(activeTab==='crf')await crfSaveDraft();if(activeTab==='entry')await saveDraftNow();}
  catch(e){$('tw-context-subject').value=previous?String(previous):'';throw e;}
@@ -1571,7 +1576,12 @@ $('tw-context-subject').onchange=()=>{void task('tw-context-error',async()=>{
  if(activeTab==='drug')await loadDrug();
  if(activeTab==='randomization')await loadRandSubject();
  if(activeTab==='course')await loadClinicalCourse();
-});};
+ });
+ window.cmvPatientContextSwitch=switchPromise;
+ void switchPromise.finally(()=>{
+  if(window.cmvPatientContextSwitch===switchPromise)window.cmvPatientContextSwitch=null;
+ });
+};
 const participantChoose=window.choose;
 window.choose=async function(id){
  if(activeTab==='crf')try{await crfSaveDraft();}catch(e){error('tw-crf-status',e);return;}
