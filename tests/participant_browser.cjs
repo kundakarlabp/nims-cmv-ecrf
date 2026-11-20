@@ -33,6 +33,7 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
    const url=new URL(route.request().url());const p=url.pathname;
    if(p==='/')return route.fulfill({contentType:'text/html',body:fs.readFileSync(path.join(base,'app/ui.html'),'utf8')});
    if(p==='/study_ui.js')return route.fulfill({contentType:'application/javascript',body:fs.readFileSync(path.join(base,'app/study_ui.js'),'utf8')});
+   if(p==='/patient_workspace.js')return route.fulfill({contentType:'application/javascript',body:fs.readFileSync(path.join(base,'app/patient_workspace.js'),'utf8')});
    const method=route.request().method();let result={};
    if(p==='/api/session'){
     if(!signedIn)return route.fulfill({status:401,contentType:'application/json',body:JSON.stringify({detail:'Login required'})});
@@ -277,17 +278,17 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   await page.waitForFunction(()=>$('tw-context-allocation').textContent.includes('NCMV001'));
   assert.match(await page.textContent('#tw-assigned-study-id'),/Study ID: NCMV001/);
   assert.equal(people.find(x=>x.id==='TEST-P-4').study_id,'NCMV001');
-  await page.waitForFunction(()=>activeTab==='randomization'&&$('tw-rand-subject').value==='4'&&!$('tw-rand-assign').disabled);
-  assert.match(await page.locator('#tw-rand-subject option:checked').textContent(),/TEST-CR-4/);
+  await page.waitForFunction(()=>activeTab==='study'&&!$('tw-inline-rand-submit').disabled);
+  assert.equal(await page.isVisible('#tw-inline-rand-confirm'),true,'Clinical attestation must remain visible on the enrollment screen');
   assert.equal(await page.locator('#tw-rand-source').count(),0,'No extra reference field is required');
-  assert.equal(await page.isVisible('#tw-rand-eligibility-confirm'),true,'Clinical attestation must remain visible');
-  await page.click('#tw-rand-assign');
-  await page.waitForFunction(()=>$('tw-rand-status').textContent.includes('Check the signed eligibility'));
+  await page.click('#tw-inline-rand-submit');
+  await page.waitForFunction(()=>$('tw-status').textContent.includes('Confirm the signed consent'));
   assert.equal(writes.filter(x=>x.p.endsWith('/assign')).length,0,'Unchecked confirmation cannot release allocation');
-  await page.check('#tw-rand-eligibility-confirm');
+  await page.check('#tw-inline-rand-confirm');
   page.once('dialog',dialog=>{assert.match(dialog.message(),/TEST-CR-4/);return dialog.accept();});
-  await page.click('#tw-rand-assign');
-  await page.waitForFunction(()=>$('tw-context-allocation').textContent.includes('TEST-ALLOC-4')&&$('tw-rand-assign').disabled);
+  await page.click('#tw-inline-rand-submit');
+  await page.waitForFunction(()=>$('tw-context-allocation').textContent.includes('TEST-ALLOC-4')&&$('tw-inline-rand-submit').disabled);
+  assert.equal(await page.isVisible('#tw-progress-step-4'),true,'One patient workflow contains all four trial stages');
   assert.equal(writes.filter(x=>x.p.endsWith('/assign')).length,1,'Only one explicit allocation request');
   assert.equal(writes.find(x=>x.p.endsWith('/assign')).body.signed_randomization_source_ref,
    undefined,'No randomization source text is required');
