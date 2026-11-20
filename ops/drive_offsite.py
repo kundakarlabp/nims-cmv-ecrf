@@ -101,20 +101,26 @@ def sync_latest(private_dir):
     if digest != manifest["sha256"]:
         raise RuntimeError("Sealed backup digest mismatch")
 
-    remote_file = REMOTE + ":clinical-" + manifest["id"] + ".tar"
-    receipt_dir = private_dir / "backup-state"
-    receipt = receipt_dir / "last_success"
-    if receipt.is_file():
-        parts = receipt.read_text().split()
-        if len(parts) == 3 and parts[0] == manifest["stamp"] and parts[1] == digest:
-            return True
-
-    _rclone("copyto", bundle, remote_file, "--retries", "3",
-            "--low-level-retries", "6")
-    # Verify the exact remote bytes, not the local upload status.
+    remote_name = "clinical-" + manifest["id"] + ".tar"
+    remote_file = REMOTE + ":" + remote_name
+    # A local success receipt is not proof that the remote object still exists.
+    # Never overwrite a same-named remote archive: inspect and verify it first.
+    entries = json.loads(_rclone("lsjson", REMOTE + ":", "--files-only",
+                                 "--max-depth", "1"))
+    if not isinstance(entries, list):
+        raise RuntimeError("Unexpected Google Drive listing")
+    matches = sum(1 for entry in entries if isinstance(entry, dict)
+                  and entry.get("Name") == remote_name)
+    if matches > 1:
+        raise RuntimeError("Ambiguous duplicate Google Drive backup names")
+    if not matches:
+        _rclone("copyto", bundle, remote_file, "--retries", "3",
+                "--low-level-retries", "6")
+    # Read back the exact Drive bytes on every verification, including retries
+    # and already-acknowledged bundles. Both byte count and SHA-256 must match.
     verified = _rclone("cat", remote_file)
-    if hashlib.sha256(verified).hexdigest() != digest:
-        raise RuntimeError("Google Drive readback hash mismatch")
+    if len(verified) != manifest["size"] or hashlib.sha256(verified).hexdigest() != digest:
+        raise RuntimeError("Google Drive readback size/hash mismatch")
 
     reference = f"gdrive:{FOLDER_ID}:clinical-{manifest['id']}.tar"
     line = f"{manifest['stamp']} {digest} {reference}\n".encode()
