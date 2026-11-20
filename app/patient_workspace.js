@@ -217,8 +217,8 @@ window.finishLogin=async function(result){
  await previousFinish(result);syncNavigation();
  if(selected)await updatePatientBanner();
 };
-const previousRegister=register;
-register=async function(){
+const previousRegister=window.register;
+window.register=async function(){
  const before=selected;await previousRegister();
  if(selected&&selected!==before){await updatePatientBanner();await tab('study');}
 };
