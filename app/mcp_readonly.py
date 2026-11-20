@@ -95,6 +95,9 @@ def backup_status(u):
     backup_kind = _receipt_kind("CLINICAL_BACKUP_RECEIPT_PATH")
     restore_kind = _receipt_kind("CLINICAL_RESTORE_RECEIPT_PATH")
     host_fresh = host.get("fresh") is True
+    drive_current = bool(fresh and backup_kind == "google_drive")
+    drive_configured = (host.get("google_drive_backup_configuration_present")
+                        if host_fresh else None)
     return {
         "checked_at": datetime.now(UTC).isoformat(),
         "clinical_mode": active,
@@ -102,10 +105,12 @@ def backup_status(u):
         "isolated_restore_proof_current_30d": restored,
         "backup_receipt_backend": backup_kind,
         "restore_receipt_backend": restore_kind,
-        "google_drive_receipt_current": bool(fresh and backup_kind == "google_drive"),
+        "google_drive_receipt_current": drive_current,
+        "google_drive_transfer_mode": ("oci_direct" if drive_configured is True else
+                                       "connector_acknowledged" if drive_current else
+                                       "not_ready"),
         "host_report_fresh": host_fresh,
-        "google_drive_configuration_present": host.get("google_drive_backup_configuration_present")
-            if host_fresh else None,
+        "google_drive_configuration_present": drive_configured,
         "google_drive_receipt_present_on_host": host.get("google_drive_backup_receipt_present")
             if host_fresh else None,
         "external_google_drive_listing_checked": False,
@@ -195,7 +200,8 @@ def failure_diagnostics(u):
             codes.append("clinical_maintenance_failed")
         if host.get("timer_active") not in {"active", "activating"}:
             codes.append("auto_deploy_timer_not_active")
-        if host.get("google_drive_backup_configuration_present") is False:
+        if (host.get("google_drive_backup_configuration_present") is False and
+                not b["google_drive_receipt_current"]):
             codes.append("google_drive_not_configured_on_host")
     if b["clinical_mode"]:
         if not b["offsite_backup_fresh_8h"]:

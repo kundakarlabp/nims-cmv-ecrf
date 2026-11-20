@@ -222,6 +222,7 @@ def test_oci_operational_mcp_read_tools_and_freshness(cmv, monkeypatch, tmp_path
     state = rpc(c, token, "backup_status").json()["result"]["structuredContent"]
     assert state["offsite_backup_fresh_8h"] is True
     assert state["google_drive_receipt_current"] is True
+    assert state["google_drive_transfer_mode"] == "oci_direct"
     assert state["external_google_drive_listing_checked"] is False
     assert state["backup_receipt_backend"] == "google_drive"
     assert str(backup) not in str(state)
@@ -233,6 +234,19 @@ def test_oci_operational_mcp_read_tools_and_freshness(cmv, monkeypatch, tmp_path
     assert readiness["clinical_write_ready"] is True
     assert readiness["check_type"] == "read_only_preflight_no_patient_write"
     assert readiness["blocking_reasons"] == []
+
+    monkeypatch.setattr(mcp_readonly, "read_host_status", lambda: {
+        "available": True, "fresh": True, "deployed_commit": commit,
+        "approved_release_commit": commit, "timer_active": "active",
+        "last_update_attempt": "success", "last_deploy_result": "success",
+        "google_drive_backup_configuration_present": False,
+        "google_drive_backup_receipt_present": True,
+        "clinical_transition": "clinical_active",
+    })
+    connector_state = rpc(c, token, "backup_status").json()["result"]["structuredContent"]
+    assert connector_state["google_drive_transfer_mode"] == "connector_acknowledged"
+    diagnostics = rpc(c, token, "failure_diagnostics").json()["result"]["structuredContent"]
+    assert "google_drive_not_configured_on_host" not in diagnostics["codes"]
 
     monkeypatch.setattr(mcp_readonly, "read_host_status", lambda: {
         "available": True, "fresh": False,
