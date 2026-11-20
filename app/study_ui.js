@@ -489,6 +489,15 @@ async function loadDrug(){
 }
 $('tw-pcr-subject').onchange=()=>{void task('tw-pcr-status',loadPCR);};
 $('tw-drug-subject').onchange=()=>{void task('tw-drug-status',loadDrug);};
+/* Keep the next clinical step physically visible, even if async status checks
+   are still completing. This never submits a form or releases an allocation. */
+function openStudyStage(number){
+ const step=$('tw-progress-step-'+number);
+ if(!step)return false; // legacy UI without progressive wrapper
+ for(const item of document.querySelectorAll('#study .tw-progress-stage'))item.open=item===step;
+ step.scrollIntoView({block:'nearest'});
+ return true;
+}
 $('tw-screen-save').onclick=()=>{void task('tw-status',async()=>{
  for(const [id,label] of [['tw-digg','donor CMV IgG'],['tw-rigg','recipient CMV IgG'],['tw-donor','donor type']])
    if(!value(id))throw Error('Select the source-verified '+label+'; an unassessed default is not permitted');
@@ -506,8 +515,9 @@ $('tw-screen-save').onclick=()=>{void task('tw-status',async()=>{
   eligibility_attested:false})});
  notify('tw-status','Screening code '+r.screening_code+' assigned. Complete the eligibility checklist, then enrollment.');
  await loadSubjects();await selectParticipantSubject(r.id);await selectEnrollmentPatient();
+ openStudyStage(2);
  window.dispatchEvent(new Event('cmv:workflow-updated'));
- $('tw-checklist-subject').scrollIntoView({block:'center'});
+ if(!$('tw-progress-step-2'))$('tw-checklist-subject').scrollIntoView({block:'center'});
 });};
 $('tw-decline-consent').onclick=()=>{void task('tw-status',async()=>{
  const subject=studySubjects.find(x=>x.patient_id===selected&&x.status==='screened');
@@ -532,8 +542,9 @@ $('tw-enroll-save').onclick=()=>{void task('tw-status',async()=>{
  showEnrollmentStudyId();
  await selectParticipantSubject(r.subject.id);
  await refreshInlineRandomization();
+ openStudyStage(4);
  window.dispatchEvent(new Event('cmv:workflow-updated'));
- $('tw-inline-rand-panel').scrollIntoView({block:'center'});
+ if(!$('tw-progress-step-4'))$('tw-inline-rand-panel').scrollIntoView({block:'center'});
 });};
 $('tw-collect-save').onclick=()=>{void task('tw-pcr-status',async()=>{
  requireProcedureSubject('pcr');
@@ -761,8 +772,9 @@ $('tw-checklist-save').onclick=()=>{void task('tw-status',async()=>{
  notify('tw-status',r.eligible?
   'Eligible. Confirm enrollment below to generate the Study ID and proceed to randomization.':
   'Not eligible. Enrollment and randomization are unavailable.');
+ if(r.eligible)openStudyStage(3);
  window.dispatchEvent(new Event('cmv:workflow-updated'));
- if(r.eligible)$('tw-enroll-save').scrollIntoView({block:'center'});
+ if(r.eligible&&!$('tw-progress-step-3'))$('tw-enroll-save').scrollIntoView({block:'center'});
 });};
 $('tw-cbc-date').value=''; // Laboratory source date must be entered explicitly.
 $('tw-review-on').value=today(); // Review is an action performed now.
@@ -1442,7 +1454,7 @@ $('tw-context-find-results').onchange=()=>{void task('tw-context-error',async()=
  await window.choose(id);
  if(selected!==id)throw Error('Could not confirm patient selection; no entry was changed');
  // Refresh the active tab from the resolved shared participant context.
- if(activeTab==='study')await selectEnrollmentPatient();
+ if(activeTab==='study'){await selectEnrollmentPatient();await refreshInlineRandomization();}
  if(activeTab==='pcr')await loadPCR();
  if(activeTab==='drug')await loadDrug();
  if(activeTab==='randomization')await loadRandSubject();
@@ -1545,13 +1557,19 @@ async function selectParticipantSubject(id){
  }catch(e){if(request===participantRequest){clearParticipant();$('tw-context-error').textContent=e.message;}throw e;}
  return request===participantRequest;
 }
-$('tw-context-subject').onchange=()=>{void task('tw-context-error',async()=>{
+$('tw-context-subject').onchange=()=>{
+ // Invalidate old-patient procedure buttons before asynchronous context reads.
+ resetPCRControls();resetDrugControls();
+ $('tw-inline-rand-submit').disabled=true;
+ $('tw-rand-assign').disabled=true;
+ const switchPromise=task('tw-context-error',async()=>{
  const previous=participantSubject;
  try{if(activeTab==='crf')await crfSaveDraft();if(activeTab==='entry')await saveDraftNow();}
  catch(e){$('tw-context-subject').value=previous?String(previous):'';throw e;}
  await selectParticipantSubject(n('tw-context-subject'));
  if(activeTab==='study'){
   await selectEnrollmentPatient();
+  await refreshInlineRandomization();
   window.dispatchEvent(new Event('cmv:workflow-updated'));
  }
  if(activeTab==='crf'){crfRender();await populateCrfLinkedIdentifiers();await crfRestoreDraft();await loadCrfEntries();}
@@ -1559,7 +1577,12 @@ $('tw-context-subject').onchange=()=>{void task('tw-context-error',async()=>{
  if(activeTab==='drug')await loadDrug();
  if(activeTab==='randomization')await loadRandSubject();
  if(activeTab==='course')await loadClinicalCourse();
-});};
+ });
+ window.cmvPatientContextSwitch=switchPromise;
+ void switchPromise.finally(()=>{
+  if(window.cmvPatientContextSwitch===switchPromise)window.cmvPatientContextSwitch=null;
+ });
+};
 const participantChoose=window.choose;
 window.choose=async function(id){
  if(activeTab==='crf')try{await crfSaveDraft();}catch(e){error('tw-crf-status',e);return;}
