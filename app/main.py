@@ -307,6 +307,13 @@ def study_script():
                         headers={'Cache-Control':'no-store, max-age=0',
                                  'Pragma':'no-cache'})
 
+@app.get('/patient_workspace.js')
+def patient_workspace_script():
+    return FileResponse(Path(__file__).parent/'patient_workspace.js',
+                        media_type='application/javascript',
+                        headers={'Cache-Control':'no-store, max-age=0',
+                                 'Pragma':'no-cache'})
+
 @app.get('/healthz')
 def health():
     from .operations import SHA
