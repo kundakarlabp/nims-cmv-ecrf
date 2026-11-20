@@ -324,6 +324,17 @@ style.textContent+=`
 #reviewResults .tw-field-list{margin:5px 0;padding-left:19px;line-height:1.5}
 #reviewResults .tw-review-fields>div dd>details>summary{font-size:12px;cursor:pointer;color:#496d9b}
 `;
+style.textContent+=`
+#course #tw-course-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
+#course .tw-course-group{border:1px solid #e2e8f3;border-radius:10px;
+ background:#fff;overflow:hidden;align-self:start}
+#course .tw-course-group>summary{padding:12px 13px;background:#f6f9fe;cursor:pointer;
+ font-size:13px;color:#34537c;font-weight:700}
+#course .tw-course-group-actions{display:flex;gap:6px;flex-direction:column;padding:9px}
+#course .tw-course-group-actions button{text-align:left;margin:0;padding:10px 12px;min-height:42px}
+#course .tw-course-source{white-space:pre-wrap;overflow-wrap:anywhere;padding:9px;line-height:1.5}
+@media(max-width:750px){#course #tw-course-actions{grid-template-columns:minmax(0,1fr)}}
+`;
 document.head.appendChild(style);
 
 // Legacy route buttons retain their IDs and DOM state for the existing router.
