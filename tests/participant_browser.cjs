@@ -249,6 +249,7 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
    $('tw-assigned-study-id').textContent.includes('pending'));
   assert.match(await page.textContent('#tw-assigned-study-id'),/pending/);
   await page.fill('#tw-screen-date','2026-10-02');await page.fill('#tw-consent-date','2026-10-02');
+  await page.locator('#tw-more-screening summary').click();
   await page.selectOption('#tw-digg','positive');await page.selectOption('#tw-rigg','positive');
   await page.selectOption('#tw-donor','living');await page.selectOption('#tw-relationship','living_related');
   await page.selectOption('#tw-consent-language','English');
