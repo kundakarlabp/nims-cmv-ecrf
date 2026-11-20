@@ -158,7 +158,7 @@ def test_existing_local_receipt_cannot_skip_remote_readback(tmp_path, monkeypatc
     folder.mkdir()
     (folder / "last_success").write_text(
         manifest["stamp"] + " " + manifest["sha256"] +
-        " gdrive:" + drive.FOLDER_ID + ":clinical-" + manifest["id"] + ".tar\\n"
+        " gdrive:" + drive.FOLDER_ID + ":clinical-" + manifest["id"] + ".tar\n"
     )
     remote = {}
     calls = []
