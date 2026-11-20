@@ -122,9 +122,10 @@ def test_password_team_workspace_keeps_authentication_and_removes_clinical_role_
         assert 'assigned_arm_mg' not in before.json() and 'position' not in before.json()
         allocation=nurse.post(f'/api/trial/randomization/subjects/{sid}/assign',headers=h,json={
             'investigator_confirmation':True,'stratification_verified':True,
-            'signed_randomization_source_ref':'Named account dashboard request'})
+            })
         assert allocation.status_code==200,allocation.text
         assert allocation.json()['assigned_arm_mg'] in ('450','900')
+        assert allocation.json()['allocation_code'].startswith('NCMV-R-')
         after=nurse.get(f'/api/trial/randomization/subjects/{sid}/preflight')
         assert after.status_code==200 and after.json()['ready'] is False
         assert after.json()['randomized'] is True
@@ -1451,3 +1452,50 @@ def test_shared_registry_cr_lookup_before_study_id_exists(monkeypatch,role):
         assert matches[0]['cr_number']=='TEST-REGISTRY-UNENROLLED'
         assert staff.get('/api/patients/'+pid).json()['patient']['name']=='Synthetic registry lookup'
         assert staff.get('/api/trial/crf/patients/'+pid+'/context').json()['subject'] is None
+
+
+def test_screened_consent_declined_is_retained_but_never_enrolled_or_randomized():
+    """No patient record is deleted; a missing ICF cannot become eligible by clicking."""
+    from app.main import Audit
+    with TestClient(app) as admin:
+        h=auth(admin)
+        p=admin.post('/api/patients',headers=h,json={
+            'name':'Synthetic declined screening','cr_number':'TEST-NOCONSENT-001',
+            'transplant_date':'2026-10-01'})
+        assert p.status_code==200,p.text
+        pid=p.json()['id']
+        assert admin.post('/api/users',headers=h,json={
+            'username':'declinescreener','display_name':'Synthetic source screener',
+            'role':'scientist','password':'SyntheticScreenPassword123!'}).status_code==200
+        assert admin.post('/api/users',headers=h,json={
+            'username':'declinepi','display_name':'Synthetic protocol investigator',
+            'role':'pi','password':'SyntheticDeclinePiPassword123!'}).status_code==200
+    with TestClient(app) as scientist:
+        h=auth(scientist,'declinescreener','SyntheticScreenPassword123!')
+        screen=scientist.post('/api/trial/screening',headers=h,json={
+            'patient_id':pid,'screening_on':'2026-10-02',
+            'donor_cmv_igg':'unknown','recipient_cmv_igg':'unknown',
+            'donor_type':'living','ratg_induction':None})
+        assert screen.status_code==200,screen.text
+        sid=screen.json()['id']
+        assert screen.json()['study_code'] is None
+        denied=scientist.post(f'/api/trial/subjects/{sid}/consent-declined',
+            headers=h,json={'confirmed':True})
+        assert denied.status_code==200,denied.text
+        assert denied.json()['status']=='consent_declined'
+        assert scientist.post(f'/api/trial/subjects/{sid}/consent-declined',
+            headers=h,json={'confirmed':True}).status_code==409
+    with TestClient(app) as pi:
+        h=auth(pi,'declinepi','SyntheticDeclinePiPassword123!')
+        assert pi.post(f'/api/trial/subjects/{sid}/enroll',headers=h,json={
+            'enrolled_on':'2026-10-03','pcr_anchor_on':'2026-10-01',
+            'pcr_anchor_basis':'transplant_date','protocol_reference':'protocol-v5',
+            'reviewed_eligibility_and_consent':True,'approved_visit_anchor':True}).status_code==409
+        assert pi.post(f'/api/trial/randomization/subjects/{sid}/assign',headers=h,json={
+            'investigator_confirmation':True,'stratification_verified':True}).status_code==409
+        assert pi.get(f'/api/trial/subjects/{sid}').json()['status']=='consent_declined'
+        assert pi.get('/api/patients/'+pid).json()['patient']['study_id'] is None
+    with SessionLocal() as db_session:
+        events=db_session.scalars(select(Audit).where(
+            Audit.action=='consent_declined',Audit.entity_id==str(sid))).all()
+        assert len(events)==1 and events[0].patient_id==pid
