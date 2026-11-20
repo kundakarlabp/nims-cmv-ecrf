@@ -599,7 +599,7 @@ window.choose=async function(id){
  if(selected===id){await updatePatientBanner();if(activeTab==='study'){await updateWorkflow();void loadActivity();}}
 };
 
-let bannerRequest=0,workflowRequest=0,lastPatient=null,lastKey=null;
+let bannerRequest=0,workflowRequest=0,lastPatient=null,lastKey=null,lastHistoricalState=null;
 async function updatePatientBanner(){
  const id=selected,request=++bannerRequest;
  if(!id){
@@ -623,8 +623,9 @@ async function updatePatientBanner(){
   document.getElementById('tw-banner-name').textContent=p.name||'Patient';
   document.getElementById('tw-banner-identifier').textContent='CR '+(p.cr_number||'—')+
    (s?.study_code?' · '+s.study_code:s?.screening_code?' · '+s.screening_code:'');
-  document.getElementById('tw-banner-status').textContent=s?
-   (s.status==='enrolled'?'Enrolled':s.status.replaceAll('_',' ')):'Registered';
+  document.getElementById('tw-banner-status').textContent=
+   clinical.allocation?.randomized?'Randomized':
+   (s?s.status.replaceAll('_',' '):'Registered');
   document.getElementById('tw-patient-meta').textContent='Transplant: '+(p.transplant_date||'not recorded')+
    (s?.donor_type?' · Donor: '+s.donor_type:'');
  }catch(e){if(request===bannerRequest)document.getElementById('tw-banner-status').textContent='Context unavailable';}
@@ -633,7 +634,7 @@ async function updateWorkflow(){
  const id=selected,request=++workflowRequest;
  if(!id){
   completedTrial.classList.add('hide');historicalTrial.open=true;
-  subButtons.study.textContent='Start trial';
+  lastHistoricalState=null;subButtons.study.textContent='Start trial';
   for(let i=0;i<steps.length;i++){
    steps[i].dataset.stepStatus='pending';
    document.getElementById('tw-result-'+(i+1)).textContent='Pending';
@@ -673,7 +674,11 @@ async function updateWorkflow(){
   document.getElementById('tw-next-rand').classList.toggle('done',randomized);
   const complete=Boolean(s?.enrolled_on&&randomized);
   completedTrial.classList.toggle('hide',!complete);
-  historicalTrial.open=!complete;
+  const historyKey=String(id)+':'+complete;
+  if(lastHistoricalState!==historyKey){
+   historicalTrial.open=!complete;
+   lastHistoricalState=historyKey;
+  }
   subButtons.study.textContent=complete?'Trial summary':'Start trial';
   if(complete){
    document.getElementById('tw-completed-title').textContent=
