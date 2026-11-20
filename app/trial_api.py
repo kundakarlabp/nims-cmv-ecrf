@@ -435,7 +435,7 @@ def enroll(subject_id:int,data:EnrollmentIn,u:AuthContext=Depends(current),s:Ses
        signed_check.reviewed_on>data.enrolled_on or \
        not all(signed_check.inclusion.values()) or any(signed_check.exclusion.values()):
         raise HTTPException(422,"Complete an eligible, signed protocol checklist before enrollment")
-    if not (t.eligibility_attested and t.consent_on and t.consent_version and
+    if not (t.consent_on and t.consent_version and
             t.donor_cmv_igg=="positive" and t.recipient_cmv_igg=="positive" and
             t.ratg_induction is not None and data.reviewed_eligibility_and_consent and
             data.approved_visit_anchor):
