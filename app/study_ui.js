@@ -1691,11 +1691,21 @@ async function loadClinicalCourse(earlier=false){
  const actions=$('tw-course-actions');
  if(schemaResult.status==='fulfilled'){
   const schema=schemaResult.value;
-  actions.innerHTML=Object.entries(schema.forms).filter(([k])=>
-   ['C_baseline','E_followup','D_adherence','M_medication','N_laboratory',
-    'O_infection','P_transplant','G_cmv_event','H_adverse_event','I_clinical_outcome'].includes(k))
-   .map(([k,v])=>'<button class="secondary" data-course-form="'+txt(k)+'">'+
-     txt(v.title)+'</button>').join(' ');
+  const groups=[
+   ['Follow-up & investigations',['E_followup','N_laboratory'],true],
+   ['Treatment & adherence',['D_adherence','M_medication'],false],
+   ['Baseline & transplant',['C_baseline','P_transplant'],false],
+   ['Infections, adverse events & outcomes',
+    ['O_infection','G_cmv_event','H_adverse_event','I_clinical_outcome'],false]
+  ];
+  actions.innerHTML=groups.map(([label,keys,open])=>{
+   const buttons=keys.filter(key=>schema.forms[key]).map(key=>
+    '<button class="secondary" data-course-form="'+txt(key)+'">'+
+      txt(schema.forms[key].title)+'</button>').join('');
+   return buttons?'<details class="tw-course-group" '+(open?'open':'')+'>'+
+    '<summary>'+txt(label)+'</summary><div class="tw-course-group-actions">'+buttons+
+    '</div></details>':'';
+  }).join('');
  }else{
   actions.innerHTML='<div class="tw-course-warning">The clinical entry menu could not load. '+
     'Existing records may still be available. <button class="secondary" type="button" '+
