@@ -492,7 +492,6 @@ $('tw-drug-subject').onchange=()=>{void task('tw-drug-status',loadDrug);};
 $('tw-screen-save').onclick=()=>{void task('tw-status',async()=>{
  for(const [id,label] of [['tw-digg','donor CMV IgG'],['tw-rigg','recipient CMV IgG'],['tw-donor','donor type']])
    if(!value(id))throw Error('Select the source-verified '+label+'; an unassessed default is not permitted');
- if(value('tw-consent-date')&&!value('tw-consent-language'))throw Error('Select consent language for signed consent');
   var r=await api('/api/trial/screening',{method:'POST',body:JSON.stringify({
   patient_id:value('tw-patient'),screening_on:value('tw-screen-date'),consent_on:value('tw-consent-date')||null,
   consent_version:value('tw-icf')||null,donor_cmv_igg:value('tw-digg'),recipient_cmv_igg:value('tw-rigg'),
