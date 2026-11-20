@@ -338,7 +338,7 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   // Visible phone navigation and a real worklist route, not merely CSS screenshots.
   await page.setViewportSize({width:393,height:852});
   await page.evaluate(async()=>{await tab('review');});
-  await page.waitForFunction(()=>$('tw-report-metrics .tw-metric').length===4);
+  await page.waitForFunction(()=>document.querySelectorAll('#tw-report-metrics .tw-metric').length===4);
   assert.equal(await page.isVisible('#tw-directory-panel'),false,'Review page must not show legacy registry sidebar');
   assert.match(await page.textContent('#tw-report-visits'),/Month 12/);
   assert.match(await page.textContent('#reviewResults'),/Study eCRF verification/);
