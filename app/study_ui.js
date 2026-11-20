@@ -453,13 +453,24 @@ $('tw-screen-save').onclick=()=>{void task('tw-status',async()=>{
   sex_at_birth:value('tw-sex')||null,pis_version:value('tw-pis')||null,
   consent_language:value('tw-consent-language')||null,
   consent_obtained_by:value('tw-consent-obtained')||null,
-  signed_consent_source_ref:value('tw-consent-source')||null,
+  signed_consent_source_ref:null,
   ratg_induction:value('tw-ratg')===''?null:value('tw-ratg')==='true',
   eligibility_attested:$('tw-eligible').checked})});
  notify('tw-status','Screening code '+r.screening_code+' assigned. Complete the eligibility checklist, then enrollment.');
  await loadSubjects();await selectParticipantSubject(r.id);await selectEnrollmentPatient();
  $('tw-checklist-subject').scrollIntoView({block:'center'});
 });};
+$('tw-decline-consent').onclick=()=>{void task('tw-status',async()=>{
+ const subject=studySubjects.find(x=>x.patient_id===selected&&x.status==='screened');
+ if(!subject)throw Error('Save screening for this patient before recording consent declined');
+ if(subject.consent_recorded)throw Error('Signed consent is already recorded; verify the existing source before changing status');
+ if(!confirm('Mark the selected screened patient as consent declined? No enrollment or randomization will occur.'))return;
+ await api('/api/trial/subjects/'+subject.id+'/consent-declined',{
+  method:'POST',body:JSON.stringify({confirmed:true})});
+ notify('tw-status','Consent declined recorded. This screening remains in the audit history and is excluded from enrollment.');
+ await loadSubjects();await selectEnrollmentPatient();
+});};
+
 $('tw-enroll-save').onclick=()=>{void task('tw-status',async()=>{
  var id=n('tw-screened');if(!id)throw Error('Select a screened subject');
  var r=await api('/api/trial/subjects/'+id+'/enroll',{method:'POST',body:JSON.stringify({
@@ -605,7 +616,7 @@ let eligibilityRequest=0;
 async function loadEligibilityReview(){
  const request=++eligibilityRequest,sid=n('tw-checklist-subject');
  for(const el of document.querySelectorAll('[data-eligibility]'))el.value='';
- for(const id of ['tw-age','tw-anc','tw-platelets','tw-hb','tw-crcl','tw-source','tw-cbc-date'])$(id).value='';
+ for(const id of ['tw-age','tw-anc','tw-platelets','tw-hb','tw-crcl','tw-cbc-date'])$(id).value='';
  $('tw-review-on').value=today();
  if(!sid)return;
  const r=await api('/api/trial/subjects/'+sid+'/eligibility');
@@ -615,7 +626,7 @@ async function loadEligibilityReview(){
   const v=e[el.dataset.eligibility]?.[el.dataset.key];el.value=typeof v==='boolean'?String(v):'';
  }
  const b=e.baseline||{};
- for(const [id,key] of Object.entries({'tw-age':'age_years','tw-anc':'anc_per_ul','tw-platelets':'platelets_per_ul','tw-hb':'hemoglobin_g_dl','tw-crcl':'crcl_cg_ml_min','tw-cbc-date':'baseline_cbc_on','tw-source':'signed_source_reference'}))$(id).value=b[key]??'';
+ for(const [id,key] of Object.entries({'tw-age':'age_years','tw-anc':'anc_per_ul','tw-platelets':'platelets_per_ul','tw-hb':'hemoglobin_g_dl','tw-crcl':'crcl_cg_ml_min','tw-cbc-date':'baseline_cbc_on'}))$(id).value=b[key]??'';
  $('tw-review-on').value=e.reviewed_on||today();
 }
 for(const id of ['tw-checklist-subject','tw-screened'])$(id).onchange=()=>{void task('tw-status',async()=>{
@@ -652,11 +663,12 @@ $('tw-checklist-save').onclick=()=>{void task('tw-status',async()=>{
    age_years:n('tw-age'),anc_per_ul:n('tw-anc'),
    platelets_per_ul:n('tw-platelets'),hemoglobin_g_dl:n('tw-hb'),
    crcl_cg_ml_min:n('tw-crcl'),baseline_cbc_on:value('tw-cbc-date'),
-   reviewed_on:value('tw-review-on'),signed_source_reference:value('tw-source')
+   reviewed_on:value('tw-review-on')
   })});
  notify('tw-status',r.eligible?
-  'All protocol criteria checked and eligible; PI enrollment may proceed.':
-  'Screening exclusion detected; enrollment is blocked. Preserve signed source.');
+  'Eligible. Confirm enrollment below to generate the Study ID and proceed to randomization.':
+  'Not eligible. Enrollment and randomization are unavailable.');
+ if(r.eligible)$('tw-enroll-save').scrollIntoView({block:'center'});
 });};
 $('tw-cbc-date').value=''; // Laboratory source date must be entered explicitly.
 $('tw-review-on').value=today(); // Review is an action performed now.
@@ -1187,7 +1199,6 @@ async function loadRandomization(){
  $('tw-rand-assign').disabled=true;
  // Shared accounts must explicitly provide an actual signed source and
  // verify eligibility and stratum; never silently synthesize a source.
- $('tw-rand-source').parentElement.classList.remove('hide');
  $('tw-rand-eligibility-confirm').parentElement.classList.remove('hide');
  $('tw-rand-custodian-panel').classList.toggle('hide',!isCustodian);
  $('tw-rand-groups-panel').classList.toggle('hide',!isCustodian);
@@ -1199,11 +1210,9 @@ async function loadRandomization(){
  const r=await api('/api/trial/randomization/readiness');
  $('tw-rand-overview').textContent=
   (r.allocation_management==='owner_managed'?'Owner-managed allocation · no separate custodian approval. ':'')+
-  'Sequence: '+(r.sequence_locked?'locked · SHA-256 '+r.sequence_sha256:'not loaded')+
-  ' | Sealed capacity across 4 strata: '+r.planned_randomizations+
-  ' | Trial allocation limit: 344 | Already randomized: '+r.randomized+
-  ' | Release: '+(r.activation_ready?'configured':'blocked')+
-  ' | Mode: '+(r.clinical_mode?'clinical':'test environment');
+  'Trial randomization: '+(r.sequence_locked&&r.activation_ready?'ready':'unavailable')+
+  ' · Randomized '+r.randomized+' of 344'+
+  ' · '+(r.clinical_mode?'Clinical mode':'Test mode');
  if(isCustodian){
   const groups=await api('/api/trial/randomization/assigned-group-counts');
   $('tw-rand-groups').textContent=
@@ -1233,8 +1242,8 @@ async function loadRandSubject(){
   'Already randomized · '+r.allocation_code+
     (r.assigned_arm_mg?' · '+r.assigned_arm_mg+' mg nominal':'')+
     '. Repeat randomization is prohibited.':
-  (check.ready?'Ready for signed investigator confirmation · study ID '+r.study_code+
-   ' · '+check.stratum+'. Enter the actual signed source reference and confirm below.':
+  (check.ready?'Ready to randomize · study ID '+r.study_code+
+   ' · '+check.stratum+'. Confirm eligibility below.':
    'Not ready · study ID '+r.study_code+' · '+check.reason);
  $('tw-rand-assign').disabled=r.randomized||!check?.ready;
 }
@@ -1244,8 +1253,6 @@ $('tw-rand-assign').onclick=()=>{void task('tw-rand-status',async()=>{
  if(!sid)throw Error('Select an enrolled participant');
  if(!$('tw-rand-eligibility-confirm').checked)
   throw Error('Check the signed eligibility, consent and stratum confirmation before requesting an allocation');
- const source=value('tw-rand-source');
- if(source.length<8)throw Error('Enter signed source reference (at least 8 characters)');
  if(!confirm($('tw-rand-subject').selectedOptions[0].textContent+'\nPermanently allocate the NEXT concealed assignment in the approved stratum? '+
       'You cannot select or undo this treatment arm.'))return;
  // Double-taps cannot send concurrent releases from this tab.
@@ -1254,13 +1261,12 @@ $('tw-rand-assign').onclick=()=>{void task('tw-rand-status',async()=>{
  try{
   r=await api('/api/trial/randomization/subjects/'+sid+'/assign',{
    method:'POST',body:JSON.stringify({investigator_confirmation:true,
-    stratification_verified:true,signed_randomization_source_ref:source})});
+    stratification_verified:true})});
  }catch(e){await loadRandSubject();throw e;}
  notify('tw-rand-status','Randomization completed: '+r.study_code+
   ' · '+r.allocation_code+' · '+r.assigned_arm_mg+
   ' mg nominal arm. Follow signed renal-adjusted prescription and record allocation code at MSS.');
  $('tw-rand-eligibility-confirm').checked=false;
- $('tw-rand-source').value='';
  await loadRandomization();
 });};
 $('tw-rand-file').onchange=()=>{void task('tw-rand-status',async()=>{
@@ -1395,9 +1401,9 @@ function clearParticipant(){
 function renderParticipant(context){
  if(context.patient_id!==participantContext?.patient_id){
   resetPCRControls();resetDrugControls();
-  for(const id of ['tw-consent-date','tw-icf','tw-pis','tw-consent-obtained','tw-consent-source','tw-initials','tw-screen-age','tw-sex','tw-ratg','tw-anchor-date'])$(id).value='';
+  for(const id of ['tw-consent-date','tw-icf','tw-pis','tw-consent-obtained','tw-initials','tw-screen-age','tw-sex','tw-ratg','tw-anchor-date'])$(id).value='';
   for(const id of ['tw-eligible','tw-pi-consent','tw-pi-anchor'])$(id).checked=false;
-  for(const id of ['tw-collected','tw-accession','tw-reported','tw-assay','tw-result-kind','tw-viral-load','tw-loq','tw-qc','tw-result-reason','tw-review-reason','tw-rx-date','tw-issue-date','tw-return-date','tw-rand-source'])$(id).value='';
+  for(const id of ['tw-collected','tw-accession','tw-reported','tw-assay','tw-result-kind','tw-viral-load','tw-loq','tw-qc','tw-result-reason','tw-review-reason','tw-rx-date','tw-issue-date','tw-return-date'])$(id).value='';
   $('tw-rand-eligibility-confirm').checked=false;
   for(const id of ['age','weight','creatinine','sex'])$(id).value='';
  }
