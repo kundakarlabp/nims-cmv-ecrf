@@ -511,6 +511,9 @@ document.getElementById('reviewResults').addEventListener('click',e=>{
 
 const previousTab=tab;
 tab=async function(name){
+ // Do not switch clinical modules while the selected participant's validated
+ // server context is still loading. This prevents stale patient PCR/pharmacy UI.
+ if(window.cmvPatientContextSwitch)await window.cmvPatientContextSwitch;
  await previousTab(name);syncNavigation();
  if(activeTab==='study'){await updateWorkflow();void loadActivity();}
 };
