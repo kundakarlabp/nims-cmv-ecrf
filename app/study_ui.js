@@ -693,27 +693,47 @@ async function loadEligibilityReview(){
  const b=e.baseline||{};
  for(const [id,key] of Object.entries({'tw-age':'age_years','tw-anc':'anc_per_ul','tw-platelets':'platelets_per_ul','tw-hb':'hemoglobin_g_dl','tw-crcl':'crcl_cg_ml_min','tw-cbc-date':'baseline_cbc_on'}))$(id).value=b[key]??'';
  $('tw-review-on').value=e.reviewed_on||today();
- prefillObjectiveEligibility();
+ prefillObjectiveEligibility();updateEligibilityProgress();
 }
 for(const id of ['tw-checklist-subject','tw-screened'])$(id).onchange=()=>{void task('tw-status',async()=>{
  const sid=n(id);if(!sid)return;
  await selectParticipantSubject(sid);await selectEnrollmentPatient();
 });};
+/* Full signed checklist retained, grouped for quick, accountable review. */
+function updateEligibilityProgress(){
+ for(const group of ['inclusion','exclusion']){
+  const controls=[...document.querySelectorAll('[data-eligibility="'+group+'"]')];
+  const done=controls.filter(x=>x.value!=='').length,total=controls.length;
+  const label=$('tw-review-'+group+'-count');
+  if(label)label.textContent=done+' / '+total+' reviewed'+(done===total?' ✓':'');
+  const wrap=$('tw-review-'+group+'-group');
+  if(wrap)wrap.dataset.complete=String(done===total);
+ }
+ const done=[...document.querySelectorAll('[data-eligibility]')].filter(x=>x.value!=='').length;
+ const total=document.querySelectorAll('[data-eligibility]').length;
+ const status=$('tw-eligibility-progress');
+ if(status)status.textContent=done+' of '+total+
+  ' items assessed · verify all source records before approving eligibility.';
+}
 async function loadEligibilitySchema(){
  eligibilityItems=await api('/api/trial/eligibility-schema');
  const makeFields=(group,items,label)=>{
-  return '<h4>'+label+'</h4>'+Object.entries(items).map(([key,value])=>
-   '<label>'+txt(value)+'<select data-eligibility="'+group+'" data-key="'+txt(key)+'">'+
-   '<option value="">Not assessed</option><option value="true">Yes</option>'+
-   '<option value="false">No</option></select></label>').join('');
+  return '<details class="tw-eligibility-group" id="tw-review-'+group+'-group" open>'+
+   '<summary><span>'+label+'</span><strong id="tw-review-'+group+
+     '-count">0 / '+Object.keys(items).length+' reviewed</strong></summary>'+
+   '<div class="tw-eligibility-grid">'+Object.entries(items).map(([key,description])=>
+    '<label>'+txt(description)+'<select data-eligibility="'+group+'" data-key="'+txt(key)+'">'+
+    '<option value="">Not assessed</option><option value="true">Yes</option>'+
+    '<option value="false">No</option></select></label>').join('')+'</div></details>';
  };
  $('tw-eligibility-fields').innerHTML=
-  '<p class="hint">Objective items are suggested from the recorded values. Check the source and explicitly review every clinical criterion.</p>'+
-  makeFields('inclusion',eligibilityItems.inclusion,'Inclusion: all must be Yes')+
-  makeFields('exclusion',eligibilityItems.exclusion,'Exclusion: all must be No');
+  '<p class="hint">Source-verified values are suggested where available. Review all clinical criteria explicitly.</p>'+
+  '<div class="tw-eligibility-progress" id="tw-eligibility-progress" role="status"></div>'+
+  makeFields('inclusion',eligibilityItems.inclusion,'Inclusion criteria — all Yes')+
+  makeFields('exclusion',eligibilityItems.exclusion,'Exclusion criteria — all No');
  for(const el of document.querySelectorAll('[data-eligibility]'))
-  el.addEventListener('change',()=>{el.dataset.autoChecked='';});
- prefillObjectiveEligibility();
+  el.addEventListener('change',()=>{el.dataset.autoChecked='';updateEligibilityProgress();});
+ prefillObjectiveEligibility();updateEligibilityProgress();
 }
 /* Populate only deterministic eligibility values from recorded source measurements.
    Clinical judgement criteria remain unanswered until a staff member reviews them. */
@@ -734,17 +754,24 @@ function prefillObjectiveEligibility(){
  }
  const age=numeric('tw-age'),anc=numeric('tw-anc'),
   platelets=numeric('tw-platelets'),hb=numeric('tw-hb'),crcl=numeric('tw-crcl');
- if(age!==null)set('inclusion','age_ge_18',age>=18);
+ if(age===null&&Number.isInteger(subject.age_at_transplant)){
+  $('tw-age').value=String(subject.age_at_transplant);
+ }
+ const confirmedAge=numeric('tw-age');
+ if(confirmedAge!==null)set('inclusion','age_ge_18',confirmedAge>=18);
  if(anc!==null)set('inclusion','anc_ge_1500',anc>=1500);
  if(platelets!==null)set('inclusion','platelets_ge_50000',platelets>=50000);
  if(hb!==null)set('inclusion','hemoglobin_ge_7',hb>=7);
  if(anc!==null&&platelets!==null&&hb!==null)
   set('exclusion','blood_counts_below_threshold',anc<1500||platelets<50000||hb<7);
  if(crcl!==null)set('exclusion','crcl_below_10',crcl<10);
- if(subject.donor_cmv_igg)set('inclusion','donor_cmv_positive',subject.donor_cmv_igg==='positive');
- if(subject.recipient_cmv_igg)set('inclusion','recipient_cmv_positive',subject.recipient_cmv_igg==='positive');
+ if(['positive','negative'].includes(subject.donor_cmv_igg))
+  set('inclusion','donor_cmv_positive',subject.donor_cmv_igg==='positive');
+ if(['positive','negative'].includes(subject.recipient_cmv_igg))
+  set('inclusion','recipient_cmv_positive',subject.recipient_cmv_igg==='positive');
  if(typeof subject.consent_recorded==='boolean')
   set('inclusion','written_consent',subject.consent_recorded);
+ updateEligibilityProgress();
 }
 for(const id of ['tw-age','tw-anc','tw-platelets','tw-hb','tw-crcl'])
  $(id).addEventListener('input',prefillObjectiveEligibility);
