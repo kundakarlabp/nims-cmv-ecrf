@@ -489,6 +489,15 @@ async function loadDrug(){
 }
 $('tw-pcr-subject').onchange=()=>{void task('tw-pcr-status',loadPCR);};
 $('tw-drug-subject').onchange=()=>{void task('tw-drug-status',loadDrug);};
+/* Keep the next clinical step physically visible, even if async status checks
+   are still completing. This never submits a form or releases an allocation. */
+function openStudyStage(number){
+ const step=$('tw-progress-step-'+number);
+ if(!step)return false; // legacy UI without progressive wrapper
+ for(const item of document.querySelectorAll('#study .tw-progress-stage'))item.open=item===step;
+ step.scrollIntoView({block:'nearest'});
+ return true;
+}
 $('tw-screen-save').onclick=()=>{void task('tw-status',async()=>{
  for(const [id,label] of [['tw-digg','donor CMV IgG'],['tw-rigg','recipient CMV IgG'],['tw-donor','donor type']])
    if(!value(id))throw Error('Select the source-verified '+label+'; an unassessed default is not permitted');
@@ -506,8 +515,9 @@ $('tw-screen-save').onclick=()=>{void task('tw-status',async()=>{
   eligibility_attested:false})});
  notify('tw-status','Screening code '+r.screening_code+' assigned. Complete the eligibility checklist, then enrollment.');
  await loadSubjects();await selectParticipantSubject(r.id);await selectEnrollmentPatient();
+ openStudyStage(2);
  window.dispatchEvent(new Event('cmv:workflow-updated'));
- $('tw-checklist-subject').scrollIntoView({block:'center'});
+ if(!$('tw-progress-step-2'))$('tw-checklist-subject').scrollIntoView({block:'center'});
 });};
 $('tw-decline-consent').onclick=()=>{void task('tw-status',async()=>{
  const subject=studySubjects.find(x=>x.patient_id===selected&&x.status==='screened');
@@ -532,8 +542,9 @@ $('tw-enroll-save').onclick=()=>{void task('tw-status',async()=>{
  showEnrollmentStudyId();
  await selectParticipantSubject(r.subject.id);
  await refreshInlineRandomization();
+ openStudyStage(4);
  window.dispatchEvent(new Event('cmv:workflow-updated'));
- $('tw-inline-rand-panel').scrollIntoView({block:'center'});
+ if(!$('tw-progress-step-4'))$('tw-inline-rand-panel').scrollIntoView({block:'center'});
 });};
 $('tw-collect-save').onclick=()=>{void task('tw-pcr-status',async()=>{
  requireProcedureSubject('pcr');
@@ -761,8 +772,9 @@ $('tw-checklist-save').onclick=()=>{void task('tw-status',async()=>{
  notify('tw-status',r.eligible?
   'Eligible. Confirm enrollment below to generate the Study ID and proceed to randomization.':
   'Not eligible. Enrollment and randomization are unavailable.');
+ if(r.eligible)openStudyStage(3);
  window.dispatchEvent(new Event('cmv:workflow-updated'));
- if(r.eligible)$('tw-enroll-save').scrollIntoView({block:'center'});
+ if(r.eligible&&!$('tw-progress-step-3'))$('tw-enroll-save').scrollIntoView({block:'center'});
 });};
 $('tw-cbc-date').value=''; // Laboratory source date must be entered explicitly.
 $('tw-review-on').value=today(); // Review is an action performed now.
