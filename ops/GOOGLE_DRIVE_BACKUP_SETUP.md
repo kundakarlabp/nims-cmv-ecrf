@@ -14,6 +14,32 @@ destination before exporting identifiable trial records.
 
 ## One-time OCI setup
 
+After the next CI-approved deployment, open a private interactive terminal on
+the existing OCI VM, signed in as the deployment user (`ubuntu`), and run:
+
+```sh
+cd /home/ubuntu/nims-cmv
+python3 ops/connect_google_drive.py
+```
+
+This helper reuses an already-authorized `nims_cmv_drive` remote, or launches
+the normal Google authorization wizard if absent. Select the exact private
+folder ID below. It protects the config, verifies real Drive access, uploads
+only the newest **already encrypted and isolated-restore-verified** archive,
+downloads that exact object and checks its size and SHA-256 before writing
+recovery receipts. It never handles patient-level application records or
+prints credentials. Do not run the interactive wizard under `sudo` or in
+GitHub Actions; it must use the OCI deployment user's protected config.
+
+The CI/release workflow deploys this helper but deliberately cannot create
+Google OAuth authorization or remotely read tokens. A consent step with the
+Drive owner is unavoidable. See current rclone guidance for a headless OAuth
+authorization and a dedicated Google OAuth client ID when necessary.
+
+If the host has no `rclone`, install it from the operating system's verified
+package repository before running the helper. The existing five-minute OCI
+maintenance timer will continue automatic copies after the initial consent.
+
 The ChatGPT Google Drive connection does NOT authenticate rclone on the Oracle
 instance. Never paste Google OAuth tokens, config, or private keys in GitHub
 or chat.
