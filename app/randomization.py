@@ -232,7 +232,7 @@ def arm_for(s,subject_id):
 
 class RandomizeInput(BaseModel):
     investigator_confirmation:Literal[True]
-    signed_randomization_source_ref:str=Field(min_length=8,max_length=160)
+    signed_randomization_source_ref:str|None=Field(default=None,min_length=8,max_length=160)
     stratification_verified:Literal[True]
 
 def _next_slot_for_subject(s:Session,subject,*,lock:bool=False):
@@ -293,7 +293,7 @@ def randomization_preflight(subject_id:int,u:AuthContext=Depends(current),
         return {"ready":False,"randomized":bool(allocation_for(s,subject_id)),
                 "study_code":subject.study_code,"reason":str(exc.detail)}
     return {"ready":True,"randomized":False,"study_code":subject.study_code,
-            "stratum":key,"reason":"Protocol checks passed. Verify signed source and confirm irreversible allocation."}
+            "stratum":key,"reason":"Eligible and enrolled. Confirm the participant and release one irreversible allocation."}
 
 @router.post("/subjects/{subject_id}/assign")
 def assign(subject_id:int,data:RandomizeInput,u:AuthContext=Depends(current),
@@ -322,7 +322,10 @@ def assign(subject_id:int,data:RandomizeInput,u:AuthContext=Depends(current),
         audit(s,u,"randomize","randomization_slot",str(row.id),subject.patient_id,
               None,{"allocation_code":code,"stratum":key,
                     "sequence_sha256":plan.sequence_sha256,
-                    "signed_source_reference":data.signed_randomization_source_ref},
+                    "eligibility_confirmed":data.investigator_confirmation,
+                    "stratification_verified":data.stratification_verified,
+                    **({"signed_source_reference":data.signed_randomization_source_ref}
+                       if data.signed_randomization_source_ref else {})},
               "Next concealed sequential allocation released after eligibility")
         s.commit()
     except IntegrityError:
