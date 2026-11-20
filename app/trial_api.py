@@ -150,14 +150,8 @@ def screen(data:ScreeningIn,u:AuthContext=Depends(current),s:Session=Depends(db)
     if data.donor_relationship:
         if (data.donor_relationship=="deceased")!=(data.donor_type=="deceased"):
             raise HTTPException(422,"Donor relationship conflicts with living/deceased stratum")
-    # Store screening and declined consent even before the signed ICF exists.
-    # Actual consent remains mandatory for eligibility and enrollment.
-    if os.getenv("CLINICAL_DATA_ENABLED","false").lower()=="true" and data.consent_on:
-        must=(data.participant_initials,data.age_at_transplant,data.sex_at_birth,
-              data.donor_relationship,data.pis_version,data.consent_language,
-              data.consent_obtained_by)
-        if any(x is None or x=="" for x in must):
-            raise HTTPException(422,"Complete consent details when signed consent is recorded")
+    # CRF A metadata may be completed later; signed consent date/version,
+    # checked eligibility and positive serostatus still gate enrollment.
     t=TrialSubject(patient_id=p.id,screening_on=data.screening_on,
         donor_cmv_igg=data.donor_cmv_igg,recipient_cmv_igg=data.recipient_cmv_igg,
         donor_type=data.donor_type,ratg_induction=data.ratg_induction,
@@ -417,7 +411,7 @@ class EnrollmentIn(BaseModel):
     enrolled_on:date
     pcr_anchor_on:date
     pcr_anchor_basis:Literal["transplant_date"]
-    protocol_reference:str=Field(min_length=3,max_length=80)
+    protocol_reference:str=Field(default="Protocol v5.0, 14 Aug 2026",min_length=3,max_length=80)
     reviewed_eligibility_and_consent:bool
     approved_visit_anchor:bool
 
