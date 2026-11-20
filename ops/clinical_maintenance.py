@@ -287,6 +287,12 @@ def backup_and_restore(dc,force=False):
             (export/(path.stem+'.tar')).unlink(missing_ok=True);path.unlink()
 
 def offsite_reference(claimed):
+    folder=claimed.get('gdrive_folder_id');file_id=claimed.get('gdrive_file_id')
+    file_name=claimed.get('gdrive_file_name');bundle_id=claimed.get('bundle_id')
+    if (folder=='1Mnzme95zuQM5WKuHWtsv2-nzhtPUK_EM'
+        and isinstance(file_id,str) and re.fullmatch(r'[A-Za-z0-9_-]{10,200}',file_id)
+        and file_name=='clinical-'+str(bundle_id)+'.tar'):
+        return f'gdrive:{folder}:{file_name}'
     artifact=claimed.get('artifact_id')
     release=claimed.get('release_id');asset=claimed.get('asset_id')
     if type(artifact) is int and artifact>0 and release is None and asset is None:
