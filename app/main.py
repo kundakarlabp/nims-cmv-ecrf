@@ -114,6 +114,20 @@ class EntryReview(Base):
     reviewer_id: Mapped[str]=mapped_column(ForeignKey('users.id'),nullable=False)
     created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=now,nullable=False)
 
+# Audit-backed archival avoids altering the signed clinical schema. The person
+# and attribution history remain intact; active workspace lists exclude the
+# archived record and no new clinical entry may be attached to it.
+ARCHIVE_ACTION='archive_patient'
+
+def active_patient_filter():
+    return ~Patient.id.in_(select(Audit.entity_id).where(
+        Audit.entity_type=='patient',Audit.action==ARCHIVE_ACTION))
+
+def patient_archived(s:Session,patient_id:str)->bool:
+    return s.scalar(select(Audit.id).where(
+        Audit.entity_type=='patient',Audit.action==ARCHIVE_ACTION,
+        Audit.entity_id==patient_id).limit(1)) is not None
+
 # Register structured study models before the staging metadata is built.
 from .trial_models import TrialSubject, PCRRecord, DrugLot, DrugAuthorization, DrugDispense, DrugReturn, UserInvitation, LoginThrottle, UserTotp, StaffAccess, TrialEligibility, TrialCRFEntry, TrialCRFDraft, TrialCRFReview, TrialScreeningMeta, RandomizationPlan, RandomizationSlot
 
@@ -507,7 +521,7 @@ def create_patient(data:PatientIn,u:AuthContext=Depends(current),s:Session=Depen
 @app.get('/api/patients')
 def patients(q:str='',limit:int=50,u:AuthContext=Depends(current),s:Session=Depends(db)):
     limit=min(max(limit,1),100)
-    st=select(Patient)
+    st=select(Patient).where(active_patient_filter())
     restricted=u.role in {'microbiology','pharmacy','technician','monitor'} and not u.workspace_full_access
     if q.strip():
         if restricted:
@@ -523,7 +537,7 @@ def patients(q:str='',limit:int=50,u:AuthContext=Depends(current),s:Session=Depe
 @app.get('/api/patients/{patient_id}')
 def patient(patient_id:str,u:AuthContext=Depends(current),s:Session=Depends(db)):
     p=s.get(Patient,patient_id)
-    if not p: raise HTTPException(404)
+    if not p or patient_archived(s,patient_id): raise HTTPException(404)
     es=s.scalars(select(Entry).where(Entry.patient_id==patient_id).order_by(Entry.occurred_on.desc(),Entry.created_at.desc())).all()
     data=as_dict(p)
     if u.role in {'microbiology','pharmacy','technician','monitor'} and not u.workspace_full_access:
@@ -540,6 +554,7 @@ class EntryIn(BaseModel):
 def new_entry(patient_id:str,data:EntryIn,u:AuthContext=Depends(current),s:Session=Depends(db)):
     permission(u,data.kind)
     if not s.get(Patient,patient_id): raise HTTPException(404)
+    if patient_archived(s,patient_id): raise HTTPException(409,'Registry record archived')
     if len(str(data.payload))>20000: raise HTTPException(413,'Record too large; use approved structured fields')
     e=Entry(patient_id=patient_id,**data.model_dump(),created_by=u.user_id,updated_by=u.user_id)
     s.add(e);s.flush();audit(s,u,'create',e.kind,e.id,patient_id,None,as_dict(e),'Initial entry');s.commit()
@@ -553,6 +568,7 @@ class EntryEdit(BaseModel):
 def edit_entry(entry_id:str,data:EntryEdit,u:AuthContext=Depends(current),s:Session=Depends(db)):
     e=s.get(Entry,entry_id)
     if not e: raise HTTPException(404)
+    if patient_archived(s,e.patient_id): raise HTTPException(409,'Registry record archived')
     permission(u,e.kind)
     if len(str(data.payload))>20000: raise HTTPException(413)
     if e.revision!=data.expected_revision: raise HTTPException(409,'Revision conflict; reload and reconcile')
@@ -575,6 +591,7 @@ class DraftInput(BaseModel):
 def draft_patient(s:Session,patient_id:str,u:AuthContext,kind:str):
     permission(u,kind)
     if not s.get(Patient,patient_id): raise HTTPException(404,'Patient not found')
+    if patient_archived(s,patient_id): raise HTTPException(409,'Registry record archived')
 
 @app.get('/api/patients/{patient_id}/drafts/{kind}')
 def read_draft(patient_id:str,kind:DRAFT_KINDS,u:AuthContext=Depends(current),s:Session=Depends(db)):
@@ -641,8 +658,10 @@ def dashboard(u:AuthContext=Depends(current),s:Session=Depends(db)):
     # A single left join avoids per-entry review queries as the study grows.
     from sqlalchemy import and_
     rows=s.execute(select(Entry.kind,Entry.occurred_on,EntryReview.decision)
+        .join(Patient,Entry.patient_id==Patient.id)
         .outerjoin(EntryReview,and_(EntryReview.entry_id==Entry.id,
-                                   EntryReview.entry_revision==Entry.revision))).all()
+                                   EntryReview.entry_revision==Entry.revision))
+        .where(active_patient_filter())).all()
     counts={'pending':0,'verified':0,'needs_correction':0}
     by_kind={}; monthly={}
     for kind,occurred_on,decision in rows:
@@ -650,8 +669,8 @@ def dashboard(u:AuthContext=Depends(current),s:Session=Depends(db)):
         by_kind[kind]=by_kind.get(kind,0)+1
         month=occurred_on.strftime('%Y-%m')
         monthly[month]=monthly.get(month,0)+1
-    return {'patients':s.scalar(select(func.count(Patient.id))),
-            'study_ids_assigned':s.scalar(select(func.count(Patient.id)).where(Patient.study_id.is_not(None))),
+    return {'patients':s.scalar(select(func.count(Patient.id)).where(active_patient_filter())),
+            'study_ids_assigned':s.scalar(select(func.count(Patient.id)).where(Patient.study_id.is_not(None),active_patient_filter())),
             'entries':len(rows),'review':counts,'by_kind':by_kind,
             'monthly_entries':[{'month':m,'count':monthly[m]} for m in sorted(monthly)[-12:]],
             'scope':'clinical study database' if CLINICAL_MODE else 'staging synthetic data only'}
@@ -660,6 +679,7 @@ def dashboard(u:AuthContext=Depends(current),s:Session=Depends(db)):
 def review_queue(u:AuthContext=Depends(current),s:Session=Depends(db)):
     review_permission(u)
     rows=s.execute(select(Entry,Patient).join(Patient,Entry.patient_id==Patient.id)
+                   .where(active_patient_filter())
                    .order_by(Entry.updated_at.desc()).limit(200)).all()
     return [{'entry_id':e.id,'patient_id':p.id,'study_id':p.study_id,'cr_number':None if u.role=='monitor' else p.cr_number,
              'kind':e.kind,'occurred_on':e.occurred_on,'revision':e.revision,
@@ -676,6 +696,7 @@ def review_entry(entry_id:str,data:ReviewInput,u:AuthContext=Depends(current),s:
     review_permission(u)
     e=s.get(Entry,entry_id)
     if not e: raise HTTPException(404)
+    if patient_archived(s,e.patient_id): raise HTTPException(409,'Registry record archived')
     if e.revision!=data.expected_revision: raise HTTPException(409,'Revision changed; reload before review')
     if u.user_id in (e.created_by,e.updated_by) and not u.workspace_full_access: raise HTTPException(403,'Independent reviewer required')
     if review_state(s,e)!='pending': raise HTTPException(409,'This revision was already reviewed')
@@ -733,11 +754,12 @@ def due(u:AuthContext=Depends(current),s:Session=Depends(db)):
             'anchor_basis':subject.pcr_anchor_basis} for record,subject in rows]
     records=[]
     completed=set()
-    for visit in s.scalars(select(Entry).where(Entry.kind=='visit')).all():
+    for visit in s.scalars(select(Entry).join(Patient,Entry.patient_id==Patient.id)
+                           .where(Entry.kind=='visit',active_patient_filter())).all():
         if visit.payload.get('visit_complete') is True:
             try: completed.add((visit.patient_id,int(visit.payload.get('scheduled_month'))))
             except (ValueError,TypeError): continue
-    for p in s.scalars(select(Patient).where(Patient.transplant_date.is_not(None))).all():
+    for p in s.scalars(select(Patient).where(Patient.transplant_date.is_not(None),active_patient_filter())).all():
         # Calendar month target dates; windows require investigator approval.
         from calendar import monthrange
         for month in (1,2,3,4,6,9,12):
