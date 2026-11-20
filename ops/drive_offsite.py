@@ -122,6 +122,7 @@ def sync_latest(private_dir):
     if len(verified) != manifest["size"] or hashlib.sha256(verified).hexdigest() != digest:
         raise RuntimeError("Google Drive readback size/hash mismatch")
 
+    receipt_dir = private_dir / "backup-state"
     reference = f"gdrive:{FOLDER_ID}:clinical-{manifest['id']}.tar"
     line = f"{manifest['stamp']} {digest} {reference}\n".encode()
     receipt_dir.mkdir(mode=0o755, exist_ok=True)
