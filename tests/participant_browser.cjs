@@ -156,6 +156,9 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   await page.waitForFunction(()=>$('tw-pcr-subject').value==='2');
   await page.evaluate(async()=>{await tab('crf');});
   await page.waitForFunction(()=>$('tw-crf-subject').value==='2');
+  // The secondary linked-study selector is intentionally behind an optional
+  // disclosure; routine users select patients through the header search.
+  await page.locator('#tw-record-switch summary').click();
   await page.selectOption('#tw-context-subject','1');
   await page.waitForFunction(()=>$('tw-context-allocation').textContent.includes('450 mg'));
   assert.equal(await page.evaluate(()=>selected),'TEST-P-1');
