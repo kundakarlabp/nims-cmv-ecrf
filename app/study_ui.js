@@ -754,11 +754,7 @@ function prefillObjectiveEligibility(){
  }
  const age=numeric('tw-age'),anc=numeric('tw-anc'),
   platelets=numeric('tw-platelets'),hb=numeric('tw-hb'),crcl=numeric('tw-crcl');
- if(age===null&&Number.isInteger(subject.age_at_transplant)){
-  $('tw-age').value=String(subject.age_at_transplant);
- }
- const confirmedAge=numeric('tw-age');
- if(confirmedAge!==null)set('inclusion','age_ge_18',confirmedAge>=18);
+ if(age!==null)set('inclusion','age_ge_18',age>=18);
  if(anc!==null)set('inclusion','anc_ge_1500',anc>=1500);
  if(platelets!==null)set('inclusion','platelets_ge_50000',platelets>=50000);
  if(hb!==null)set('inclusion','hemoglobin_ge_7',hb>=7);
