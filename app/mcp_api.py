@@ -18,7 +18,9 @@ from .main import SessionLocal, Entry, Patient, as_dict, sha
 from .oauth_api import bearer_actor, origin, resource, consent_page
 from .oauth_models import MCPReceipt
 from . import mcp_readonly
-from .trial_models import TrialCRFDraft, TrialCRFEntry
+from . import trial_api, trial_crf, randomization, mcp_backup_transfer
+from . import main as dashboard_main
+from .trial_models import TrialCRFDraft, TrialCRFEntry, PCRRecord, DrugDispense
 
 router=APIRouter(tags=['private-mcp'])
 VERSIONS={'2025-03-26','2025-06-18','2025-11-25'}
@@ -34,6 +36,8 @@ class CRFRead(Args):
     subject_id:int=Field(ge=1)
 class WorkflowStatus(Args):
     identifier:str=Field(min_length=3,max_length=100)
+class SubjectRead(Args):subject_id:int=Field(ge=1)
+class DosePreview(Args):data:dashboard_main.DoseInput
 class Write(Args):
     idempotency_key:str=Field(min_length=8,max_length=100,pattern=r'^[A-Za-z0-9_-]+$')
     confirm:bool=False
@@ -52,6 +56,58 @@ class CRFWrite(Write):
 class CRFCorrection(Write):
     entry_id:int=Field(ge=1)
     data:service.AssistedCorrection
+class ScreeningWrite(Write):data:trial_api.ScreeningIn
+class EligibilityWrite(Write):
+    subject_id:int=Field(ge=1)
+    data:trial_api.EligibilityReviewIn
+class EnrollmentWrite(Write):
+    subject_id:int=Field(ge=1)
+    data:trial_api.EnrollmentIn
+class DiscontinueWrite(Write):
+    subject_id:int=Field(ge=1)
+    data:trial_api.DiscontinueIn
+class RandomizeWrite(Write):
+    subject_id:int=Field(ge=1)
+    data:randomization.RandomizeInput
+class PCRCollectWrite(Write):
+    record_id:int=Field(ge=1)
+    data:trial_api.CollectionIn
+class PCRResultWrite(Write):
+    record_id:int=Field(ge=1)
+    data:trial_api.PCRResultIn
+class PCRVerifyWrite(Write):
+    record_id:int=Field(ge=1)
+    data:trial_api.RevisionIn
+class PCRRepeatWrite(Write):
+    record_id:int=Field(ge=1)
+    data:trial_api.RepeatPCRIn
+class LotWrite(Write):data:trial_api.LotIn
+class DrugAuthorizationWrite(Write):
+    subject_id:int=Field(ge=1)
+    data:trial_api.AuthorizationIn
+class DispenseWrite(Write):
+    subject_id:int=Field(ge=1)
+    data:trial_api.DispenseIn
+class ReturnWrite(Write):
+    dispense_id:int=Field(ge=1)
+    data:trial_api.ReturnIn
+class CRFReviewWrite(Write):
+    entry_id:int=Field(ge=1)
+    data:trial_crf.CRFReviewIn
+class RegistryReviewWrite(Write):
+    entry_id:str=Field(min_length=1,max_length=36)
+    data:dashboard_main.ReviewInput
+class StaffRenewWrite(Write):
+    user_id:str=Field(min_length=1,max_length=36)
+    data:trial_api.RenewAccessIn
+class StaffRevokeWrite(Write):
+    user_id:str=Field(min_length=1,max_length=36)
+    data:trial_api.RevokeIn
+class BackupConfirmWrite(Write):
+    bundle_id:str=Field(pattern=r'^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}$')
+    drive_file_id:str=Field(min_length=10,max_length=200,pattern=r'^[A-Za-z0-9_-]+$')
+    drive_file_name:str=Field(min_length=30,max_length=100)
+    readback_sha256:str=Field(pattern=r'^[0-9a-f]{64}$')
 
 # Explicit schemas and allowlist rather than generating tools from all API routes.
 TOOLS={
@@ -66,6 +122,26 @@ TOOLS={
  'failure_diagnostics':(Empty,False,'Read allowlisted OCI deployment and clinical backup failure reason codes without logs or secrets. PI/admin only.'),
  'clinical_write_readiness':(Empty,False,'Read-only clinical write preflight: database, backup, restore and first-start gates. No patient write. PI/admin only.'),
  'trial_workflow_status':(WorkflowStatus,False,'Read eligibility, enrollment, randomization completion and pharmacy status for one exact participant. Never show treatment arm, allocation code or dose.'),
+ 'dashboard_overview':(Empty,False,'Read persisted trial, PCR and pharmacy dashboard metrics. Counts do not reveal future allocations.'),
+ 'registry_dashboard':(Empty,False,'Read patient-registry entry and review metrics shown on the dashboard.'),
+ 'registry_review_queue':(Empty,False,'Read the role-filtered longitudinal registry review queue.'),
+ 'patient_audit_history':(PatientRead,False,'Read up to 500 attributed audit events for one selected patient, with the existing role mask.'),
+ 'followup_due':(Empty,False,'Read the persisted clinical follow-up/PCR due queue.'),
+ 'valganciclovir_dose_preview':(DosePreview,False,'Calculate the protocol Cockcroft-Gault dose preview. This never creates a prescription and requires clinician confirmation.'),
+ 'action_worklist':(Empty,False,'Read the role-filtered trial action worklist. It does not create approvals, allocations, orders or adjudicated outcomes.'),
+ 'participant_context':(SubjectRead,False,'Read one participant context using the same role masking as the dashboard.'),
+ 'participant_timeline':(SubjectRead,False,'Read up to 100 recent role-visible CRF records for one participant.'),
+ 'eligibility_schema':(Empty,False,'Read the protocol inclusion and exclusion field definitions.'),
+ 'read_eligibility':(SubjectRead,False,'Read the recorded eligibility review for one participant.'),
+ 'read_pcr_schedule':(SubjectRead,False,'Read the persisted PCR schedule and results for one participant.'),
+ 'pcr_worklist':(Empty,False,'Read the protocol PCR worklist without inferring visit-window compliance.'),
+ 'pharmacy_inventory':(Empty,False,'Read study-drug lots permitted for the linked role.'),
+ 'participant_pharmacy':(SubjectRead,False,'Read role-masked study-drug authorization, dispense and return records for one participant.'),
+ 'crf_review_queue':(Empty,False,'Read the independent CRF review queue permitted for the linked role.'),
+ 'crf_completeness':(Empty,False,'Read submitted and reviewed follow-up form completeness.'),
+ 'staff_accounts':(Empty,False,'Read named staff access status. PI/admin only.'),
+ 'randomization_readiness':(Empty,False,'Read sealed-sequence readiness and realized allocation count without future arm order.'),
+ 'read_allocation':(SubjectRead,False,'Read one released allocation with the dashboard role mask; never exposes future allocations.'),
  'register_patient':(Register,True,'Register one patient after user confirmation. Retry only with the same idempotency key and identical input.'),
  'correct_patient_identity':(IdentityWrite,True,'Correct identity using expected CR, revision and a reason after user confirmation.'),
  'create_registry_entry':(RegistryWrite,True,'Save one dated event against an exact CR, study ID or name. Reject ambiguous matches; confirm the selected participant first.'),
@@ -73,7 +149,28 @@ TOOLS={
  'save_crf_draft':(DraftWrite,True,'Save a typed CRF draft by exact participant identifier. A draft is not a submitted or verified CRF.'),
  'submit_crf':(CRFWrite,True,'Submit a completed CRF after user confirmation, matching study ID and existing validation.'),
  'correct_crf':(CRFCorrection,True,'Correct a submitted CRF after user confirmation, matching study ID, expected revision and reason.'),
+ 'screen_participant':(ScreeningWrite,True,'Create a screening record after user confirmation using the validated dashboard workflow. This is not enrollment or randomization.'),
+ 'review_eligibility':(EligibilityWrite,True,'Record every protocol inclusion and exclusion item with source values after investigator confirmation.'),
+ 'enroll_participant':(EnrollmentWrite,True,'Irreversibly approve enrollment and assign the next Study ID after PI confirmation and all server checks.'),
+ 'discontinue_participant':(DiscontinueWrite,True,'Record withdrawal, death or discontinuation with reason after investigator confirmation.'),
+ 'randomize_participant':(RandomizeWrite,True,'Irreversibly release the next concealed allocation after explicit PI confirmation and every existing eligibility, sequence and timing check. Never choose an arm.'),
+ 'collect_pcr':(PCRCollectWrite,True,'Record CMV PCR collection and accession after confirmation.'),
+ 'enter_pcr_result':(PCRResultWrite,True,'Enter or correct a CMV PCR result with revision control and laboratory role checks.'),
+ 'verify_pcr':(PCRVerifyWrite,True,'Independently verify a submitted CMV PCR result after confirmation.'),
+ 'repeat_pcr':(PCRRepeatWrite,True,'Create a repeat PCR specimen record with an attributed reason.'),
+ 'receive_drug_lot':(LotWrite,True,'Record receipt of a 450 mg study-drug lot after pharmacy confirmation.'),
+ 'authorize_study_drug':(DrugAuthorizationWrite,True,'Reference a signed paper prescription after allocation and renal review checks. This is not an electronic prescription.'),
+ 'dispense_study_drug':(DispenseWrite,True,'Record study-drug issue against a reconciled signed authorization and available lot after pharmacy confirmation.'),
+ 'record_drug_return':(ReturnWrite,True,'Record returned study tablets and disposition; returned stock is never automatically reissued.'),
+ 'review_crf':(CRFReviewWrite,True,'Record independent CRF verification or a correction request with reason.'),
+ 'review_registry_entry':(RegistryReviewWrite,True,'Record independent verification or a correction request for one longitudinal registry entry.'),
+ 'renew_staff_access':(StaffRenewWrite,True,'Renew one active named staff account for the dashboard-defined 90-day period. PI/admin role rules remain enforced.'),
+ 'revoke_staff_access':(StaffRevokeWrite,True,'Revoke one named staff account and its active sessions after explicit confirmation. PI/admin role rules remain enforced.'),
+ 'prepare_google_drive_backup_transfer':(Write,True,'Authorize a ten-minute download of only the newest OCI-encrypted, isolated-restore-verified archive for Drive upload. PI/admin only.'),
+ 'confirm_google_drive_backup_readback':(BackupConfirmWrite,True,'Acknowledge a Drive object only after its downloaded bytes match the OCI archive SHA-256. PI/admin only.'),
 }
+RECOVERY_WRITES={'prepare_google_drive_backup_transfer','confirm_google_drive_backup_readback'}
+SENSITIVE_RESULTS={'prepare_google_drive_backup_transfer'}
 
 
 def definitions(scopes):
@@ -84,7 +181,7 @@ def definitions(scopes):
         out.append({'name':name,'title':name.replace('_',' ').capitalize(),'description':description,
             'inputSchema':model.model_json_schema(),
             'annotations':{'readOnlyHint':not write,'destructiveHint':write,
-                           'idempotentHint':True,'openWorldHint':False},
+                           'idempotentHint':name not in SENSITIVE_RESULTS,'openWorldHint':False},
             'securitySchemes':schemes,'_meta':{'securitySchemes':schemes}})
     return out
 
@@ -105,6 +202,26 @@ def execute(name,args,u,s):
     if name=='failure_diagnostics':return mcp_readonly.failure_diagnostics(u)
     if name=='clinical_write_readiness':return mcp_readonly.clinical_write_readiness(u,s)
     if name=='trial_workflow_status':return mcp_readonly.trial_workflow_status(args.identifier,u,s)
+    if name=='dashboard_overview':return trial_api.overview(u=u,s=s)
+    if name=='registry_dashboard':return dashboard_main.dashboard(u=u,s=s)
+    if name=='registry_review_queue':return dashboard_main.review_queue(u=u,s=s)
+    if name=='patient_audit_history':return dashboard_main.audit_history(args.patient_id,u=u,s=s)
+    if name=='followup_due':return dashboard_main.due(u=u,s=s)
+    if name=='valganciclovir_dose_preview':return dashboard_main.dose_preview(args.data,u=u)
+    if name=='action_worklist':return trial_api.action_worklist(u=u,s=s)
+    if name=='participant_context':return trial_crf.subject_context(args.subject_id,u=u,s=s)
+    if name=='participant_timeline':return trial_crf.clinical_timeline(args.subject_id,u=u,s=s)
+    if name=='eligibility_schema':return trial_api.eligibility_schema(u=u)
+    if name=='read_eligibility':return trial_api.eligibility_detail(args.subject_id,u=u,s=s)
+    if name=='read_pcr_schedule':return trial_api.pcr_list(args.subject_id,u=u,s=s)
+    if name=='pcr_worklist':return trial_api.pcr_worklist(u=u,s=s)
+    if name=='pharmacy_inventory':return trial_api.lots(u=u,s=s)
+    if name=='participant_pharmacy':return trial_api.subject_pharmacy(args.subject_id,u=u,s=s)
+    if name=='crf_review_queue':return trial_crf.crf_review_queue(u=u,s=s)
+    if name=='crf_completeness':return trial_crf.crf_completeness(u=u,s=s)
+    if name=='staff_accounts':return trial_api.staff_accounts(u=u,s=s)
+    if name=='randomization_readiness':return randomization.readiness(u=u,s=s)
+    if name=='read_allocation':return randomization.read_allocation(args.subject_id,u=u,s=s)
     if not args.confirm:raise HTTPException(422,'Explicit user confirmation required before saving')
     if name=='register_patient':
         result=service.register_assisted_patient(args.data,u=u,s=s)
@@ -130,6 +247,67 @@ def execute(name,args,u,s):
     elif name=='correct_crf':
         result=service.correct_assisted_crf(args.entry_id,args.data,u=u,s=s)
         readback=lambda:as_dict(s.get(TrialCRFEntry,args.entry_id))
+    elif name=='screen_participant':
+        result=trial_api.screen(args.data,u=u,s=s)
+        readback=lambda:trial_api.subject(result['id'],u=u,s=s)
+    elif name=='review_eligibility':
+        result=trial_api.eligibility_review(args.subject_id,args.data,u=u,s=s)
+        readback=lambda:trial_api.eligibility_detail(args.subject_id,u=u,s=s)
+    elif name=='enroll_participant':
+        result=trial_api.enroll(args.subject_id,args.data,u=u,s=s)
+        readback=lambda:trial_api.subject(args.subject_id,u=u,s=s)
+    elif name=='discontinue_participant':
+        result=trial_api.discontinue(args.subject_id,args.data,u=u,s=s)
+        readback=lambda:trial_api.subject(args.subject_id,u=u,s=s)
+    elif name=='randomize_participant':
+        result=randomization.assign(args.subject_id,args.data,u=u,s=s)
+        readback=lambda:randomization.read_allocation(args.subject_id,u=u,s=s)
+    elif name=='collect_pcr':
+        result=trial_api.collect(args.record_id,args.data,u=u,s=s)
+        readback=lambda:trial_api.pcr_view(s.get(PCRRecord,args.record_id))
+    elif name=='enter_pcr_result':
+        result=trial_api.report_pcr(args.record_id,args.data,u=u,s=s)
+        readback=lambda:trial_api.pcr_view(s.get(PCRRecord,args.record_id))
+    elif name=='verify_pcr':
+        result=trial_api.verify_pcr(args.record_id,args.data,u=u,s=s)
+        readback=lambda:trial_api.pcr_view(s.get(PCRRecord,args.record_id))
+    elif name=='repeat_pcr':
+        result=trial_api.repeat_pcr(args.record_id,args.data,u=u,s=s)
+        readback=lambda:result
+    elif name=='receive_drug_lot':
+        result=trial_api.receive_lot(args.data,u=u,s=s)
+        readback=lambda:trial_api.lots(u=u,s=s)
+    elif name=='authorize_study_drug':
+        result=trial_api.authorise_drug(args.subject_id,args.data,u=u,s=s)
+        readback=lambda:trial_api.subject_pharmacy(args.subject_id,u=u,s=s)
+    elif name=='dispense_study_drug':
+        result=trial_api.dispense(args.subject_id,args.data,u=u,s=s)
+        readback=lambda:trial_api.subject_pharmacy(args.subject_id,u=u,s=s)
+    elif name=='record_drug_return':
+        row=s.get(DrugDispense,args.dispense_id)
+        if not row:raise HTTPException(404,'Dispense record not found')
+        subject_id=row.subject_id
+        result=trial_api.return_drug(args.dispense_id,args.data,u=u,s=s)
+        readback=lambda:trial_api.subject_pharmacy(subject_id,u=u,s=s)
+    elif name=='review_crf':
+        result=trial_crf.review_crf(args.entry_id,args.data,u=u,s=s)
+        readback=lambda:as_dict(s.get(TrialCRFEntry,args.entry_id))
+    elif name=='review_registry_entry':
+        result=dashboard_main.review_entry(args.entry_id,args.data,u=u,s=s)
+        readback=lambda:as_dict(s.get(Entry,args.entry_id))
+    elif name=='renew_staff_access':
+        result=trial_api.renew_staff(args.user_id,args.data,u=u,s=s)
+        readback=lambda:next((x for x in trial_api.staff_accounts(u=u,s=s) if x['id']==args.user_id),None)
+    elif name=='revoke_staff_access':
+        result=trial_api.revoke_staff(args.user_id,args.data,u=u,s=s)
+        readback=lambda:next((x for x in trial_api.staff_accounts(u=u,s=s) if x['id']==args.user_id),None)
+    elif name=='prepare_google_drive_backup_transfer':
+        result=mcp_backup_transfer.prepare_transfer(u,s)
+        readback=lambda:result
+    elif name=='confirm_google_drive_backup_readback':
+        result=mcp_backup_transfer.confirm_readback(args.bundle_id,args.drive_file_id,
+            args.drive_file_name,args.readback_sha256,u,s)
+        readback=lambda:result
     else:raise HTTPException(404,'Unknown tool')
     s.expire_all()  # Read committed database state rather than a local object.
     return {'saved':result,'readback':readback(),'actor_id':u.user_id}
@@ -150,7 +328,14 @@ def dispatch(request,message):
         if tool_name is not None and not isinstance(tool_name,str):raise HTTPException(400,'Invalid tool name')
         spec=TOOLS.get(tool_name)
         writing=bool(spec and spec[1])
-        u,grant=bearer_actor(request,s,writing)
+        # Recovery actions must remain available while the clinical write gate
+        # is paused by the missing backup they are intended to repair. They
+        # still require the write scope and PI/admin role, but never touch a
+        # participant, prescription or allocation.
+        u,grant=bearer_actor(request,s,writing and tool_name not in RECOVERY_WRITES)
+        if tool_name in RECOVERY_WRITES and 'cmv:write' not in set(grant.scope.split()):
+            raise HTTPException(403,'OAuth scope insufficient',headers={'WWW-Authenticate':
+                'Bearer error="insufficient_scope", scope="cmv:read cmv:write"'})
         rid=message.get('id')
         if 'id' not in message:
             if method not in {'notifications/initialized','notifications/cancelled'}:
@@ -172,7 +357,10 @@ def dispatch(request,message):
                 arguments=spec[0].model_validate(params.get('arguments',{}))
                 if writing and not arguments.confirm:raise HTTPException(422,'Explicit user confirmation required')
                 receipt=None
-                if writing:
+                # The preparation response contains a ten-minute ciphertext
+                # bearer secret. Never persist that plaintext token in the
+                # idempotency response table; only its SHA-256 grant is stored.
+                if writing and tool_name not in SENSITIVE_RESULTS:
                     # Reserve BEFORE services (which own commits). A process crash
                     # leaves an uncertain receipt that rejects replay; never rerun
                     # a possibly committed clinical write without human readback.

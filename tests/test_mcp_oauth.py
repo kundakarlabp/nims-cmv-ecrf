@@ -247,6 +247,94 @@ def test_oci_operational_mcp_read_tools_and_freshness(cmv, monkeypatch, tmp_path
     assert "encrypted_offsite_backup_not_verified" in blocked["blocking_reasons"]
 
 
+def test_full_dashboard_tools_and_encrypted_drive_transfer(cmv, monkeypatch, tmp_path):
+    """The connector exposes role-bound workflows and only restored ciphertext."""
+    import json
+    from app import mcp_backup_transfer, oauth_api
+    from fastapi import HTTPException
+    from ops.clinical_maintenance import offsite_reference
+
+    c, csrf, _ = cmv
+    client, form = link(c, csrf)
+    token = c.post("/oauth/token", data=form).json()["access_token"]
+    headers = {"Authorization": "Bearer " + token}
+    listing = c.post("/mcp", headers=headers, json={
+        "jsonrpc": "2.0", "id": 1, "method": "tools/list"
+    }).json()["result"]["tools"]
+    by_name = {tool["name"]: tool for tool in listing}
+    expected = {
+        "dashboard_overview", "action_worklist", "participant_context",
+        "registry_dashboard", "registry_review_queue", "patient_audit_history",
+        "followup_due", "valganciclovir_dose_preview",
+        "participant_timeline", "eligibility_schema", "read_eligibility",
+        "read_pcr_schedule", "pcr_worklist", "pharmacy_inventory",
+        "participant_pharmacy", "crf_review_queue", "crf_completeness",
+        "staff_accounts", "randomization_readiness", "read_allocation",
+        "screen_participant", "review_eligibility", "enroll_participant",
+        "discontinue_participant", "randomize_participant", "collect_pcr",
+        "enter_pcr_result", "verify_pcr", "repeat_pcr", "receive_drug_lot",
+        "authorize_study_drug", "dispense_study_drug", "record_drug_return",
+        "review_crf", "renew_staff_access", "revoke_staff_access",
+        "review_registry_entry",
+        "prepare_google_drive_backup_transfer",
+        "confirm_google_drive_backup_readback",
+    }
+    assert expected <= set(by_name)
+    assert by_name["dashboard_overview"]["annotations"]["readOnlyHint"] is True
+    assert by_name["enroll_participant"]["annotations"]["readOnlyHint"] is False
+    assert "change_password" not in by_name and "mfa_setup" not in by_name
+    assert "lock_sequence" not in by_name and "generate_sequence" not in by_name
+
+    export = tmp_path / "export"
+    ack = tmp_path / "ack"
+    export.mkdir(); ack.mkdir()
+    bundle_id = "20261120T021500Z-abcdef123456"
+    raw = b"ciphertext-only synthetic backup test"
+    digest = hashlib.sha256(raw).hexdigest()
+    (export / (bundle_id + ".tar")).write_bytes(raw)
+    (export / (bundle_id + ".json")).write_text(json.dumps({
+        "id": bundle_id, "sha256": digest, "size": len(raw),
+        "created_at": "2026-11-20T02:15:00+00:00", "stamp": "20261120T021500Z",
+        "restore_verified": True,
+    }))
+    monkeypatch.setenv("CLINICAL_BACKUP_EXPORT_DIR", str(export))
+    monkeypatch.setenv("CLINICAL_BACKUP_ACK_DIR", str(ack))
+
+    real_authorize = oauth_api.authorize_account
+    def paused_clinical_gate(request, *args, **kwargs):
+        if request.method == "POST":
+            raise HTTPException(503, "Synthetic paused clinical write gate")
+        return real_authorize(request, *args, **kwargs)
+    monkeypatch.setattr(oauth_api, "authorize_account", paused_clinical_gate)
+
+    prepared = rpc(c, token, "prepare_google_drive_backup_transfer", {
+        "idempotency_key": "prepare-drive-backup-001", "confirm": True
+    }).json()["result"]["structuredContent"]["saved"]
+    assert prepared["bundle_id"] == bundle_id
+    assert prepared["sha256"] == digest
+    assert prepared["contains_plaintext_clinical_data"] is False
+    with SessionLocal() as s:
+        from app.oauth_models import MCPReceipt
+        rows = s.scalars(select(MCPReceipt)).all()
+        assert prepared["authorization_header"] not in json.dumps(
+            [row.result for row in rows], default=str)
+    downloaded = c.get("/api/backup-transfer/" + bundle_id,
+                       headers={"Authorization": prepared["authorization_header"]})
+    assert downloaded.status_code == 200 and downloaded.content == raw
+    assert c.get("/api/backup-transfer/" + bundle_id).status_code == 401
+
+    filename = "clinical-" + bundle_id + ".tar"
+    confirmed = rpc(c, token, "confirm_google_drive_backup_readback", {
+        "bundle_id": bundle_id, "drive_file_id": "1AbCdEfGhIjKlMnOpQrStUv",
+        "drive_file_name": filename, "readback_sha256": digest,
+        "idempotency_key": "confirm-drive-backup-001", "confirm": True,
+    }).json()["result"]["structuredContent"]["saved"]
+    assert confirmed["acknowledged"] is True
+    payload = json.loads((ack / (bundle_id + ".json")).read_text())
+    assert payload["sha256"] == digest
+    assert offsite_reference(payload) == (
+        "gdrive:" + mcp_backup_transfer.FOLDER_ID + ":" + filename)
+
 def test_blinded_workflow_status_exact_match_no_allocations_or_doses(cmv):
     """MCP sees workflow milestones but never fetches or returns the sealed arm."""
     from datetime import date, datetime, timezone

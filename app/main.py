@@ -775,5 +775,7 @@ app.include_router(assistant_router)
 # OAuth uses separate additive metadata; the clinical baseline is unchanged.
 from .oauth_api import router as oauth_router
 from .mcp_api import router as mcp_router
+from .mcp_backup_transfer import router as mcp_backup_transfer_router
 app.include_router(oauth_router)
 app.include_router(mcp_router)
+app.include_router(mcp_backup_transfer_router)
