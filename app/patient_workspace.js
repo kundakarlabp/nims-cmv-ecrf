@@ -316,6 +316,13 @@ style.textContent+=`
  .tw-completed-actions button{width:100%}
 }
 `;
+style.textContent+=`
+#reviewResults .tw-nested-fields{padding:6px 10px;margin:4px 0;border-left:2px solid #dae5f2;background:#f7f9fe}
+#reviewResults .tw-nested-fields>div{padding:5px 0;border-bottom:1px solid #e5edf8}
+#reviewResults .tw-long-source{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.6;padding:8px}
+#reviewResults .tw-field-list{margin:5px 0;padding-left:19px;line-height:1.5}
+#reviewResults .tw-review-fields>div dd>details>summary{font-size:12px;cursor:pointer;color:#496d9b}
+`;
 document.head.appendChild(style);
 
 // Legacy route buttons retain their IDs and DOM state for the existing router.
@@ -508,12 +515,37 @@ document.getElementById('tw-pcr-start').onclick=()=>{void tab('study');};
 /* Reports intentionally use two distinct sources: registry entries and the
    protocol eCRF review queue. No raw patient JSON is dumped on the page. */
 function reportSafe(x){return escapeHTML(x===null||x===undefined?'—':String(x));}
+function clinicalFieldValue(value,depth=0){
+ if(value===null||value===undefined||value==='')return '<em>Not documented</em>';
+ if(typeof value==='string'){
+  const t=value.trim();
+  if((t.startsWith('{')&&t.endsWith('}'))||(t.startsWith('[')&&t.endsWith(']'))){
+   try{const parsed=JSON.parse(t);
+    if(parsed&&typeof parsed==='object')return clinicalFieldValue(parsed,depth+1);
+   }catch(_ignored){}
+  }
+  if(t.length>260)return '<details><summary>Read full source text</summary><div class="tw-long-source">'+
+    reportSafe(t)+'</div></details>';
+  return reportSafe(t);
+ }
+ if(Array.isArray(value)){
+  return '<ul class="tw-field-list">'+value.map(x=>'<li>'+
+   clinicalFieldValue(x,depth+1)+'</li>').join('')+'</ul>';
+ }
+ if(typeof value==='object'){
+  if(depth>=4)return '<em>Nested source detail available in the original entry</em>';
+  return '<dl class="tw-nested-fields">'+Object.entries(value).filter(([key])=>!key.startsWith('_'))
+   .map(([key,v])=>'<div><dt>'+reportSafe(key.replaceAll('_',' '))+'</dt><dd>'+
+    clinicalFieldValue(v,depth+1)+'</dd></div>').join('')+'</dl>';
+ }
+ return reportSafe(value);
+}
 function fieldSummary(payload){
  const entries=Object.entries(payload||{}).filter(([key])=>!key.startsWith('_'));
  if(!entries.length)return '<p class="hint">No submitted source fields.</p>';
  return '<dl class="tw-review-fields">'+entries.map(([key,val])=>
   '<div><dt>'+reportSafe(key.replaceAll('_',' '))+'</dt><dd>'+
-  reportSafe(typeof val==='object'?JSON.stringify(val):val)+'</dd></div>').join('')+'</dl>';
+  clinicalFieldValue(val)+'</dd></div>').join('')+'</dl>';
 }
 function reviewGroup(rows,title,registry){
  const all=rows||[],pending=all.filter(x=>x.review_status==='pending'||x.review_status==='needs_correction'),
