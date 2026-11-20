@@ -138,9 +138,14 @@ async function updatePatientBanner(){
   document.getElementById('tw-patient-meta').textContent='';return;
  }
  try{
+  // IT administrators can use the registry, but should not read clinical
+  // trial context unless the authenticated clinical workspace grants access.
+  const clinicalRole=document.getElementById('currentRole').textContent.trim();
+  const maySeeClinical=!!window.currentWorkspaceFullAccess||
+   ['pi','consultant','scientist','nurse','pg','technician','microbiology','pharmacy','monitor'].includes(clinicalRole);
   const [patient,clinical]=await Promise.all([
    api('/api/patients/'+encodeURIComponent(id)),
-   api('/api/trial/crf/patients/'+encodeURIComponent(id)+'/context')
+   maySeeClinical?api('/api/trial/crf/patients/'+encodeURIComponent(id)+'/context'):Promise.resolve({subject:null})
   ]);
   if(selected!==id||request!==bannerRequest)return;
   const p=patient.patient||{},s=clinical.subject;
