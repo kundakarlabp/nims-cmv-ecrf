@@ -495,7 +495,7 @@ async function loadReview(){
    '<p class="hint">eCRF review records are unavailable for this account.</p>');
 }
 window.loadReview=loadReview;
-document.getElementById('tw-report-reload').onclick=()=>{void loadReview();};
+root.addEventListener('click',event=>{if(event.target.closest('#tw-report-reload'))void loadReview();});
 document.getElementById('reviewResults').addEventListener('click',e=>{
  const b=e.target.closest('button[data-review-crf]');if(!b)return;
  void (async()=>{
