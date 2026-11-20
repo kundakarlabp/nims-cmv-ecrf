@@ -1551,7 +1551,10 @@ $('tw-context-subject').onchange=()=>{void task('tw-context-error',async()=>{
  try{if(activeTab==='crf')await crfSaveDraft();if(activeTab==='entry')await saveDraftNow();}
  catch(e){$('tw-context-subject').value=previous?String(previous):'';throw e;}
  await selectParticipantSubject(n('tw-context-subject'));
- if(activeTab==='study')await selectEnrollmentPatient();
+ if(activeTab==='study'){
+  await selectEnrollmentPatient();
+  window.dispatchEvent(new Event('cmv:workflow-updated'));
+ }
  if(activeTab==='crf'){crfRender();await populateCrfLinkedIdentifiers();await crfRestoreDraft();await loadCrfEntries();}
  if(activeTab==='pcr')await loadPCR();
  if(activeTab==='drug')await loadDrug();
