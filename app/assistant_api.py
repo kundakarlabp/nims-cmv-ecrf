@@ -13,7 +13,8 @@ from sqlalchemy.orm import Session
 from .main import (
     AuthContext, current, db, Patient, PatientIn, EntryIn, EntryEdit,
     create_patient, patient as get_patient_record, patients as search_registry,
-    new_entry, edit_entry, permission, audit, as_dict, now, CLINICAL_MODE
+    new_entry, edit_entry, permission, audit, as_dict, now, CLINICAL_MODE,
+    patient_archived, active_patient_filter, ARCHIVE_ACTION
 )
 from .trial_api import subjects as find_subjects, find_subject
 from .trial_crf import (
@@ -160,6 +161,8 @@ def correct_registry_patient(patient_id: str, data: RegistryCorrection,
     record = s.get(Patient, patient_id)
     if not record:
         raise HTTPException(404, "Patient not found")
+    if patient_archived(s,patient_id):
+        raise HTTPException(409, "Registry record archived")
     if record.revision != data.expected_revision or record.cr_number != data.expected_cr_number:
         raise HTTPException(409, "Patient identity or revision changed; reload")
     if not CLINICAL_MODE and not (data.cr_number.upper().startswith("TEST-")
@@ -196,7 +199,7 @@ def exact_registry_match(identifier: str, s: Session) -> Patient:
     if len(value) < 2 or len(value) > 100:
         raise HTTPException(422, "Enter an exact patient name, CR number or study ID")
     lower = value.casefold()
-    matches = s.scalars(select(Patient).where(or_(
+    matches = s.scalars(select(Patient).where(active_patient_filter(),or_(
         func.lower(Patient.name) == lower,
         func.lower(Patient.cr_number) == lower,
         func.lower(Patient.study_id) == lower
@@ -206,6 +209,48 @@ def exact_registry_match(identifier: str, s: Session) -> Patient:
     if len(matches) > 1:
         raise HTTPException(409, "Ambiguous patient name; supply CR number or study ID")
     return matches[0]
+
+
+class RegistryArchiveInput(BaseModel):
+    expected_revision: int = Field(ge=1)
+    expected_cr_number: str = Field(min_length=1, max_length=100)
+    reason: str = Field(min_length=8, max_length=500)
+    confirm_archive: bool = False
+
+
+@router.post("/patients/{patient_id}/archive")
+def archive_registry_patient(patient_id: str, data: RegistryArchiveInput,
+                             u: AuthContext = Depends(current),
+                             s: Session = Depends(db)):
+    """Remove a never-screened record from the active workspace, retaining audit.
+
+    No hard deletion, renamed identifiers, hidden allocation or schema migration.
+    Locks the row and validates both expected identity and revision.
+    """
+    if u.role not in {"admin", "pi"} and not u.pi_authorized:
+        raise HTTPException(403, "PI or administrator permission required")
+    if not data.confirm_archive:
+        raise HTTPException(422, "Explicit archive confirmation required")
+    record=s.scalar(select(Patient).where(Patient.id==patient_id).with_for_update())
+    if not record:
+        raise HTTPException(404, "Registry record not found")
+    if (record.cr_number != data.expected_cr_number
+            or record.revision != data.expected_revision):
+        raise HTTPException(409, "Record identity or revision changed; reload")
+    if patient_archived(s,patient_id):
+        raise HTTPException(409, "Record already archived")
+    from .trial_models import TrialSubject
+    if record.study_id is not None or s.scalar(select(TrialSubject.id).where(
+            TrialSubject.patient_id==patient_id).limit(1)) is not None:
+        raise HTTPException(409, "Screened/enrolled trial records cannot be archived")
+    audit(s,u,ARCHIVE_ACTION,"patient",patient_id,patient_id,
+          {"revision":record.revision},
+          {"archived":True},
+          data.reason)
+    s.commit()
+    return {"patient_id":patient_id,"archived":True,
+            "visible_in_active_registry":False,
+            "audit_preserved":True}
 
 
 class RegistryEntryByIdentifier(EntryIn):

@@ -49,6 +49,9 @@ class IdentityWrite(Write):
 class RegistryCorrection(Write):
     entry_id:str=Field(min_length=1,max_length=36)
     data:service.EntryEdit
+class RegistryArchiveWrite(Write):
+    patient_id:str=Field(min_length=1,max_length=36)
+    data:service.RegistryArchiveInput
 class DraftWrite(Write):data:service.CRFDraftByIdentifier
 class CRFWrite(Write):
     subject_id:int=Field(ge=1)
@@ -144,6 +147,7 @@ TOOLS={
  'read_allocation':(SubjectRead,False,'Read one released allocation with the dashboard role mask; never exposes future allocations.'),
  'register_patient':(Register,True,'Register one patient after user confirmation. Retry only with the same idempotency key and identical input.'),
  'correct_patient_identity':(IdentityWrite,True,'Correct identity using expected CR, revision and a reason after user confirmation.'),
+ 'archive_patient':(RegistryArchiveWrite,True,'Remove a never-screened registry record from active dashboard views with signed PI/admin confirmation, exact CR and revision; preserve all data and audit history.'),
  'create_registry_entry':(RegistryWrite,True,'Save one dated event against an exact CR, study ID or name. Reject ambiguous matches; confirm the selected participant first.'),
  'correct_registry_entry':(RegistryCorrection,True,'Correct a registry event using its expected revision and correction reason.'),
  'save_crf_draft':(DraftWrite,True,'Save a typed CRF draft by exact participant identifier. A draft is not a submitted or verified CRF.'),
@@ -229,6 +233,10 @@ def execute(name,args,u,s):
     elif name=='correct_patient_identity':
         result=service.correct_registry_patient(args.patient_id,args.data,u=u,s=s)
         readback=lambda:service.read_registry_patient(args.patient_id,u=u,s=s)
+    elif name=='archive_patient':
+        result=service.archive_registry_patient(args.patient_id,args.data,u=u,s=s)
+        readback=lambda:{'archived':dashboard_main.patient_archived(s,args.patient_id),
+                         'visible_in_active_registry':False,'audit_preserved':True}
     elif name=='create_registry_entry':
         result=service.enter_registry_event(args.data,u=u,s=s)
         readback=lambda:as_dict(s.get(Entry,result['entry']['id']))
