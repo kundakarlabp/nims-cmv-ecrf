@@ -258,6 +258,13 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   await page.waitForFunction(()=>activeTab==='crf'&&$('tw-crf-submit').textContent==='Save changes');
   assert.equal(await page.inputValue('#twcrf-source_reference'),'TEST-DIRECT-EDIT');
   assert.match(await page.textContent('#tw-crf-draft-status'),/Editing existing entry/);
+  assert.equal(await page.isVisible('#tw-crf-reason-wrap'),true);
+  assert.equal(await page.isVisible('#tw-crf-close-edit'),true);
+  await page.click('#tw-crf-close-edit');
+  await page.waitForFunction(()=>$('tw-crf-submit').textContent==='Submit completed form'&&
+    $('tw-crf-close-edit').classList.contains('hide'));
+  assert.equal(await page.isVisible('#tw-crf-reason-wrap'),false,
+    'Routine new entry does not show correction-only fields');
   await page.evaluate(async()=>{await tab('course');});
   await page.setViewportSize({width:390,height:844});
   assert.equal(await page.locator('#tw-participant-context').evaluate(el=>getComputedStyle(el).gridColumnStart),'1');
