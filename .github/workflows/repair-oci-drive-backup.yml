@@ -1,0 +1,76 @@
+name: Repair OCI Google Drive clinical backup
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: [Mark reviewed staging release]
+    types: [completed]
+
+# No arbitrary shell commands, repository credentials or patient records.
+permissions:
+  contents: read
+concurrency:
+  group: nims-cmv-oci-drive-repair
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out reviewed operator code
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Securely configure and verify OCI Drive backup
+        env:
+          OCI_SSH_PRIVATE_KEY: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+          OCI_SSH_KNOWN_HOSTS: ${{ secrets.OCI_SSH_KNOWN_HOSTS }}
+          CMV_DRIVE_RCLONE_CONFIG_B64: ${{ secrets.CMV_DRIVE_RCLONE_CONFIG_B64 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          if [[ -z "$OCI_SSH_PRIVATE_KEY" || -z "$OCI_SSH_KNOWN_HOSTS" || -z "$CMV_DRIVE_RCLONE_CONFIG_B64" ]]; then
+            echo "::error::OCI Drive repair credentials not configured. Add the three named Actions secrets in the private repository before running."
+            exit 2
+          fi
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+          printf '%s\n' "$OCI_SSH_PRIVATE_KEY" > "$work/id_oci"
+          printf '%s\n' "$OCI_SSH_KNOWN_HOSTS" > "$work/known_hosts"
+          printf '%s' "$CMV_DRIVE_RCLONE_CONFIG_B64" | base64 --decode > "$work/drive-remote.conf"
+          test -s "$work/drive-remote.conf"
+          chmod 600 "$work/id_oci" "$work/known_hosts" "$work/drive-remote.conf"
+
+          ssh_args=(-T -i "$work/id_oci" -o BatchMode=yes
+            -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+            -o UserKnownHostsFile="$work/known_hosts"
+            -o ConnectTimeout=15 -o ServerAliveInterval=20
+            -o ServerAliveCountMax=3)
+          remote='ubuntu@152.70.77.77'
+
+          # Fixed commands, pinned host key; install verified Ubuntu package
+          # only if rclone is absent.
+          ssh "${ssh_args[@]}" "$remote" \
+            'set -e; if ! command -v rclone >/dev/null 2>&1; then sudo -n apt-get update -qq >/dev/null && sudo -n apt-get install -y -qq rclone >/dev/null; fi; test -f /home/ubuntu/nims-cmv/ops/repair_drive_backup.py'
+          # Token-bearing config crosses only encrypted SSH stdin.
+          ssh "${ssh_args[@]}" "$remote" \
+            'cd /home/ubuntu/nims-cmv && python3 ops/repair_drive_backup.py' \
+            < "$work/drive-remote.conf"
+
+      - name: Verify actual public clinical write readiness
+        run: |
+          python3 - <<'PY'
+          import json
+          from urllib.request import urlopen
+          with urlopen('https://152-70-77-77.sslip.io/readyz', timeout=15) as reply:
+              status=json.load(reply)
+          if status.get('service')!='clinical' or status.get('clinical_entry_available') is not True:
+              raise SystemExit('OCI clinical write readiness is not yet verified after Drive backup repair')
+          print('OCI clinical write readiness verified after encrypted Google Drive readback.')
+          PY
