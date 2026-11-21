@@ -365,6 +365,14 @@ banner.innerHTML='<div><div class="tw-identity-secondary">CURRENT PATIENT</div>'
  '<div><span class="tw-stage-status" id="tw-banner-status">Not selected</span>'+
  '<div id="tw-patient-meta"></div></div>';
 root.insertBefore(banner,context);
+const switchPatientButton=document.createElement('button');
+switchPatientButton.id='tw-switch-patient';switchPatientButton.type='button';
+switchPatientButton.textContent='Switch patient';switchPatientButton.className='secondary';
+switchPatientButton.onclick=()=>{
+ const finder=document.getElementById('tw-context-find');
+ finder.focus();finder.select();
+};
+banner.appendChild(switchPatientButton);
 const subnav=document.createElement('nav');subnav.id='tw-patient-subnav';
 subnav.setAttribute('aria-label','Patient workflow');
 const subButtons={};
@@ -498,6 +506,15 @@ const switchLabel=document.createElement('summary');switchLabel.textContent='Cha
 switchRecord.appendChild(switchLabel);
 switchRecord.appendChild(document.getElementById('tw-context-subject').closest('label'));
 context.insertBefore(switchRecord,document.getElementById('tw-context-error'));
+// One study record is normally linked to one patient. This low-frequency
+// selector belongs in the patient's optional tools, never the main form.
+const recordTools=document.createElement('details');
+recordTools.id='tw-patient-record-tools';
+const recordToolsSummary=document.createElement('summary');
+recordToolsSummary.textContent='Record tools';
+recordTools.append(recordToolsSummary,switchRecord);
+banner.appendChild(recordTools);
+switchLabel.textContent='Advanced: change linked study record';
 const avatar=document.createElement('span');avatar.className='tw-avatar';avatar.setAttribute('aria-hidden','true');
 banner.insertBefore(avatar,banner.firstChild);
 const pcr=document.getElementById('pcr'),emptyPcr=document.createElement('div');
@@ -848,6 +865,92 @@ resultLabel.firstChild.textContent='Select matching patient';
 const showMatches=()=>{searchHeader.classList.toggle('tw-searching',searchInput.value.trim().length>=3);};
 searchInput.addEventListener('input',showMatches);
 searchResult.addEventListener('change',()=>{searchHeader.classList.remove('tw-searching');});
+// The existing select remains the authoritative exact-match control for
+// accessibility and regression tests; visible search results are simple
+// tap targets rather than a second full-width native dropdown.
+resultLabel.classList.add('tw-search-native');
+const suggestions=document.createElement('div');
+suggestions.id='tw-search-suggestions';suggestions.hidden=true;
+suggestions.setAttribute('role','listbox');
+suggestions.setAttribute('aria-label','Patient search results');
+searchHeader.appendChild(suggestions);
+let visibleSuggestionRequest=0;
+function drawSuggestions(){
+ const q=searchInput.value.trim();
+ suggestions.replaceChildren();
+ if(q.length<3){suggestions.hidden=true;return;}
+ const opts=[...searchResult.options].filter(x=>x.value);
+ if(!opts.length){
+  const p=document.createElement('p');p.className='tw-search-help';
+  p.textContent=searchResult.options[0]?.textContent||'Searching…';
+  suggestions.append(p);
+ }else{
+  opts.slice(0,12).forEach(opt=>{
+   const button=document.createElement('button');button.type='button';
+   button.className='tw-search-option';
+   button.setAttribute('role','option');
+   button.textContent=opt.textContent;
+   button.onclick=()=>{
+    const chosen=opt.value;
+    if(![...searchResult.options].some(x=>x.value===chosen))return;
+    searchResult.value=chosen;
+    suggestions.hidden=true;
+    searchHeader.classList.remove('tw-searching');
+    searchResult.dispatchEvent(new Event('change',{bubbles:true}));
+    searchInput.value='';
+   };
+   suggestions.append(button);
+  });
+ }
+ suggestions.hidden=false;
+}
+new MutationObserver(drawSuggestions).observe(searchResult,{childList:true,subtree:true});
+searchInput.addEventListener('input',()=>{visibleSuggestionRequest++;drawSuggestions();});
+searchInput.addEventListener('keydown',event=>{
+ if(event.key==='Escape'){suggestions.hidden=true;searchHeader.classList.remove('tw-searching');}
+ if(event.key==='Enter'){
+  const first=suggestions.querySelector('.tw-search-option');
+  if(first){event.preventDefault();first.click();}
+ }
+});
+searchInput.addEventListener('blur',()=>{setTimeout(()=>{
+ if(!searchHeader.contains(document.activeElement)){suggestions.hidden=true;}
+},150);});
+const loginPanel=document.getElementById('loginPanel');
+loginPanel.querySelector('h2').textContent='Study staff sign in';
+const intro=document.createElement('div');intro.id='tw-login-header';
+intro.innerHTML='<span aria-hidden="true" style="font-size:24px;font-weight:800">+</span>'+
+ '<div><strong>NIMS CMV Trial · eCRF</strong><span>Secure clinical data workspace</span></div>';
+loginPanel.insertBefore(intro,loginPanel.firstChild);
+const pass=document.getElementById('loginPass');
+const showPassword=document.createElement('button');showPassword.type='button';
+showPassword.id='tw-login-show-password';
+showPassword.textContent='Show password';
+showPassword.onclick=()=>{const shown=pass.type==='text';
+ pass.type=shown?'password':'text';showPassword.textContent=shown?'Show password':'Hide password';};
+pass.closest('label').insertAdjacentElement('afterend',showPassword);
+for(const id of ['loginName','loginPass','loginOtp']){
+ document.getElementById(id).addEventListener('keydown',e=>{
+  if(e.key==='Enter'){
+   e.preventDefault();loginPanel.querySelector('button[onclick="login()"]').click();
+  }
+ });
+}
+const activationHeading=[...loginPanel.children].find(el=>
+ el.tagName==='H3'&&el.textContent.includes('Activate individual staff account'));
+if(activationHeading){
+ const activation=document.createElement('details');activation.id='tw-login-activation';
+ const title=document.createElement('summary');title.textContent='First time? Activate your staff account';
+ activation.append(title);
+ let node=activationHeading.previousElementSibling;
+ while(node){
+  const next=node.nextElementSibling;
+  activation.append(node);
+  node=next;
+ }
+ loginPanel.append(activation);
+}
+
 const menuToggle=document.getElementById('tw-mobile-menu');
 header.insertBefore(menuToggle,searchHeader);
 // Hide secondary status labels on everyday views but preserve them for
