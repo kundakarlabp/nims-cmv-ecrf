@@ -332,6 +332,13 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   await page.fill('#tw-cbc-date','2026-10-02');await page.fill('#tw-review-on','2026-10-02');
   for(const el of await page.locator('[data-eligibility]').all())await el.selectOption(await el.getAttribute('data-eligibility')==='inclusion'?'true':'false');
   await page.click('#tw-checklist-save');await page.waitForFunction(()=>$('tw-status').textContent.includes('Eligible.'));
+  await page.fill('#tw-age','51');
+  assert.equal(await page.isDisabled('#tw-enroll-save'),true,
+    'Changing a source measurement after approval must require revalidation');
+  assert.match(await page.textContent('#tw-eligibility-warning'),/Unsaved eligibility changes/);
+  await page.fill('#tw-age','50');
+  await page.click('#tw-checklist-save');
+  await page.waitForFunction(()=>window.cmvEligibilityDirty===false);
   await page.evaluate(async()=>{await tab('randomization');});
   assert.match(await page.textContent('#tw-rand-progress'),/Screened/);
   assert.equal(await page.isDisabled('#tw-rand-assign'),true);
