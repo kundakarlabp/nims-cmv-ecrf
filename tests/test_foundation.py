@@ -1827,3 +1827,40 @@ def test_eligibility_working_draft_is_private_partial_and_never_changes_signed_e
     with TestClient(app) as resident:
         h=auth(resident,'testpg','AnotherLongTestingPassword456!')
         assert resident.get(url).status_code==403
+
+
+def test_signed_eligibility_supersedes_another_staff_members_old_partial_draft():
+    """A newer signed review must not reopen obsolete scientist inputs."""
+    from app.trial_api import INCLUSION_ITEMS, EXCLUSION_ITEMS
+    with TestClient(app) as admin:
+        h=auth(admin);_,sid=setup_synthetic_trial(admin,h)
+    url=f'/api/trial/subjects/{sid}/eligibility-draft'
+    with TestClient(app) as scientist:
+        h=auth(scientist,'syntheticscreener','SyntheticScreenerPassword123!')
+        first=scientist.put(url,headers=h,json={'payload':{
+            'inclusion':{'age_ge_18':'true'},'exclusion':{},
+            'fields':{'review_notes':'TEST original superseded partial note'}},
+            'expected_revision':None})
+        assert first.status_code==200,first.text
+        assert first.json()['revision']==1
+        assert scientist.get(url).json()['draft'] is not None
+    with TestClient(app) as consultant:
+        h=auth(consultant,'testeligibilityconsultant','EligibilityTestPassword123!')
+        signed=consultant.put(f'/api/trial/subjects/{sid}/eligibility',headers=h,json={
+            'inclusion':{k:True for k in INCLUSION_ITEMS},
+            'exclusion':{k:False for k in EXCLUSION_ITEMS},
+            'age_years':50,'anc_per_ul':3000,'platelets_per_ul':180000,
+            'hemoglobin_g_dl':11,'crcl_cg_ml_min':68,
+            'baseline_cbc_on':'2026-10-02','reviewed_on':'2026-10-02'})
+        assert signed.status_code==200,signed.text
+    with TestClient(app) as scientist:
+        h=auth(scientist,'syntheticscreener','SyntheticScreenerPassword123!')
+        assert scientist.get(url).json()['draft'] is None
+        fresh=scientist.put(url,headers=h,json={'payload':{
+            'inclusion':{'age_ge_18':'true'},'exclusion':{},
+            'fields':{'review_notes':'TEST new partial note after signed review'}},
+            'expected_revision':None})
+        assert fresh.status_code==200,fresh.text
+        assert fresh.json()['revision']==2
+        assert scientist.get(url).json()['draft']['payload']['fields']['review_notes']==(
+            'TEST new partial note after signed review')
