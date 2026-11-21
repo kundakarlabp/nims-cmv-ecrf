@@ -936,12 +936,24 @@ function updateEnrollmentReadiness(){
     ' days after the documented transplant; allowed interval is 0–10 days. Do not backdate.');
  if(!subject){target.textContent='Select a screened participant.';button.disabled=true;return;}
  if(blockers.length){
-  target.textContent=blockers.length===1?blockers[0]:
-   blockers[0]+' · '+(blockers.length-1)+' other item(s). See Eligibility.';
-  target.title=blockers.join('\n');
+  const short=blockers.length===1?blockers[0]:
+   blockers[0]+' · '+(blockers.length-1)+' other item(s).';
+  target.replaceChildren(document.createTextNode(short));
+  if(blockers.length>1){
+   const details=document.createElement('details');
+   const summary=document.createElement('summary');
+   summary.textContent='Show all reasons';
+   details.appendChild(summary);
+   const list=document.createElement('ul');
+   for(const reason of blockers){
+    const item=document.createElement('li');item.textContent=reason;list.appendChild(item);
+   }
+   details.appendChild(list);target.appendChild(details);
+  }
   target.classList.add('err');
   button.disabled=true;
  }else{
+  target.removeAttribute('title');
   target.textContent=review?.baseline?.is_eligible===true?
    'Eligibility recorded as eligible. Review consent, transplant date and stratum before confirming enrollment.':
    'Review and save the checklist first. Source verification and trial timing are checked by the server.';
