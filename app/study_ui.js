@@ -257,7 +257,7 @@ function setRole(){
    }
  }
  for(const [id,roles] of [
-  ['tw-screen-save',['pi','consultant','scientist']],['tw-checklist-save',['pi','consultant']],['tw-enroll-save',['pi']],
+  ['tw-screen-save',['pi','consultant','scientist']],['tw-screening-correct-save',['pi','consultant']],['tw-checklist-save',['pi','consultant']],['tw-enroll-save',['pi']],
   ['tw-collect-save',['pi','consultant','scientist','nurse','technician','microbiology']],
   ['tw-result-save',['microbiology','technician']],
   ['tw-verify-save',['pi','consultant','scientist','monitor']],
