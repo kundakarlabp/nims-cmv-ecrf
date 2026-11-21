@@ -213,6 +213,16 @@ CRF_FORMS={
  }
 }
 
+# Optional provenance-anchored clinical narrative and NIMS nephrology unit.
+# These are supplementary fields, not additional required trial investigations.
+# Existing submitted payloads remain valid because their omission is permitted.
+for _form in ("C_baseline","E_followup","G_cmv_event","H_adverse_event","I_clinical_outcome"):
+    CRF_FORMS[_form]["fields"]["additional_notes"]=field(
+        "Additional clinical notes / clarification (optional)","textarea")
+for _form in ("C_baseline","E_followup"):
+    CRF_FORMS[_form]["fields"]["nephrology_unit"]=field(
+        "Nephrology unit (optional)","select",choices=["NP1","NP2","NP3"])
+
 # Repeatable source-detail records support CRF C/D/E/H/I without changing the
 # approved intervention, visit schedule, endpoint or mandatory investigation set.
 # A missing test stays missing; each dose change is a new dated source record.
@@ -319,6 +329,13 @@ CRF_FORMS.update({
   }
  }
 })
+
+# Apply the same optional labels to supplementary admission and dated events.
+for _form in ("P_transplant","M_medication","N_laboratory","O_infection"):
+    CRF_FORMS[_form]["fields"]["additional_notes"]=field(
+        "Additional clinical notes / clarification (optional)","textarea")
+CRF_FORMS["P_transplant"]["fields"]["nephrology_unit"]=field(
+    "Nephrology unit (optional)","select",choices=["NP1","NP2","NP3"])
 
 def validate_payload(section:str,payload:dict[str,Any],partial:bool=False)->dict[str,Any]:
     """Validate types without inventing an absent laboratory finding or event."""
