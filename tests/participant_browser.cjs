@@ -126,6 +126,12 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   await page.waitForSelector('#tw-context-subject',{state:'attached'});
   await page.waitForFunction(()=>window.passwordOnlyLogin===true);
   assert.equal(await page.isVisible('#loginOtpLabel'),false);
+  assert.equal(await page.isVisible('#tw-login-activation'),true,'Staff account activation remains accessible but collapsed');
+  assert.equal(await page.locator('#tw-login-activation').evaluate(el=>el.open),false);
+  await page.click('#tw-login-show-password');
+  assert.equal(await page.getAttribute('#loginPass','type'),'text');
+  await page.click('#tw-login-show-password');
+  assert.equal(await page.getAttribute('#loginPass','type'),'password');
   await page.fill('#loginName','synthetic-nurse');
   await page.fill('#loginPass','Synthetic-fixture-password-only');
   await page.getByRole('button',{name:'Sign in',exact:true}).click();
@@ -152,15 +158,19 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
    await page.waitForFunction(()=>$('tw-context-find-results').querySelector('option[value="TEST-P-2"]'));
    assert.equal(await page.locator('#tw-context-find-results option[value="TEST-P-2"]').count(),1);
   }
-  await page.selectOption('#tw-context-find-results','TEST-P-2');
+  await page.waitForFunction(()=>document.querySelectorAll('#tw-search-suggestions .tw-search-option').length>0);
+  await page.locator('#tw-search-suggestions .tw-search-option').filter({hasText:'TEST-CR-2'}).first().click();
   await page.waitForFunction(()=>$('tw-context-subject').value==='2'&&selected==='TEST-P-2');
   assert.equal(await page.inputValue('#tw-patient'),'TEST-P-2');
   await page.evaluate(async()=>{await tab('pcr');});
   await page.waitForFunction(()=>$('tw-pcr-subject').value==='2');
+  await page.waitForFunction(()=>document.querySelectorAll('.tw-pcr-visit').length===7);
+  assert.equal(await page.locator('.tw-pcr-visit').count(),7,'Seven month cards derive from server schedule');
   await page.evaluate(async()=>{await tab('crf');});
   await page.waitForFunction(()=>$('tw-crf-subject').value==='2');
   // The secondary linked-study selector is intentionally behind an optional
   // disclosure; routine users select patients through the header search.
+  await page.locator('#tw-patient-record-tools > summary').click();
   await page.locator('#tw-record-switch summary').click();
   await page.selectOption('#tw-context-subject','1');
   await page.waitForFunction(()=>$('tw-context-allocation').textContent.includes('450 mg'));
@@ -232,6 +242,23 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   await page.waitForFunction(()=>$('tw-context-allocation').textContent.includes('TEST-SCREEN-3')&&$('tw-collect-id').value==='');
   assert.equal(await page.isDisabled('#tw-collect-save'),true);
   assert.equal(await page.inputValue('#tw-pcr-subject'),'');
+  await page.evaluate(async()=>{await tab('study');});
+  assert.equal(await page.locator('#tw-eligibility-fields').count(),1);
+  await page.setViewportSize({width:980,height:852});
+  await page.evaluate(async()=>{await tab('study');});
+  const eligibilityLayout=await page.evaluate(()=>{
+   const grid=document.querySelector('#tw-eligibility-fields .tw-eligibility-grid');
+   if(!grid)return null;
+   const label=grid.querySelector('label');
+   return {columns:getComputedStyle(grid).gridTemplateColumns,
+     labelWidth:label.getBoundingClientRect().width,
+     textWrap:getComputedStyle(label).wordBreak,
+     available:document.querySelector('#study').getBoundingClientRect().width};
+  });
+  assert.ok(eligibilityLayout&&eligibilityLayout.labelWidth>=240,
+   'Eligibility label must not collapse to thin vertical text at 980px: '+JSON.stringify(eligibilityLayout));
+  await page.evaluate(async()=>{await tab('pcr');});
+  assert.equal(await page.locator('#tw-pcr-visit-grid').count(),1,'Seven PCR visits have a dedicated area');
   await page.selectOption('#tw-context-subject','');
   assert.equal(await page.isDisabled('#tw-result-save'),true);
   assert.equal(await page.isDisabled('#tw-verify-save'),true);
