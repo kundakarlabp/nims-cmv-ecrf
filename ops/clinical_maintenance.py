@@ -301,6 +301,59 @@ def offsite_reference(claimed):
         return f'github-release:{REPO_ID}:{release}:{asset}'
     return None
 
+
+def verify_drive_downloaded_restore(dc, downloaded):
+    """Restore the actual Drive-downloaded ciphertext into a disposable DB.
+
+    The offsite archive's SHA-256 is checked independently by drive_offsite
+    before this function runs. The OCI-held key tests operational recovery;
+    owner-held SSH private-key escrow recovery remains a separate DR exercise.
+    Never write to, drop or replace the live clinical database.
+    """
+    if not isinstance(downloaded, bytes) or not 0 < len(downloaded) <= 32 * 1024 * 1024:
+        raise RuntimeError('Unexpected downloaded recovery archive length')
+    expected_members={'database.dump.fernet','recovery-keys.age','manifest.json'}
+    with tarfile.open(fileobj=io.BytesIO(downloaded),mode='r:') as archive:
+        members=archive.getmembers()
+        if (len(members)!=3 or set(member.name for member in members)!=expected_members
+                or not all(member.isfile() for member in members)):
+            raise RuntimeError('Downloaded recovery archive has unexpected members')
+        parts={member.name:archive.extractfile(member).read() for member in members}
+    encrypted=parts['database.dump.fernet']
+    if not parts['recovery-keys.age'].startswith(b'age-encryption.org/v1\n'):
+        raise RuntimeError('Downloaded recovery key escrow is invalid')
+    try:
+        description=json.loads(parts['manifest.json'])
+        if (description['database']!='nims_cmv_clinical'
+                or description['restore_verified'] is not True
+                or description['encrypted_dump_sha256']!=hashlib.sha256(encrypted).hexdigest()):
+            raise RuntimeError('Downloaded recovery manifest did not match encrypted dump')
+    except (KeyError,TypeError,ValueError) as error:
+        raise RuntimeError('Downloaded recovery manifest is invalid') from error
+    from cryptography.fernet import Fernet
+    restored=Fernet((PRIVATE/'backup.key').read_bytes().strip()).decrypt(encrypted)
+    if not restored.startswith(b'PGDMP'):
+        raise RuntimeError('Downloaded recovery SQL dump is invalid')
+    expected=sql(dc,"SELECT fingerprint FROM clinical_schema_baseline WHERE revision='initial-2026-11';").strip()
+    if not expected or description['schema_fingerprint']!=expected.decode():
+        raise RuntimeError('Downloaded recovery schema fingerprint mismatch')
+    target='nims_restore_'+secrets.token_hex(8)
+    created=False
+    try:
+        sql(dc,'CREATE DATABASE '+target+';');created=True
+        run(clinical(dc)+['exec','-T','db','pg_restore','--exit-on-error',
+                         '--no-owner','--no-acl','-U','nims_clinical_owner',
+                         '-d',target],data=restored)
+        fingerprint=sql(dc,"SELECT fingerprint FROM clinical_schema_baseline WHERE revision='initial-2026-11';",target).strip()
+        if fingerprint!=expected:
+            raise RuntimeError('Downloaded recovery restored schema mismatch')
+        # Query existence only. Never emit clinical patient/audit data or counts.
+        sql(dc,'SELECT count(*) FROM audit_events; SELECT count(*) FROM patients;',target)
+    finally:
+        if created:
+            sql(dc,'DROP DATABASE '+target+';')
+    return True
+
 def accept_receipts():
     for ack in sorted((PRIVATE/'ack').glob('*.json')):
         if ack.is_symlink() or not re.fullmatch(r'[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}',ack.stem):continue
@@ -377,7 +430,8 @@ def main():
             # no GitHub backup workflow or private repository is involved.
             PHASE='offsite_receipt'
             from ops.drive_offsite import sync_latest
-            if not sync_latest(PRIVATE):
+            if not sync_latest(PRIVATE, verify_restore=lambda archive:
+                               verify_drive_downloaded_restore(dc, archive)):
                 print('Google Drive recovery waiting for OCI rclone authorization.',flush=True)
             PHASE='clinical_cutover';phase=cutover(dc,values)
             atomic(STATE/'clinical-maintenance.json',json.dumps({'checked_at':datetime.now(UTC).isoformat(),
