@@ -212,6 +212,11 @@ def correct_screening_serostatus(subject_id:int,data:ScreeningSerostatusCorrecti
         baseline=dict(check.baseline)
         baseline["requires_source_reverification"]=True
         baseline["is_eligible"]=False
+        if baseline.get("exception_review"):
+            old_exception=dict(baseline["exception_review"])
+            old_exception.update({"status":"source_changed_re_review_required",
+                "pi_decision":None,"pi_actor_id":None,"pi_reviewed_at":None})
+            baseline["exception_review"]=old_exception
         check.baseline=baseline
         check.updated_at=now()
         audit(s,u,"eligibility_revalidation_required","trial_eligibility",
@@ -400,6 +405,8 @@ def record_eligibility_exception_request(subject_id:int,data:EligibilityExceptio
     signed_check=s.get(TrialEligibility,t.id)
     if not signed_check:
         raise HTTPException(422,"Save the factual signed eligibility checklist first")
+    if signed_check.baseline.get("requires_source_reverification"):
+        raise HTTPException(422,"Repeat the signed eligibility review after the latest source correction")
     if not p.transplant_date:raise HTTPException(422,"Verified transplant date is required")
     if data.recommend_inclusion and t.recipient_cmv_igg!="positive":
         raise HTTPException(422,"This proposal only considers recipient CMV IgG positive cases")
@@ -459,6 +466,8 @@ def review_eligibility_exception_pi(subject_id:int,data:EligibilityExceptionPIRe
     exception=dict(check.baseline.get("exception_review") or {})
     if not exception:
         raise HTTPException(422,"Staff exception recommendation has not been recorded")
+    if exception.get("status")=="source_changed_re_review_required":
+        raise HTTPException(422,"Source data changed; renew the staff recommendation and PI review")
     if data.support_inclusion and not exception["staff_recommend_inclusion"]:
         raise HTTPException(422,"Request staff to update their decision and source before PI endorsement")
     old=as_dict(check)
