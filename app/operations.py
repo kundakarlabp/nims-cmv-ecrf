@@ -26,7 +26,8 @@ def read_host_status(path=Path('/run/operations/status.json'), at=None):
     result={'available':True, 'fresh':fresh, 'recorded_at':stamp.isoformat()}
     for key in ('clinical_private_configuration_present','backup_tool_installed',
                 'encrypted_backup_configuration_present',
-                'google_drive_backup_configuration_present','google_drive_backup_receipt_present'):
+                'google_drive_backup_configuration_present','google_drive_backup_receipt_present',
+                'google_drive_direct_receipt_verified','google_drive_downloaded_restore_verified'):
         value_for_key=value.get(key)
         result[key]=value_for_key if type(value_for_key) is bool else None
     for key in ('deployed_commit','github_main_commit','approved_release_commit'):
