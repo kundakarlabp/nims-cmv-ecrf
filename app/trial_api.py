@@ -361,7 +361,17 @@ def action_worklist(limit:int=Query(default=80,ge=1,le=200),
             if check is None:
                 add(subject,patient,"Eligibility pending","Complete and source-verify all inclusion and exclusion criteria","study",1)
             elif check.baseline.get("is_eligible") is True:
-                add(subject,patient,"Enrollment pending","Eligibility documented; investigator must verify enrollment and consent","study",1)
+                if patient.transplant_date and (today-patient.transplant_date).days>10:
+                    add(subject,patient,"Enrollment window review",
+                        "More than 10 days after transplantation; reconcile dated source and do not backdate enrollment",
+                        "study",1)
+                else:
+                    add(subject,patient,"Enrollment pending",
+                        "Eligibility documented; investigator must verify enrollment and consent","study",1)
+            else:
+                add(subject,patient,"Eligibility not met",
+                    "Saved source review is ineligible; inspect failed protocol criteria before any enrollment",
+                    "study",2)
         elif subject.status=="enrolled" and subject.id not in assigned:
             add(subject,patient,"Randomization pending","Verify stratum and signed source before irreversible assignment","randomization",1)
     for specimen in s.scalars(select(PCRRecord).where(
