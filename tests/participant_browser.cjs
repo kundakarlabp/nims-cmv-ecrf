@@ -380,7 +380,7 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   await page.fill('#tw-age','51');
   assert.equal(await page.isDisabled('#tw-enroll-save'),true,
     'Changing a source measurement after approval must require revalidation');
-  assert.match(await page.textContent('#tw-eligibility-warning'),/Unsaved eligibility changes/);
+  assert.match(await page.textContent('#tw-eligibility-warning'),/Working draft/);
   await page.fill('#tw-age','50');
   await page.click('#tw-checklist-save');
   await page.waitForFunction(()=>window.cmvEligibilityDirty===false);
