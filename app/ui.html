@@ -363,10 +363,12 @@ const quickForms={
   {key:'clinical_notes',label:'Additional transplant notes',type:'textarea',wide:true}
  ],
  visit:[
+  {key:'unit',label:'Nephrology unit',type:'select',
+   options:[['NP1','NP1'],['NP2','NP2'],['NP3','NP3']]},
   {key:'scheduled_month',label:'Scheduled month',type:'select',options:studyMonths.map(v=>[String(v),'Month '+v])},
   {key:'visit_complete',label:'Visit status',type:'select',options:[['true','Completed'],['false','Not completed']]},
   {key:'creatinine_mg_dl',label:'Serum creatinine (mg/dL)',type:'number',step:'0.01'},
-  {key:'clinical_notes',label:'Visit notes',type:'text',wide:true}
+  {key:'clinical_notes',label:'Visit notes',type:'textarea',wide:true}
  ],
  lab:[
   {key:'lab_test',label:'Test',type:'select',options:[['CMV PCR','CMV DNA PCR'],['Other','Other investigation']]},
@@ -637,7 +639,7 @@ async function loadLoginPolicy(){
 }
 initializeStudyUI();
 void loadLoginPolicy();
-</script><script src="/study_ui.js?v=20261120-inline-rand-v3" defer></script><script src="/patient_workspace.js?v=20261120-patient-v1" defer></script></body></html>
+</script><script src="/study_ui.js?v=20261121-eligibility-v4" defer></script><script src="/patient_workspace.js?v=20261120-patient-v1" defer></script></body></html>
 
 
 
