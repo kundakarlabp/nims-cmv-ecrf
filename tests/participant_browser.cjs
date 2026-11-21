@@ -103,7 +103,9 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
     if(holdSearchContext&&id===1){holdSearchContext=false;await new Promise(resolve=>{releaseSearchContext=resolve;});}
     if(holdScreenedContext&&id===3){holdScreenedContext=false;await new Promise(resolve=>{releaseScreenedContext=resolve;});}
    }else if(p.endsWith('/pcr')){
-    const sid=Number(p.split('/')[4]);result={pcr_records:[{id:sid*10+1,status:'planned',specimen_code:'TEST-PCR-'+sid,scheduled_month:1,target_on:'2026-11-01'}]};
+    const sid=Number(p.split('/')[4]);result={pcr_records:[1,2,3,4,6,9,12].map((month,i)=>({
+      id:sid*10+i+1,status:'planned',specimen_code:'TEST-PCR-'+sid+'-M'+month,
+      scheduled_month:month,target_on:'2026-11-01'}))};
     if(holdOldPCR&&sid===1){holdOldPCR=false;await new Promise(resolve=>{releaseOldPCR=resolve;});}
    }else if(p==='/api/trial/crf/schema')result={forms};
    else if(p.includes('/drafts/')){
@@ -227,6 +229,14 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   await page.evaluate(async()=>{await tab('pcr');});
   await page.selectOption('#tw-context-subject','1');
   await page.waitForFunction(()=>$('tw-collect-id').value==='11');
+  // Invalid collection fields must stop locally without sending a clinical write.
+  await page.evaluate(()=>{
+   $('tw-collected').value='';$('tw-accession').value='';
+   $('tw-collect-save').click();
+  });
+  await page.waitForFunction(()=>$('tw-pcr-status').textContent.includes('collection date'));
+  assert.equal(writes.filter(x=>x.p.includes('/pcr/')&&x.p.endsWith('/collect')).length,0,
+   'Missing collection date must never reach the server');
   holdOldPCR=true;
   await page.selectOption('#tw-context-subject','1');
   for(let i=0;i<200&&!releaseOldPCR;i++)await new Promise(resolve=>setTimeout(resolve,20));
