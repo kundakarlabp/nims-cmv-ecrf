@@ -1799,8 +1799,10 @@ def test_partial_eligibility_draft_is_private_editable_and_never_signed():
     url=f'/api/trial/subjects/{sid}/eligibility-draft'
     with TestClient(app) as scientist:
         h=auth(scientist,'syntheticscreener','SyntheticScreenerPassword123!')
-        assert scientist.get(url).status_code==403
-        assert scientist.put(url,headers=h,json={'inclusion':{'age_ge_18':True}}).status_code==403
+        assert scientist.get(url).status_code==200
+        draft=scientist.put(url,headers=h,json={'inclusion':{'age_ge_18':True}})
+        assert draft.status_code==200,draft.text
+        assert draft.json()['not_approved_eligibility'] is True
     with TestClient(app) as consultant:
         h=auth(consultant,'testeligibilityconsultant','EligibilityTestPassword123!')
         assert consultant.get(url).json()['draft'] is None
