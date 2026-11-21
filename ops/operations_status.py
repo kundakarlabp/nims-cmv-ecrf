@@ -55,6 +55,23 @@ def drive_receipt_present(home):
     except FileNotFoundError:return False
     except (OSError,UnicodeError):return None
 
+
+def drive_receipt_proof_matches(home, marker):
+    """Only report exact host-generated proof for the latest Drive receipt.
+
+    This checks local receipt correspondence, not a new cloud download.
+    """
+    root=Path(home)/'.local/share/nims-cmv-clinical/backup-state'
+    try:
+        current=(root/'last_success').read_bytes()
+        candidate=(root/marker).read_bytes()
+        return bool(drive_receipt_present(home) and current==candidate)
+    except FileNotFoundError:
+        return False
+    except (OSError,UnicodeError):
+        return None
+
+
 def systemctl(*args):
     try:
         value=subprocess.run(['systemctl', *args], capture_output=True, text=True,
@@ -133,6 +150,8 @@ def write_status(root=ROOT, attempt_result='running'):
         'google_drive_backup_configuration_present':drive_backup_configuration_present(
             os.environ.get('RCLONE_CONFIG',str(Path.home()/'.config/rclone/rclone.conf'))),
         'google_drive_backup_receipt_present':drive_receipt_present(Path.home()),
+        'google_drive_direct_receipt_verified':drive_receipt_proof_matches(Path.home(), 'last_oci_direct'),
+        'google_drive_downloaded_restore_verified':drive_receipt_proof_matches(Path.home(), 'last_offsite_restore'),
         'last_update_attempt':attempt_result,
         'recorded_at':datetime.now(timezone.utc).isoformat(),
         'deployed_commit':commit if re.fullmatch(r'[0-9a-f]{40}',commit) else None,
