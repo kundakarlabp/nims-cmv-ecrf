@@ -1186,7 +1186,7 @@ $('tw-change-password').onclick=()=>{void task('tw-mfa-status',async()=>{
 
 
 /* Source-aligned CRF forms with private, revision-checked server drafts. */
-let currentCrfSchema=null,currentCrfSpec=null,currentCrfEntry=null;
+let currentCrfSchema=null,currentCrfSpec=null,currentCrfEntry=null,crfSchemaForRole=null;
 let baselineSource=null,baselineSourceRequest=0;
 let crfLoadedSection=null,crfLoadedSubject=null;
 let crfDraftRevision=null,crfDraftKey=null,crfDraftLast=null,crfDraftTimer=null,crfDraftQueue=Promise.resolve();
@@ -1394,11 +1394,12 @@ function crfRender(){
 }
 async function loadCrfSchema(){
  const previousSection=value('tw-crf-section');
- const subjectAtStart=n('tw-crf-subject');
- const r=await api('/api/trial/crf/schema');
- // A late schema response from the previous patient must not rewrite this form.
- if(subjectAtStart!==n('tw-crf-subject'))return;
- currentCrfSchema=r.forms;
+ const subjectAtStart=n('tw-crf-subject'),roleAtStart=$('currentRole').textContent.trim();
+ const r=currentCrfSchema&&crfSchemaForRole===roleAtStart?
+   {forms:currentCrfSchema}:await api('/api/trial/crf/schema');
+ // A late response from another patient or account must not replace this form.
+ if(subjectAtStart!==n('tw-crf-subject')||roleAtStart!==$('currentRole').textContent.trim())return;
+ currentCrfSchema=r.forms;crfSchemaForRole=roleAtStart;
  fill('tw-crf-section',Object.entries(r.forms).map(([id,s])=>({id,title:s.title})),
      'id',x=>x.title);
  if(previousSection&&r.forms[previousSection])$('tw-crf-section').value=previousSection;
@@ -2050,8 +2051,10 @@ async function loadClinicalCourse(earlier=false){
  status.classList.add('hide');
  const suffix=earlier&&timelineCursor?'?before_on='+encodeURIComponent(timelineCursor.before_on)+
   '&before_id='+timelineCursor.before_id:'';
+ const roleNow=$('currentRole').textContent.trim();
  const [schemaResult,recordsResult]=await Promise.allSettled([
-  api('/api/trial/crf/schema'),
+  crfSchemaForRole===roleNow&&currentCrfSchema?
+   Promise.resolve({forms:currentCrfSchema}):api('/api/trial/crf/schema'),
   api('/api/trial/crf/subjects/'+sid+'/timeline'+suffix)
  ]);
  if(request!==clinicalCourseRequest||sid!==participantSubject)return;
