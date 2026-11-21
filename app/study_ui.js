@@ -449,6 +449,7 @@ async function loadPCR(){
  const records=(await api('/api/trial/subjects/'+sid+'/pcr')).pcr_records;
  if(contextVersion!==participantRequest||sid!==participantSubject||sid!==n('tw-pcr-subject'))return;
  pcrRecords=records;pcrLoadedSubject=sid;
+ if(typeof window.cmvRenderPcrVisits==='function')window.cmvRenderPcrVisits(records,sid);
  $('tw-pcr-table').innerHTML='<table><thead><tr><th>Code</th><th>Month</th><th>Target</th><th>Status</th><th>Viral load (IU/mL)</th></tr></thead><tbody>'+
  pcrRecords.map(x=>'<tr><td>'+txt(x.specimen_code)+'</td><td>'+x.scheduled_month+'</td><td>'+txt(x.target_on)+'</td><td>'+txt(x.status)+'</td><td>'+txt(x.quantitative_iu_ml??'—')+'</td></tr>').join('')+'</tbody></table>';
  fill('tw-pcr-print-id',pcrRecords.filter(x=>x.attempt===1),'id',
@@ -548,14 +549,28 @@ $('tw-enroll-save').onclick=()=>{void task('tw-status',async()=>{
 });};
 $('tw-collect-save').onclick=()=>{void task('tw-pcr-status',async()=>{
  requireProcedureSubject('pcr');
- if(!pcrRecords.some(x=>x.id===n('tw-collect-id')&&x.status==='planned'))throw Error('Choose a planned specimen for this participant');
+ if(!pcrRecords.some(x=>x.id===n('tw-collect-id')&&x.status==='planned'))
+  throw Error('Choose a planned specimen for this participant');
+ const collected=value('tw-collected'),accession=value('tw-accession').trim();
+ if(!collected){
+  $('tw-collected').focus();
+  throw Error('Enter the specimen collection date before recording collection.');
+ }
+ if(accession.length<2){
+  $('tw-accession').focus();
+  throw Error('Enter a laboratory accession reference (at least 2 characters).');
+ }
  var r=await api('/api/trial/pcr/'+n('tw-collect-id')+'/collect',{method:'POST',
-  body:JSON.stringify({collected_on:value('tw-collected'),lab_accession:value('tw-accession')})});
+  body:JSON.stringify({collected_on:collected,lab_accession:accession})});
  notify('tw-pcr-status','Collected '+r.specimen_code);await loadPCR();
 });};
 $('tw-result-save').onclick=()=>{void task('tw-pcr-status',async()=>{
  requireProcedureSubject('pcr');
  var r=pcrRecords.find(x=>x.id===n('tw-result-id'));if(!r)throw Error('Select a collected specimen');
+ if(!value('tw-reported')){ $('tw-reported').focus();throw Error('Enter the laboratory reported date.'); }
+ if(!value('tw-assay').trim()){ $('tw-assay').focus();throw Error('Enter the documented assay/platform.'); }
+ if(!value('tw-result-kind')){ $('tw-result-kind').focus();throw Error('Select the laboratory result category.'); }
+ if(!value('tw-qc')){ $('tw-qc').focus();throw Error('Select the documented laboratory QC status.'); }
  var updated=await api('/api/trial/pcr/'+r.id+'/result',{method:'PUT',body:JSON.stringify({
   expected_revision:r.revision,reported_on:value('tw-reported'),assay_platform:value('tw-assay'),
   result_kind:value('tw-result-kind'),quantitative_iu_ml:value('tw-viral-load')?n('tw-viral-load'):null,
