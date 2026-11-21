@@ -1786,3 +1786,44 @@ def test_signed_crf_evidence_and_verification_labels_are_not_digital_signoffs():
         validate_payload('E_followup',{
             'scheduled_month':'1','actual_visit_on':'2026-11-01',
             'pcr_study_funded':'assumed_study_paid'})
+
+
+def test_eligibility_working_draft_is_private_partial_and_never_changes_signed_eligibility():
+    """Reuse the existing working-draft table without treating partial answers as eligibility."""
+    with TestClient(app) as admin:
+        h=auth(admin)
+        _,sid=setup_synthetic_trial(admin,h)
+    url=f'/api/trial/subjects/{sid}/eligibility-draft'
+    with TestClient(app) as scientist:
+        h=auth(scientist,'syntheticscreener','SyntheticScreenerPassword123!')
+        initial=scientist.get(url)
+        assert initial.status_code==200 and initial.json()['draft'] is None
+        partial={'inclusion':{'written_consent':'true','donor_cmv_positive':''},
+            'exclusion':{},'fields':{'age_years':'51','review_notes':'Synthetic unfinished draft'}}
+        saved=scientist.put(url,headers=h,json={'payload':partial,'expected_revision':None})
+        assert saved.status_code==200,saved.text
+        assert saved.json()['revision']==1
+        assert saved.json()['not_a_signed_eligibility_review'] is True
+        loaded=scientist.get(url)
+        assert loaded.json()['draft']['payload']==partial
+        duplicate=scientist.put(url,headers=h,json={'payload':partial,'expected_revision':None})
+        assert duplicate.status_code==409
+        revised={**partial,'fields':{**partial['fields'],'age_years':'52'}}
+        changed=scientist.put(url,headers=h,json={'payload':revised,'expected_revision':1})
+        assert changed.status_code==200 and changed.json()['revision']==2
+        malicious=scientist.put(url,headers=h,json={'payload':{
+            'inclusion':{},'exclusion':{},'fields':{'assigned_arm_mg':'900'}},
+            'expected_revision':2})
+        assert malicious.status_code==422
+        assert scientist.delete(url+'?expected_revision=1',headers=h).status_code==409
+        assert scientist.delete(url+'?expected_revision=2',headers=h).status_code==200
+        assert scientist.get(url).json()['draft'] is None
+    with TestClient(app) as consultant:
+        h=auth(consultant,'testeligibilityconsultant','EligibilityTestPassword123!')
+        assert consultant.get(url).json()['draft'] is None, 'Draft is private to staff account'
+        signed=consultant.get(f'/api/trial/subjects/{sid}/eligibility').json()['eligibility']
+        assert signed['baseline']['age_years']==50
+        assert signed['baseline']['is_eligible'] is True
+    with TestClient(app) as resident:
+        h=auth(resident,'testpg','AnotherLongTestingPassword456!')
+        assert resident.get(url).status_code==403
