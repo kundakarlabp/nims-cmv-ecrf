@@ -28,7 +28,7 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
  try{
   const page=await browser.newPage({viewport:{width:1280,height:900}});
   const errors=[],writes=[],drafts=new Map(),contextReads=[];let blinded=false,holdOldDraft=false,releaseOldDraft=null;
-  const eligibility=new Map(),allocations=new Map();let assignedFresh=false,holdSearchContext=false,releaseSearchContext=null;
+  const eligibility=new Map(),eligibilityDrafts=new Map(),allocations=new Map();let assignedFresh=false,holdSearchContext=false,releaseSearchContext=null;
   let holdOldPCR=false,releaseOldPCR=null,holdScreenedContext=false,releaseScreenedContext=null;
   let signedIn=false,courseFailures=0;
   const session=()=>({username:'synthetic-nurse',display_name:'Synthetic nurse',role:'nurse',
@@ -56,12 +56,25 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
     const data=route.request().postDataJSON();writes.push({p,body:data});
     const person=people.find(x=>x.id===data.patient_id);
     result={id:4,patient_id:person.id,cr_number:person.cr_number,screening_code:'TEST-SCREEN-4',status:'screened',enrolled_on:null,donor_type:data.donor_type,ratg_induction:data.ratg_induction,consent_recorded:!!data.consent_on,donor_cmv_igg:data.donor_cmv_igg,recipient_cmv_igg:data.recipient_cmv_igg};subjects.push(result);
+   }else if(p.endsWith('/eligibility-draft')){
+    const id=Number(p.split('/')[4]);
+    if(method==='PUT'){
+     const data=route.request().postDataJSON(),old=eligibilityDrafts.get(id);
+     if(old&&data.expected_revision!==old.revision)
+      return route.fulfill({status:409,contentType:'application/json',body:JSON.stringify({detail:'Draft revision conflict'})});
+     const revision=(old?.revision||0)+1;
+     eligibilityDrafts.set(id,{revision,payload:{
+      inclusion:data.inclusion,exclusion:data.exclusion,baseline:data.baseline}});
+     writes.push({p,body:data});result={revision,is_draft:true};
+    }else if(method==='DELETE'){eligibilityDrafts.delete(id);result={ok:true};}
+    else result={draft:eligibilityDrafts.get(id)||null};
    }else if(p.endsWith('/eligibility')){
     const id=Number(p.split('/')[4]);
     if(method==='PUT'){
      const data=route.request().postDataJSON();writes.push({p,body:data});
      eligibility.set(id,{inclusion:data.inclusion,exclusion:data.exclusion,
-      baseline:{...data,is_eligible:true},reviewed_on:data.reviewed_on});result={eligible:true};
+      baseline:{...data,is_eligible:true},reviewed_on:data.reviewed_on});
+     eligibilityDrafts.delete(id);result={eligible:true};
     }else result={eligibility:eligibility.get(id)||null};
    }else if(p.endsWith('/consent-declined')){
     const id=Number(p.split('/')[4]);const subject=subjects.find(x=>x.id===id);
@@ -340,13 +353,27 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   assert.equal(await page.locator('#tw-exception-pi-save').count(),1);
   assert.equal(await page.isDisabled('#tw-inline-rand-submit'),true,
    'Exception-review controls must never release a concealed allocation');
-
+  // Partial signed-eligibility work saves privately and restores after a tab switch.
+  await page.fill('#tw-age','50');
+  await page.fill('#tw-eligibility-notes','TEST: partial eligibility note from source');
+  await page.click('#tw-eligibility-draft-save');
+  await page.waitForFunction(()=>$('tw-eligibility-draft-status').textContent.includes('Draft saved'));
+  assert.equal(eligibility.has(4),false,'Saving a working draft must not sign eligibility');
+  assert.equal(eligibilityDrafts.get(4).payload.baseline.review_notes,
+    'TEST: partial eligibility note from source');
+  await page.evaluate(async()=>{await tab('randomization');await tab('study');});
+  await page.waitForFunction(()=>$('tw-eligibility-draft-status').textContent.includes('Restored saved draft'));
+  assert.equal(await page.inputValue('#tw-eligibility-notes'),'TEST: partial eligibility note from source');
+  assert.equal(await page.inputValue('#tw-age'),'50');
+  assert.equal(await page.isDisabled('#tw-enroll-save'),true,
+    'An unfinished working draft is not an eligible signed checklist');
   assert.equal(await page.inputValue('[data-eligibility="inclusion"][data-key="written_consent"]'),'true',
    'Recorded signed consent is suggested without guessing unknown results');
   for(const [id,v] of Object.entries({'tw-age':'50','tw-anc':'3000','tw-platelets':'180000','tw-hb':'11','tw-crcl':'68',}))await page.fill('#'+id,v);
   await page.fill('#tw-cbc-date','2026-10-02');await page.fill('#tw-review-on','2026-10-02');
   for(const el of await page.locator('[data-eligibility]').all())await el.selectOption(await el.getAttribute('data-eligibility')==='inclusion'?'true':'false');
   await page.click('#tw-checklist-save');await page.waitForFunction(()=>$('tw-status').textContent.includes('Eligible.'));
+  assert.equal(eligibilityDrafts.has(4),false,'Signed eligibility supersedes private draft');
   // Saving eligibility advances to enrollment; reopening an earlier step is
   // always available when a source measurement needs correction.
   await page.locator('#tw-progress-step-2 > summary').click();
