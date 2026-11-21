@@ -261,7 +261,11 @@ loginPanelElement.insertAdjacentHTML('beforeend','<hr><h3>Activate individual st
  field('One-time activation token','tw-token')+
  '<label>Choose a private password<input type="password" id="tw-password" autocomplete="new-password"></label>'+
  btn('Activate account','tw-activate-save')+'<div id="tw-activate-status" class="status hide"></div>');
-for(const id of ['tw-screen-date','tw-consent-date','tw-enroll-date','tw-anchor-date','tw-collected','tw-reported','tw-receipt-date','tw-rx-date','tw-issue-date','tw-return-date'])$(id).value=today();
+// Dates from earlier clinical events must be entered from the actual source.
+// Default only contemporaneous actions; never silently fabricate a specimen or consent date.
+for(const id of ['tw-screen-date','tw-consent-date','tw-anchor-date','tw-collected',
+                 'tw-reported','tw-rx-date','tw-return-date'])$(id).value='';
+for(const id of ['tw-enroll-date','tw-receipt-date','tw-issue-date'])$(id).value=today();
 var perms={tasks:['pi','consultant','scientist','nurse','pg','technician','microbiology','pharmacy','monitor','admin'],randomization:['pi','consultant','pharmacy','scientist','monitor','randomization_custodian'],crf:['pi','consultant','scientist','nurse','pg','technician','microbiology','pharmacy','monitor'],study:['pi','consultant','scientist'],pcr:['pi','consultant','scientist','nurse','technician','microbiology','monitor'],drug:['pi','consultant','scientist','pharmacy','monitor'],staff:['pi','admin'],security:['pi','admin','consultant','pg','scientist','nurse','technician','microbiology','pharmacy','monitor','randomization_custodian']};
 function setRole(){
  var r=$('currentRole').textContent.trim();
