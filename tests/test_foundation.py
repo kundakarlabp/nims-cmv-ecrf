@@ -1859,6 +1859,9 @@ def test_one_record_lookup_supports_direct_crf_correction_without_cross_patient_
         assert admin.post('/api/users',headers=h,json={
             'username':'directeditpi','display_name':'Synthetic direct edit PI',
             'role':'pi','password':'DirectEditPiPassword123!'}).status_code==200
+        assert admin.post('/api/users',headers=h,json={
+            'username':'directedittech','display_name':'Synthetic direct edit technician',
+            'role':'technician','password':'DirectEditTechPassword123!'}).status_code==200
     with TestClient(app) as pi:
         h=auth(pi,'directeditpi','DirectEditPiPassword123!')
         enrolled=pi.post(f'/api/trial/subjects/{sid}/enroll',headers=h,json={
@@ -1885,6 +1888,6 @@ def test_one_record_lookup_supports_direct_crf_correction_without_cross_patient_
         assert changed.json()['revision']==2
         assert pi.get(f'/api/trial/crf/entries/{entry_id}').json()['payload']['contact_notes']=='TEST: corrected source note'
     with TestClient(app) as technician:
-        h=auth(technician,'syntheticscreener','SyntheticScreenerPassword123!')
+        h=auth(technician,'directedittech','DirectEditTechPassword123!')
         denied=technician.get(f'/api/trial/crf/entries/{entry_id}')
         assert denied.status_code==403
