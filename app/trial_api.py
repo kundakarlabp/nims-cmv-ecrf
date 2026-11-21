@@ -183,6 +183,47 @@ def screen(data:ScreeningIn,u:AuthContext=Depends(current),s:Session=Depends(db)
     return subject_view(t)
 
 
+class ScreeningSerostatusCorrectionIn(BaseModel):
+    """Amend a documented screening serology, never silently change eligibility."""
+    donor_cmv_igg:Literal["positive","negative","unknown"]|None=None
+    recipient_cmv_igg:Literal["positive","negative","unknown"]|None=None
+    source_reference:str=Field(min_length=3,max_length=120)
+    correction_reason:str=Field(min_length=12,max_length=500)
+
+@router.put("/subjects/{subject_id}/screening-serostatus")
+def correct_screening_serostatus(subject_id:int,data:ScreeningSerostatusCorrectionIn,
+    u:AuthContext=Depends(current),s:Session=Depends(db)):
+    role(u,{"pi","consultant"})
+    t=s.scalar(select(TrialSubject).where(TrialSubject.id==subject_id).with_for_update())
+    if not t:raise HTTPException(404,"Study subject not found")
+    eligible_patient(s,t.patient_id)
+    if t.status!="screened":
+        raise HTTPException(409,"Screening serology cannot be corrected through this form after enrollment")
+    before={"donor_cmv_igg":t.donor_cmv_igg,"recipient_cmv_igg":t.recipient_cmv_igg}
+    donor=t.donor_cmv_igg if data.donor_cmv_igg is None else data.donor_cmv_igg
+    recipient=t.recipient_cmv_igg if data.recipient_cmv_igg is None else data.recipient_cmv_igg
+    after={"donor_cmv_igg":donor,"recipient_cmv_igg":recipient}
+    if after==before:
+        raise HTTPException(422,"No source-verified serostatus change was provided")
+    t.donor_cmv_igg=donor;t.recipient_cmv_igg=recipient
+    check=s.get(TrialEligibility,t.id)
+    if check:
+        previous=as_dict(check)
+        baseline=dict(check.baseline)
+        baseline["requires_source_reverification"]=True
+        baseline["is_eligible"]=False
+        check.baseline=baseline
+        check.updated_at=now()
+        audit(s,u,"eligibility_revalidation_required","trial_eligibility",
+            str(t.id),t.patient_id,previous,as_dict(check),
+            "Serostatus correction requires a fresh signed eligibility review")
+    audit(s,u,"screening_serostatus_correction","trial_subject",
+        str(t.id),t.patient_id,before,after,
+        "Source: "+data.source_reference+"; reason: "+data.correction_reason)
+    s.commit()
+    return {"subject_id":t.id,"serostatus":after,
+            "eligibility_revalidation_required":bool(check)}
+
 @router.get("/subjects/{subject_id}/restricted-screening")
 def restricted_screening(subject_id:int,u:AuthContext=Depends(current),s:Session=Depends(db)):
     role(u,{"pi","consultant","scientist"})
@@ -254,6 +295,8 @@ class EligibilityReviewIn(BaseModel):
     baseline_cbc_on:date
     reviewed_on:date
     signed_source_reference:str|None=Field(default=None,max_length=100)
+    nephrology_unit:Literal["NP1","NP2","NP3"]|None=None
+    review_notes:str|None=Field(default=None,max_length=1000)
 
 @router.get("/eligibility-schema")
 def eligibility_schema(u:AuthContext=Depends(current)):
@@ -306,6 +349,10 @@ def eligibility_review(subject_id:int,data:EligibilityReviewIn,
        "platelets_per_ul":data.platelets_per_ul,"hemoglobin_g_dl":data.hemoglobin_g_dl,
        "crcl_cg_ml_min":data.crcl_cg_ml_min,"baseline_cbc_on":data.baseline_cbc_on.isoformat(),
        "is_eligible":eligible}
+    if data.nephrology_unit:
+        baseline["nephrology_unit"]=data.nephrology_unit
+    if data.review_notes:
+        baseline["review_notes"]=data.review_notes
     if data.signed_source_reference:
         baseline["signed_source_reference"]=data.signed_source_reference
     prior=s.get(TrialEligibility,t.id)
@@ -452,6 +499,8 @@ def enroll(subject_id:int,data:EnrollmentIn,u:AuthContext=Depends(current),s:Ses
         raise HTTPException(422,"Saved eligibility assessment is INELIGIBLE. "+
             ("; ".join(reasons) if reasons else "The recorded eligibility result requires source reconciliation.")+
             ". Review the signed source record; do not override eligibility to obtain an allocation.")
+    if signed_check.baseline.get("requires_source_reverification"):
+        raise HTTPException(422,"Screening serostatus was corrected. Repeat the signed eligibility review before enrollment.")
     if signed_check.reviewed_on>data.enrolled_on:
         raise HTTPException(422,"Enrollment date cannot precede the documented eligibility review date.")
     if not (t.consent_on and t.consent_version and
