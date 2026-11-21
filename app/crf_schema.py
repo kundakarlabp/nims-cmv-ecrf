@@ -23,6 +23,7 @@ CRF_FORMS={
    "title":"C. Baseline and randomization",
    "repeat":"single",
    "fields":{
+    "nephrology_unit":field("Nephrology unit (optional)","select",choices=["NP1","NP2","NP3"]),
     "weight_kg":field("Weight (kg)","number",minimum=20,maximum=300),
     "serum_creatinine_mg_dl":field("Serum creatinine (mg/dL)","number",minimum=0),
     "cockcroft_gault_crcl_ml_min":field("Cockcroft-Gault CrCl (mL/min)","number",minimum=0),
@@ -68,6 +69,7 @@ CRF_FORMS={
    "fields":{
     "scheduled_month":field("Protocol follow-up month","select",True,["1","2","3","4","6","9","12"]),
     "actual_visit_on":field("Actual visit date","date",True),
+    "nephrology_unit":field("Nephrology unit (optional)","select",choices=["NP1","NP2","NP3"]),
     "pcr_specimen_code":field("Linked protocol CMV PCR specimen code"),
     "cmv_signs_symptoms":field("CMV symptoms/signs","textarea"),
     "hemoglobin_g_dl":field("Hemoglobin (g/dL)","number",minimum=0),
@@ -219,10 +221,6 @@ CRF_FORMS={
 for _form in ("C_baseline","E_followup","G_cmv_event","H_adverse_event","I_clinical_outcome"):
     CRF_FORMS[_form]["fields"]["additional_notes"]=field(
         "Additional clinical notes / clarification (optional)","textarea")
-for _form in ("C_baseline","E_followup"):
-    CRF_FORMS[_form]["fields"]["nephrology_unit"]=field(
-        "Nephrology unit (optional)","select",choices=["NP1","NP2","NP3"])
-
 # Repeatable source-detail records support CRF C/D/E/H/I without changing the
 # approved intervention, visit schedule, endpoint or mandatory investigation set.
 # A missing test stays missing; each dose change is a new dated source record.
@@ -313,6 +311,7 @@ CRF_FORMS.update({
   "repeat":"single", "supplementary":True,
   "fields":{
    "admitted_on":field("Transplant admission date","date"),
+   "nephrology_unit":field("Nephrology unit (optional)","select",choices=["NP1","NP2","NP3"]),
    "discharged_on":field("Discharge date","date"),
    "primary_kidney_disease":field("Primary kidney disease"),
    "previous_transplants":field("Previous kidney transplants","integer",minimum=0),
@@ -334,9 +333,6 @@ CRF_FORMS.update({
 for _form in ("P_transplant","M_medication","N_laboratory","O_infection"):
     CRF_FORMS[_form]["fields"]["additional_notes"]=field(
         "Additional clinical notes / clarification (optional)","textarea")
-CRF_FORMS["P_transplant"]["fields"]["nephrology_unit"]=field(
-    "Nephrology unit (optional)","select",choices=["NP1","NP2","NP3"])
-
 def validate_payload(section:str,payload:dict[str,Any],partial:bool=False)->dict[str,Any]:
     """Validate types without inventing an absent laboratory finding or event."""
     spec=CRF_FORMS.get(section)
