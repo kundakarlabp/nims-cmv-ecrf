@@ -432,10 +432,20 @@ def enroll(subject_id:int,data:EnrollmentIn,u:AuthContext=Depends(current),s:Ses
     eligible_patient(s,t.patient_id)
     if t.status!="screened": raise HTTPException(409,"Enrollment already decided")
     signed_check=s.get(TrialEligibility,t.id)
-    if not signed_check or not signed_check.baseline.get("is_eligible") or \
-       signed_check.reviewed_on>data.enrolled_on or \
-       not all(signed_check.inclusion.values()) or any(signed_check.exclusion.values()):
-        raise HTTPException(422,"Complete an eligible, signed protocol checklist before enrollment")
+    if not signed_check:
+        raise HTTPException(422,"Eligibility review is missing. Review and save all 20 inclusion/exclusion items before enrollment.")
+    unmet=[label for key,label in INCLUSION_ITEMS.items()
+           if signed_check.inclusion.get(key) is not True]
+    present=[label for key,label in EXCLUSION_ITEMS.items()
+             if signed_check.exclusion.get(key) is not False]
+    if unmet or present or signed_check.baseline.get("is_eligible") is not True:
+        reasons=(["Inclusion not satisfied: "+", ".join(unmet)] if unmet else [])+(
+            ["Exclusion present: "+", ".join(present)] if present else [])
+        raise HTTPException(422,"Saved eligibility assessment is INELIGIBLE. "+
+            ("; ".join(reasons) if reasons else "The recorded eligibility result requires source reconciliation.")+
+            ". Review the signed source record; do not override eligibility to obtain an allocation.")
+    if signed_check.reviewed_on>data.enrolled_on:
+        raise HTTPException(422,"Enrollment date cannot precede the documented eligibility review date.")
     if not (t.consent_on and t.consent_version and
             t.donor_cmv_igg=="positive" and t.recipient_cmv_igg=="positive" and
             t.ratg_induction is not None and data.reviewed_eligibility_and_consent and
@@ -446,8 +456,12 @@ def enroll(subject_id:int,data:EnrollmentIn,u:AuthContext=Depends(current),s:Ses
     p=eligible_patient(s,t.patient_id)
     if not p.transplant_date or data.pcr_anchor_on!=p.transplant_date:
         raise HTTPException(422,"Per protocol v5.0, all seven CMV PCR targets are anchored to verified transplantation date")
-    if data.enrolled_on<p.transplant_date or (data.enrolled_on-p.transplant_date).days>10:
-        raise HTTPException(422,"Enrollment must support valganciclovir start within 10 days of transplantation")
+    days=(data.enrolled_on-p.transplant_date).days
+    if days<0 or days>10:
+        raise HTTPException(422,
+            f"Enrollment date is {days} days after the transplant date ("
+            f"{p.transplant_date.isoformat()}). Protocol v5.0 permits 0–10 days; "
+            "do not backdate enrollment or override the trial window.")
     if data.enrolled_on>date.today() or data.pcr_anchor_on>date.today():
         raise HTTPException(422,"Study milestone dates cannot be in the future")
     if p.study_id:
