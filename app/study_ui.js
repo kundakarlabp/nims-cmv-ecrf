@@ -1483,7 +1483,8 @@ $('tw-crf-submit').onclick=()=>{void task('tw-crf-status',async()=>{
   catch(e){notify('tw-crf-status','Submitted, but private draft cleanup needs attention: '+e.message);}
  }
  currentCrfEntry=null;crfDraftRevision=null;crfDraftKey=null;crfDraftLast=null;
- crfSetValues({});$('tw-crf-reason').value='';
+ crfRender();$('tw-crf-reason').value='';
+ await populateCrfLinkedIdentifiers();
  await loadCrfEntries();await crfRestoreDraft();
 });};
 async function beginCrfCorrection(row){
