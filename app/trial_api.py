@@ -333,7 +333,7 @@ def _eligibility_draft(s:Session,subject_id:int,user_id:str):
 @router.get("/subjects/{subject_id}/eligibility-draft")
 def get_eligibility_draft(subject_id:int,
     u:AuthContext=Depends(current),s:Session=Depends(db)):
-    role(u,{"pi","consultant"})
+    role(u,{"pi","consultant","scientist"})
     subject=find_subject(s,subject_id)
     draft=_eligibility_draft(s,subject.id,u.user_id)
     reviewed=s.get(TrialEligibility,subject.id)
@@ -347,7 +347,7 @@ def get_eligibility_draft(subject_id:int,
 @router.put("/subjects/{subject_id}/eligibility-draft")
 def save_eligibility_draft(subject_id:int,data:EligibilityDraftIn,
     u:AuthContext=Depends(current),s:Session=Depends(db)):
-    role(u,{"pi","consultant"})
+    role(u,{"pi","consultant","scientist"})
     subject=find_subject(s,subject_id)
     if subject.status!="screened":
         raise HTTPException(409,"Eligibility working drafts are available only before enrollment")
@@ -388,7 +388,7 @@ def save_eligibility_draft(subject_id:int,data:EligibilityDraftIn,
 @router.delete("/subjects/{subject_id}/eligibility-draft")
 def delete_eligibility_draft(subject_id:int,expected_revision:int=Query(ge=1),
     u:AuthContext=Depends(current),s:Session=Depends(db)):
-    role(u,{"pi","consultant"})
+    role(u,{"pi","consultant","scientist"})
     subject=find_subject(s,subject_id)
     draft=_eligibility_draft(s,subject.id,u.user_id)
     if not draft or draft.revision!=expected_revision:
