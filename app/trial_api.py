@@ -361,13 +361,11 @@ def action_worklist(limit:int=Query(default=80,ge=1,le=200),
             if check is None:
                 add(subject,patient,"Eligibility pending","Complete and source-verify all inclusion and exclusion criteria","study",1)
             elif check.baseline.get("is_eligible") is True:
-                if patient.transplant_date and (today-patient.transplant_date).days>10:
-                    add(subject,patient,"Enrollment window review",
-                        "More than 10 days after transplantation; reconcile dated source and do not backdate enrollment",
-                        "study",1)
-                else:
-                    add(subject,patient,"Enrollment pending",
-                        "Eligibility documented; investigator must verify enrollment and consent","study",1)
+                detail=("More than 10 days after transplantation: verify the actual dates; "
+                        "do not backdate enrollment" if
+                        patient.transplant_date and (today-patient.transplant_date).days>10 else
+                        "Eligibility documented; investigator must verify enrollment and consent")
+                add(subject,patient,"Enrollment pending",detail,"study",1)
             else:
                 add(subject,patient,"Eligibility not met",
                     "Saved source review is ineligible; inspect failed protocol criteria before any enrollment",
