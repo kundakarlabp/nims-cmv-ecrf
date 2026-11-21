@@ -1,9 +1,8 @@
 name: Repair OCI Google Drive clinical backup
+# Emergency operation only. OCI's existing five-minute maintenance timer
+# owns scheduled backups, so normal releases must never run this repair.
 on:
   workflow_dispatch:
-  workflow_run:
-    workflows: [Mark reviewed staging release]
-    types: [completed]
 
 # No arbitrary shell commands, repository credentials or patient records.
 permissions:
@@ -14,10 +13,6 @@ concurrency:
 
 jobs:
   repair:
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

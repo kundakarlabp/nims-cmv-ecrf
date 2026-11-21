@@ -93,6 +93,8 @@ def test_workflow_has_no_embeddded_tokens_or_unsafe_ssh_shortcuts():
     assert "secrets.OCI_SSH_KNOWN_HOSTS" in source
     assert "secrets.OCI_SSH_PRIVATE_KEY" in source
     assert "workflow_dispatch:" in source
+    assert "workflow_run:" not in source, "Emergency repair cannot run on every release"
+    assert "schedule:" not in source, "OCI owns scheduled backups"
     assert "clinical-backup" not in source
     assert "ssh-keyscan" not in source
     assert "StrictHostKeyChecking=no" not in source
