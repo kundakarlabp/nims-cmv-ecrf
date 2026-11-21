@@ -186,9 +186,10 @@ panel('crf','Structured eCRF and clinical logs',
  '<div id="tw-crf-source" class="study-card hide" aria-live="polite"></div>'+
  btn('Use reviewed eligibility measurements','tw-crf-source-copy')+
  '<div id="tw-crf-draft-status" class="status">No draft loaded.</div>'+
- '<label>Correction reason (required only when revising submitted form)<input id="tw-crf-reason"></label>'+
- btn('Save private working draft','tw-crf-save')+' '+
- btn('Submit form for source review','tw-crf-submit')+
+ '<label id="tw-crf-reason-wrap" class="hide">Correction reason (briefly describe the change)<input id="tw-crf-reason" maxlength="500" placeholder="What was corrected? (minimum 8 characters)"></label>'+
+ btn('Save draft','tw-crf-save')+' '+
+ btn('Submit form','tw-crf-submit')+' '+
+ btn('Cancel correction','tw-crf-cancel-edit')+
  '<div class="study-card"><h3>Submitted forms and review states</h3>'+
  '<div id="tw-crf-entries"></div></div>'+
  '<div id="tw-crf-status" class="status hide"></div>'
@@ -1336,6 +1337,7 @@ async function loadBaselineSource(){
   if(!record||!record.baseline){card.textContent='No investigator-reviewed eligibility measurements are available.';card.classList.remove('hide');return;}
   baselineSource=record.baseline;
   const fields=[
+   ['Nephrology unit',baselineSource.nephrology_unit],
    ['CBC date',baselineSource.baseline_cbc_on],
    ['ANC (/µL)',baselineSource.anc_per_ul],
    ['Platelets (/µL)',baselineSource.platelets_per_ul],
@@ -1359,7 +1361,8 @@ $('tw-crf-source-copy').onclick=()=>{
  if(!confirm('Copy only currently BLANK measurements from the investigator-reviewed '+sourceDate+
     ' eligibility source into baseline? Verify that the same source results apply to this assessment date.'))return;
  const mapping={anc_per_ul:'anc_per_ul',platelets_per_ul:'platelets_per_ul',
-  hemoglobin_g_dl:'hemoglobin_g_dl',crcl_cg_ml_min:'cockcroft_gault_crcl_ml_min'};
+  hemoglobin_g_dl:'hemoglobin_g_dl',crcl_cg_ml_min:'cockcroft_gault_crcl_ml_min',
+  nephrology_unit:'nephrology_unit'};
  for(const [src,dest] of Object.entries(mapping)){
   const node=$('twcrf-'+dest);
   if(node&&!node.value&&baselineSource[src]!==null&&baselineSource[src]!==undefined)
@@ -1374,6 +1377,9 @@ function crfRender(){
  currentCrfSpec=currentCrfSchema?.[value('tw-crf-section')]||null;
  crfLoadedSection=value('tw-crf-section');crfLoadedSubject=n('tw-crf-subject');
  currentCrfEntry=null;
+ $('tw-crf-submit').textContent='Submit form';
+ $('tw-crf-reason-wrap').classList.add('hide');
+ $('tw-crf-cancel-edit').classList.add('hide');
  void loadBaselineSource();
  $('tw-crf-descriptor').textContent=currentCrfSpec?
   currentCrfSpec.title+' · '+currentCrfSpec.repeat+(currentCrfSpec.supplementary?
@@ -1403,6 +1409,8 @@ function crfRender(){
  $('tw-crf-submit').classList.toggle('hide',!crfCanEdit());
 }
 async function loadCrfSchema(){
+ // Preserve the already-loaded form and drafts on revisiting this tab.
+ if(currentCrfSchema&&currentCrfSpec&&crfLoadedSubject===n('tw-crf-subject'))return;
  const previousSection=value('tw-crf-section');
  const subjectAtStart=n('tw-crf-subject');
  const r=await api('/api/trial/crf/schema');
@@ -1453,6 +1461,8 @@ $('tw-crf-save').onclick=()=>{void task('tw-crf-status',async()=>{
 $('tw-crf-submit').onclick=()=>{void task('tw-crf-status',async()=>{
  await crfSaveDraft();
  const snapshot=crfCurrentData();
+ if(currentCrfEntry&&value('tw-crf-reason').trim().length<8)
+  throw Error('Briefly describe the correction (at least 8 characters).');
  if(!currentCrfEntry&&!confirm('Submit this CRF form for source verification?'))return;
  const isCorrection=!!currentCrfEntry;
  const body=isCorrection?{
@@ -1476,6 +1486,29 @@ $('tw-crf-submit').onclick=()=>{void task('tw-crf-status',async()=>{
  crfSetValues({});$('tw-crf-reason').value='';
  await loadCrfEntries();await crfRestoreDraft();
 });};
+async function beginCrfCorrection(row){
+ await crfSaveDraft();
+ if(row.subject_id!==n('tw-crf-subject'))
+  throw Error('Selected participant changed; reload before editing');
+ if(value('tw-crf-section')!==row.section){
+  $('tw-crf-section').value=row.section;crfRender();
+ }
+ await populateCrfLinkedIdentifiers();
+ if(row.subject_id!==n('tw-crf-subject')||value('tw-crf-section')!==row.section)
+  throw Error('Participant or form changed; reopen the record');
+ currentCrfEntry=row;crfSetValues(row.payload);$('tw-crf-date').value=row.occurred_on;
+ $('tw-crf-submit').textContent='Save correction';
+ $('tw-crf-cancel-edit').classList.remove('hide');
+ $('tw-crf-reason-wrap').classList.remove('hide');
+ $('tw-crf-reason').value='';
+ $('tw-crf-draft-status').textContent='Editing submitted record · revision '+row.revision;
+ $('tw-crf-fields').scrollIntoView({block:'start',behavior:'smooth'});
+ const first=$('tw-crf-fields').querySelector('[data-crf-field]');if(first)first.focus({preventScroll:true});
+}
+$('tw-crf-cancel-edit').onclick=()=>{void task('tw-crf-status',async()=>{
+ currentCrfEntry=null;crfRender();await populateCrfLinkedIdentifiers();await crfRestoreDraft();
+ notify('tw-crf-status','Correction cancelled. Submitted clinical record remains unchanged.');
+});};
 $('tw-crf-entries').addEventListener('click',e=>{
  const edit=e.target.closest('button[data-crf-edit]');
  const review=e.target.closest('button[data-crf-review]');
@@ -1485,19 +1518,7 @@ $('tw-crf-entries').addEventListener('click',e=>{
  if(!row)return;
  void task('tw-crf-status',async()=>{
   if(edit){
-   await crfSaveDraft();
-   if(row.subject_id!==n('tw-crf-subject'))
-    throw Error('Selected participant changed; reload submitted records before editing');
-   if(value('tw-crf-section')!==row.section){
-    $('tw-crf-section').value=row.section;crfRender();
-   }
-   await populateCrfLinkedIdentifiers();
-   if(row.subject_id!==n('tw-crf-subject')||value('tw-crf-section')!==row.section)
-    throw Error('Participant or section changed while loading this entry');
-   currentCrfEntry=row;crfSetValues(row.payload);
-   $('tw-crf-date').value=row.occurred_on;
-   $('tw-crf-draft-status').textContent='Editing submitted entry '+id+
-    ' · correction reason required · no change until explicit submission';
+   await beginCrfCorrection(row);
   }else{
    if(row.review_status!=='pending')throw Error('This revision has already been reviewed');
    const reason=prompt('Reason for CRF source review (minimum 8 characters):');
@@ -2088,7 +2109,9 @@ async function loadClinicalCourse(earlier=false){
  const cards=entries.map(row=>
   '<details class="study-card"><summary>'+txt(row.occurred_on)+
   ' · '+txt(row.title)+' · '+txt(row.review_status)+' · revision '+row.revision+
-  '</summary><dl>'+Object.entries(row.payload||{}).filter(([k])=>!k.startsWith('_'))
+  '</summary>'+(crfEditable[row.section]?.includes($('currentRole').textContent.trim())?
+   '<button type="button" class="secondary" data-course-edit="'+row.id+'">Edit this record</button>':'')+
+  '<dl>'+Object.entries(row.payload||{}).filter(([k])=>!k.startsWith('_'))
     .map(([k,v])=>{
       const readable=clinicalReadableSource(v);
       return '<dt>'+txt(row.fields?.[k]?.label||k)+'</dt><dd>'+
@@ -2105,8 +2128,20 @@ async function loadClinicalCourse(earlier=false){
   show('tw-course-status','Clinical history loaded; entry menu unavailable. Select Retry to reload.',true);
 }
 $('tw-course-records').addEventListener('click',event=>{
- if(event.target.closest('[data-course-retry]'))
-  void task('tw-course-status',()=>loadClinicalCourse());
+ if(event.target.closest('[data-course-retry]')){
+  void task('tw-course-status',()=>loadClinicalCourse());return;
+ }
+ const edit=event.target.closest('[data-course-edit]');
+ if(!edit)return;
+ void task('tw-course-status',async()=>{
+  const id=Number(edit.dataset.courseEdit),subjectId=participantSubject;
+  const row=await api('/api/trial/crf/entries/'+id);
+  if(!subjectId||row.subject_id!==subjectId)throw Error('Patient changed; reopen clinical history');
+  await tab('crf');
+  if(activeTab!=='crf'||n('tw-crf-subject')!==subjectId)
+   throw Error('Patient changed while opening the eCRF');
+  await beginCrfCorrection(row);
+ });
 });
 $('tw-course-actions').addEventListener('click',event=>{
  if(event.target.closest('[data-course-retry]'))
