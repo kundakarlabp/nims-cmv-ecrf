@@ -6,7 +6,7 @@ independent production gates. These endpoints do not prescribe or randomize.
 """
 from calendar import monthrange
 from datetime import date, datetime, timedelta
-from typing import Literal
+from typing import Literal, Any
 import os
 import re
 import secrets
@@ -22,7 +22,7 @@ from .main import (
 from .trial_models import (
     TrialSubject, PCRRecord, DrugLot, DrugAuthorization, DrugDispense,
     DrugReturn, UserInvitation, LoginThrottle, UserTotp, StaffAccess, TrialEligibility, TrialScreeningMeta,
-    RandomizationSlot, TrialCRFEntry, TrialCRFReview
+    RandomizationSlot, TrialCRFEntry, TrialCRFReview, TrialCRFDraft
 )
 
 router=APIRouter(prefix="/api/trial",tags=["trial-workflows"])
@@ -302,6 +302,90 @@ class EligibilityReviewIn(BaseModel):
     signed_source_reference:str|None=Field(default=None,max_length=100)
     nephrology_unit:Literal["NP1","NP2","NP3"]|None=None
     review_notes:str|None=Field(default=None,max_length=1000)
+
+
+# The signed review and the per-user working draft are different records.
+# Reuse the existing private CRF draft table (no schema migration or new forms).
+ELIGIBILITY_DRAFT_SECTION="B_eligibility_working"
+ELIGIBILITY_DRAFT_FIELDS={
+    "age_years","anc_per_ul","platelets_per_ul","hemoglobin_g_dl",
+    "crcl_cg_ml_min","baseline_cbc_on","reviewed_on",
+    "nephrology_unit","signed_source_reference","review_notes"
+}
+class EligibilityDraftIn(BaseModel):
+    payload:dict[str,Any]
+    expected_revision:int|None=Field(default=None,ge=1)
+
+def _eligibility_draft(s:Session,u:AuthContext,subject_id:int):
+    return s.scalar(select(TrialCRFDraft).where(
+        TrialCRFDraft.user_id==u.user_id,
+        TrialCRFDraft.subject_id==subject_id,
+        TrialCRFDraft.section==ELIGIBILITY_DRAFT_SECTION,
+        TrialCRFDraft.occurrence_key=="MAIN"))
+
+@router.get("/subjects/{subject_id}/eligibility-draft")
+def get_eligibility_draft(subject_id:int,u:AuthContext=Depends(current),
+    s:Session=Depends(db)):
+    role(u,{"pi","consultant","scientist"})
+    find_subject(s,subject_id)
+    draft=_eligibility_draft(s,u,subject_id)
+    return {"draft":{"payload":draft.payload,"revision":draft.revision,
+             "updated_at":draft.updated_at} if draft else None,
+            "status":"private_working_draft_not_signed_eligibility"}
+
+@router.put("/subjects/{subject_id}/eligibility-draft")
+def put_eligibility_draft(subject_id:int,data:EligibilityDraftIn,
+    u:AuthContext=Depends(current),s:Session=Depends(db)):
+    role(u,{"pi","consultant","scientist"})
+    subject=find_subject(s,subject_id)
+    if subject.status!="screened":
+        raise HTTPException(409,"Eligibility working draft is for screened participants only")
+    payload=data.payload
+    if set(payload)-{"inclusion","exclusion","fields"} or len(str(payload))>12000:
+        raise HTTPException(422,"Invalid or oversized eligibility working draft")
+    if not all(isinstance(payload.get(k,{}),dict) for k in ("inclusion","exclusion","fields")):
+        raise HTTPException(422,"Eligibility draft groups must be objects")
+    if set(payload.get("fields",{}))-ELIGIBILITY_DRAFT_FIELDS:
+        raise HTTPException(422,"Unexpected eligibility draft field")
+    for group in ("inclusion","exclusion"):
+        if any(v not in ("","true","false") for v in payload.get(group,{}).values()):
+            raise HTTPException(422,"Invalid eligibility draft answer")
+    draft=_eligibility_draft(s,u,subject_id)
+    if draft is None:
+        if data.expected_revision is not None:
+            raise HTTPException(409,"Eligibility draft changed or was deleted; reload")
+        draft=TrialCRFDraft(user_id=u.user_id,subject_id=subject_id,
+            section=ELIGIBILITY_DRAFT_SECTION,occurrence_key="MAIN",
+            occurred_on=date.today(),payload=payload)
+        s.add(draft)
+        try:s.commit()
+        except IntegrityError:s.rollback();raise HTTPException(409,"Eligibility draft concurrently created; reload")
+    else:
+        if draft.revision!=data.expected_revision:
+            raise HTTPException(409,"Eligibility draft changed in another session; reload")
+        changed=s.execute(update(TrialCRFDraft).where(
+            TrialCRFDraft.id==draft.id,TrialCRFDraft.revision==data.expected_revision)
+            .values(payload=payload,revision=TrialCRFDraft.revision+1,updated_at=now()))
+        if changed.rowcount!=1:
+            s.rollback();raise HTTPException(409,"Concurrent eligibility draft update")
+        s.commit();s.refresh(draft)
+    return {"revision":draft.revision,"saved":True,"not_a_signed_eligibility_review":True}
+
+@router.delete("/subjects/{subject_id}/eligibility-draft")
+def delete_eligibility_draft(subject_id:int,expected_revision:int=Query(ge=1),
+    u:AuthContext=Depends(current),s:Session=Depends(db)):
+    role(u,{"pi","consultant","scientist"})
+    find_subject(s,subject_id)
+    result=s.execute(delete(TrialCRFDraft).where(
+        TrialCRFDraft.user_id==u.user_id,
+        TrialCRFDraft.subject_id==subject_id,
+        TrialCRFDraft.section==ELIGIBILITY_DRAFT_SECTION,
+        TrialCRFDraft.occurrence_key=="MAIN",
+        TrialCRFDraft.revision==expected_revision))
+    if result.rowcount!=1:
+        s.rollback();raise HTTPException(409,"Eligibility draft changed; reload before deleting")
+    s.commit()
+    return {"ok":True}
 
 @router.get("/eligibility-schema")
 def eligibility_schema(u:AuthContext=Depends(current)):
