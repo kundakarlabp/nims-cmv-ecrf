@@ -34,6 +34,7 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
    if(p==='/')return route.fulfill({contentType:'text/html',body:fs.readFileSync(path.join(base,'app/ui.html'),'utf8')});
    if(p==='/study_ui.js')return route.fulfill({contentType:'application/javascript',body:fs.readFileSync(path.join(base,'app/study_ui.js'),'utf8')});
    if(p==='/patient_workspace.js')return route.fulfill({contentType:'application/javascript',body:fs.readFileSync(path.join(base,'app/patient_workspace.js'),'utf8')});
+   if(p==='/nims-logo.svg')return route.fulfill({contentType:'image/svg+xml',body:fs.readFileSync(path.join(base,'app/nims_logo.svg'),'utf8')});
    const method=route.request().method();let result={};
    if(p==='/api/session'){
     if(!signedIn)return route.fulfill({status:401,contentType:'application/json',body:JSON.stringify({detail:'Login required'})});
@@ -149,6 +150,8 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   assert.equal(await page.locator('#tw-nav-logout').count(),1,'Only one main Log out control');
   assert.equal(await page.locator('#tw-workspace-main').count(),1,'Sections are grouped in one workspace column');
   assert.equal(await page.isVisible('#tw-header-search'),true,'Global search is in the header');
+  await page.waitForFunction(()=>document.querySelector('.tw-hospital-mark img')?.naturalWidth>0);
+  assert.equal(await page.locator('.tw-hospital-mark img').getAttribute('alt'),'NIMS Hyderabad emblem');
   assert.deepEqual(await page.evaluate(()=>{
    const ids=Array.from(document.querySelectorAll('[id]'),el=>el.id);
    return ids.filter((id,index)=>ids.indexOf(id)!==index);
@@ -312,6 +315,7 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   assert.match(await page.textContent('#tw-assigned-study-id'),/pending/);
   await page.fill('#tw-screen-date','2026-10-02');await page.fill('#tw-consent-date','2026-10-02');
   await page.locator('#tw-more-screening summary').click();
+  await page.fill('#tw-screening-notes','TEST: protocol screening reviewed from source.');
   await page.selectOption('#tw-digg','positive');await page.selectOption('#tw-rigg','positive');
   await page.selectOption('#tw-donor','living');await page.selectOption('#tw-relationship','living_related');
   await page.selectOption('#tw-consent-language','English');
@@ -340,7 +344,13 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   assert.equal(await page.inputValue('#tw-cbc-date'),'','Another screened patient cannot inherit a CBC date');
   await page.selectOption('#tw-context-subject','4');
   await page.waitForFunction(()=>$('tw-screened').value==='4');
-  await page.fill('#tw-enroll-date','2026-10-03');await page.check('#tw-pi-consent');
+  await page.fill('#tw-enroll-date','2026-11-21');
+  await page.waitForFunction(()=>$('tw-enroll-save').disabled);
+  assert.match(await page.textContent('#tw-enrollment-readiness'),/0–10 days/,
+   'Invalid transplant-to-enrollment interval must be explained before a clinical write');
+  await page.fill('#tw-enroll-date','2026-10-03');
+  await page.waitForFunction(()=>!$('tw-enroll-save').disabled);
+  await page.check('#tw-pi-consent');
   await page.click('#tw-enroll-save');
   await page.waitForFunction(()=>$('tw-context-allocation').textContent.includes('NCMV001'));
   assert.match(await page.textContent('#tw-assigned-study-id'),/Study ID: NCMV001/);
@@ -365,6 +375,8 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
    undefined,'No randomization source text is required');
   assert.ok(writes.some(x=>x.p==='/api/trial/screening'&&x.body.patient_id==='TEST-P-4'));
   assert.equal(writes.find(x=>x.p==='/api/trial/screening').body.eligibility_attested,false);
+  assert.equal(writes.find(x=>x.p==='/api/trial/screening').body.screening_note,
+   'TEST: protocol screening reviewed from source.');
   assert.equal(writes.find(x=>x.p==='/api/trial/subjects/4/eligibility').body.signed_source_reference,undefined);
   assert.ok(writes.some(x=>x.p==='/api/trial/subjects/4/eligibility'));
   assert.ok(writes.some(x=>x.p==='/api/trial/subjects/4/enroll'&&x.body.pcr_anchor_on==='2026-10-01'));
