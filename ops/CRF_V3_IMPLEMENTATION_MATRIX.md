@@ -1,38 +1,47 @@
-# NIMS CMV clinical CRF v3.0 implementation mapping
+# NIMS CMV trial — CRF v3.0 source-to-implementation audit
 
-Source of truth: uploaded **12_NIMS_CMV_Case_Record_Form_v3_14Aug2026.docx** (six pages) and **15_NIMS_CMV_Final_Revised_Full_Study_Protocol_v5_14Aug2026.docx** (16 pages). Both dated **14 August 2026**, NIEC EC/NIMS/3845/26, study IIRPIG(NAG)-I-2026-01-0634. Application integration is a developer/UAT implementation, not evidence of IEC-approved system validation.
+Audit date: **21 November 2026**. Signed source documents:
+- `12_NIMS_CMV_Case_Record_Form_v3_14Aug2026.docx` (six pages), 14 August 2026.
+- `15_NIMS_CMV_Final_Revised_Full_Study_Protocol_v5_14Aug2026.docx` (16 pages), 14 August 2026.
 
-## CRF section mapping
+Protocol v5.0 remains D+/R+, with an initiation-within-10-days criterion. Proposed R+ donor-independent recruitment and late recruitment are **not** approved through dashboard staff/PI recommendations. The documented exception-review workflow does not authorize enrollment or concealed allocation. Do not backdate any source date.
 
-| Signed CRF | Implementation | Important limits |
+This matrix describes the application repository, not proof of institutional clinical UAT, EAC adjudication, source accuracy, or production database lock. Runtime readiness is dynamic and must be checked against the currently deployed OCI commit, backups, restore proof, and permissions.
+
+## Signed CRF vs implemented fields
+
+| Signed section | Application capture | Remaining qualification or limitation |
 |---|---|---|
-| A Screening/enrollment | Trial screening register, restricted consent metadata, PI-controlled study code | Direct identifiers are registry-restricted; no actual participants before governance signoff |
-| B Eligibility | Signed 10 inclusion and 10 exclusion answers, measured age/ANC/platelets/Hb/CrCl checks and source reference | Clinical source verification still requires PI/co-investigator review |
-| C Baseline/randomization | Typed C_baseline form with baseline labs, immunosuppression, reference to randomized arm | **No independent allocation sequence loaded; do not treat a text reference as randomization** |
-| D Supply/dose/adherence | Atomic pharmacy lot/issue/return ledgers, unique MSS slips; D_adherence CRF form | Requires paper prescription signatures and reconciliation of clinical exposure |
-| E Seven scheduled visits | E_followup structured record for months 1/2/3/4/6/9/12; PCR specimen link to lab ledger | PCR target month anchored to verified transplant date, not enrollment date; event windows pending approval |
-| F Unscheduled PCR | F_unscheduled_pcr with clinical trigger, viral load, reason, action, cost source | Not interchangeable with the seven protocol-funded scheduled tests |
-| G Clinically significant CMV event | G_cmv_event threshold consistency and blinded EAC result capture | No automatic endpoint declaration from PCR; EAC evidence and independent adjudication required |
-| H AE/SAE | H_adverse_event grade/seriousness/relatedness, action, treatment/outcome, IEC reporting | Does not automatically send mandatory IEC/DSMB reports |
-| I Rejection/graft/outcomes | I_clinical_outcome event form | External biopsy/source review required |
-| J Protocol deviations | J_deviation event form with major-efficacy-affecting flag | PI/statistician must approve PP categorization |
-| K Resource/cost capture | K_resource_cost with attribution and direct INR cost | Funded drug/PCR entries checked against real study records |
-| L Final study status | L_final_status with follow-up, endpoint/vital/graft status and reviewer | Final reviewer signoff/database lock not yet implemented |
+| **A. Screening and enrollment** | Restricted registry CR link, screening number, serostatus recorded as positive/negative/unknown, donor type/relationship, dated consent/version, reviewed enrollment and server-assigned study ID | Identity remains restricted. Consent and donor status must be verified from source. Investigator/PI endorsements do not substitute for amendment approval. |
+| **B. Eligibility** | Explicit 10 inclusion and 10 exclusion answers, numeric ANC/platelets/Hb/CrCl, signed-review date/source, optional NP1/NP2/NP3 and comments, separately audited exception request | Eligibility **must be recorded factually**. Signed protocol v5.0 gates still apply to enrollment/randomization. First prophylaxis-dose date is documented in exception review; it must not be mistaken for enrollment date. |
+| **C. Baseline and randomization** | Weight, creatinine, CrCl, eGFR, CBC, optional baseline PCR, immunosuppression, study-drug start and actual starting regimen | Randomization date/code and nominal arm are obtained from locked allocation, not manually editable. Initial data require signed source verification. |
+| **D. Valganciclovir accountability** | D_adherence records with dated CrCl, prescribed regimen, missed doses, adherence, interruptions/pill count; signed prescriptions, batch/lot, MSS dispensing and returns in separate ledgers | Reconcile all source rows to signed orders and pharmacy ledger; form submission alone is not evidence of drug administration or complete tablet accountability. |
+| **E. Follow-up and seven scheduled PCRs** | E_followup per month 1/2/3/4/6/9/12, CBC, renal labs, drug exposure, symptoms, immunosuppression, clinical outcomes, linked PCR specimen; source-entered PCR sample date and funded status | PCR sample/result/verification comes from the linked laboratory ledger. Pending specimen is not a verified result. Funded status is **never assumed** from the schedule. Target dates are not approved visit windows. |
+| **F. Unscheduled CMV PCR** | Clinical indication, sample date, laboratory accession, result category/IU/mL, repeat plan, action and funding source | Not a scheduled protocol sample; no inferred test result or reimbursement. |
+| **G. Suspected clinically significant CMV** | Event date, viral load, 1,000-IU/mL consistency, repeat PCR, syndrome/site, evidence, treatment, and signed EAC decision reference | **Independent blinded adjudication workflow and committee digital sign-off remain to be implemented/validated.** A staff-transcribed result is not proof of EAC consensus. |
+| **H. Adverse events/SAEs** | Grade, seriousness, relatedness, intervention, supportive treatment, outcome, IEC reporting/date | Report submission is not automated; local safety reporting and DSMB oversight still require source checking. |
+| **I. Graft and clinical outcomes** | Biopsy-proven rejection, augmented immunosuppression, delayed graft function, graft loss, infections, hospitalisation, death, final graft/renal metrics | Biopsy/pathology, death, graft loss and follow-up completeness require independent source review. |
+| **J. Protocol deviations/crossover** | Date, description/category, corrective action, provisional major efficacy-impact flag, reporting reference | **Per-protocol classification must be finalized by PI/statistician**, not inferred from a checkbox. |
+| **K. Resource and cost** | Resource type, quantity, project-funded attribution, rupee direct cost when known and source reference | Actual study-vs-clinical funding and costs require pharmacy/lab/finance reconciliation. |
+| **L. Twelve-month final status** | Last contact, endpoint/vital/graft statuses, final renal metrics and reviewer name/signed source | **Formal final reviewer e-signature, independent endpoint linkage and database lock not implemented.** A text field does not sign/lock the record. |
 
-Data entry uses role-filtered forms, per-user/patient/section optimistic-concurrency autosave, explicit submission, audit and independent review. A submitted record is not verified. Once the entry is verified, a correction creates a new revision and again requires independent review. Individual clinical domains are stored separately from screening identifiers and concealed allocation.
+The supplementary M–P medication, laboratory, infection and transplant forms capture additional, dated clinical information; they are **not additional mandatory investigations under the signed CRF**. Optional free text and NP1/NP2/NP3 unit capture are supported without assuming absent values.
 
-**Extended registry:** reference/data_dictionary_draft.csv describes hundreds of additional draft registry fields. They are **not** established as an approved clinical CRF by this mapping. There is no claim that the entire expanded dictionary has completed field-level operational validation.
+## Patient context, provenance and safety acceptance
 
-## Staff access policy
+1. One canonical selected patient is used for every tab; search accepts hospital CR, patient name or Study ID. Never infer identity from the first search result.
+2. Changing patients must invalidate in-flight registry history, form drafts, eligibility checks, linked PCR specimens and MSS slips. All clinical read responses must confirm the requested patient/section before rendering.
+3. Clinical entry, drafts, corrections and independent source review remain separate states. Optimistic revision checks must prevent silent concurrent overwrites.
+4. Existing CRF source links are validated **server-side** against the same subject and, for E, the scheduled month; a documented sample date cannot contradict the source collection ledger.
+5. A verified CRF entry does not automatically prove a verified PCR, a signed EAC result, drug dispensing, or final trial adjudication.
+6. Tests use disposable synthetic fixtures; each live functional acceptance check must be conducted by authorized staff and preserve clinical audit records and concealed allocation.
 
-- Initial invite token is single-use, valid **seven days** for account activation. It is **not** a recurring password reset.
-- Named staff credential authorization lasts **90 days after activation**. PI/admin can renew another 90 days in the dashboard or revoke immediately; revocation/renewal invalidates active sessions.
-- Staff select their own passwords and may change them from Account Security. Authenticator enrollment is available; the clinical-mode gate requires MFA.
-- Users cannot view passwords or retrieve activation tokens after their initial creation. IT admin does not enroll subjects or dispense drugs.
+## High-priority remaining work
 
-## Preserved safety gates
+- **P1:** Dedicated blinded independent endpoint-adjudication (two reviewers, discrepancy resolution, signed source, no arm disclosure).
+- **P1:** Signed final CRF status, outcome lock, investigator reconciliation, and controlled unlock with immutable audit.
+- **P1:** Live acceptance script for registration → screening → signed eligibility → study ID → concealed allocation → drug/PCR → longitudinal forms and patient switching; run with institution-authorized test protocol only, never invent real trial data.
+- **P2:** Clear distinction of due/not-yet-due vs missing visits using approved windows; completeness queries, missing-field queries and automatic provenance links without duplicate clinical values.
+- **P2:** Independent pharmacy/lab/finance reconciliation, structured protocol deviation categorization and source query resolution.
 
-- The current Oracle/GitHub release workflow is for **synthetic staging** only. No identifiable participant records should be entered yet.
-- Independent stratified randomization, existing apparent allocation reconciliation, verified sealed list/custodian signoff, and blinded endpoint EAC workflows must be reconciled before any first patient is randomized.
-- Database versioned migrations/immutable audit, NIEC/ICMR/CTRI release documentation, PI + lab + pharmacy signed UAT, source document checks, and a confirmed encrypted offsite backup **plus isolated full restore** are not yet demonstrated.
-- An empty private personal Drive folder for **synthetic encrypted staging backups only** does not make OCI backups run. No live patient backup may be sent there without institutional data-governance authorization.
+Current deployment and backup proof must be checked separately for each release. No permission or exception text in this document grants an eligibility override.
