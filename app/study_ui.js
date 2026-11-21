@@ -806,7 +806,7 @@ function scheduleEligibilityDraft(){
  eligibilityDraftTimer=setTimeout(()=>{void saveEligibilityDraft().catch(()=>{});},1200);
 }
 async function restoreEligibilityDraft(sid,request){
- if(!['pi','consultant'].includes($('currentRole').textContent.trim())&&!window.currentWorkspaceFullAccess){
+ if(!['pi','consultant','scientist'].includes($('currentRole').textContent.trim())&&!window.currentWorkspaceFullAccess){
   $('tw-eligibility-draft-status').textContent='Eligibility review is read-only for this role.';
   return;
  }
