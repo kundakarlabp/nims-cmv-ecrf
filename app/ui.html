@@ -349,6 +349,19 @@ const studyMonths=[1,2,3,4,6,9,12];
 let activeTab='dashboard', activeKind=$('kind').value, draftRevision=null;
 let draftTimer=null, draftWriting=Promise.resolve(), lastSavedDraft=null;
 const quickForms={
+ admission:[
+  {key:'unit',label:'Nephrology unit',type:'select',
+   options:[['NP1','NP1'],['NP2','NP2'],['NP3','NP3']]},
+  {key:'ward',label:'Ward / location',type:'text'},
+  {key:'consultant',label:'Treating consultant',type:'text'},
+  {key:'clinical_notes',label:'Additional admission notes',type:'textarea',wide:true}
+ ],
+ transplant:[
+  {key:'unit',label:'Nephrology unit',type:'select',
+   options:[['NP1','NP1'],['NP2','NP2'],['NP3','NP3']]},
+  {key:'transplant_source',label:'Transplant source reference',type:'text'},
+  {key:'clinical_notes',label:'Additional transplant notes',type:'textarea',wide:true}
+ ],
  visit:[
   {key:'scheduled_month',label:'Scheduled month',type:'select',options:studyMonths.map(v=>[String(v),'Month '+v])},
   {key:'visit_complete',label:'Visit status',type:'select',options:[['true','Completed'],['false','Not completed']]},
@@ -448,6 +461,8 @@ function renderQuickForm(){
   let control;
   if(f.type==='select'){
    control='<select data-field="'+f.key+'"><option value="">Select…</option>'+f.options.map(opt=>'<option value="'+htmlText(opt[0])+'">'+htmlText(opt[1])+'</option>').join('')+'</select>';
+  } else if(f.type==='textarea'){
+   control='<textarea data-field="'+f.key+'" rows="3" maxlength="4000"></textarea>';
   } else {
    control='<input data-field="'+f.key+'" type="'+f.type+'" '+(f.step?'step="'+f.step+'" ':'')+'autocomplete="off">';
   }
