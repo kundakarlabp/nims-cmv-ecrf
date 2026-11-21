@@ -1575,6 +1575,10 @@ def test_enrollment_ineligibility_and_transplant_window_report_specific_reasons(
         assert refused.status_code==422, refused.text
         assert 'INELIGIBLE' in refused.text
         assert 'Unable/unwilling to complete follow-up' in refused.text
+        actions=pi.get('/api/trial/action-worklist').json()['actions']
+        flagged=[a for a in actions if a['subject_id']==sid]
+        assert any(a['category']=='Eligibility not met' for a in flagged)
+        assert not any(a['category']=='Randomization pending' for a in flagged)
     with TestClient(app) as consultant:
         h=auth(consultant,'testeligibilityconsultant','EligibilityTestPassword123!')
         review['exclusion']['unable_to_complete_followup']=False
