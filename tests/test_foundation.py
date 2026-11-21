@@ -1519,3 +1519,26 @@ def test_screened_consent_declined_is_retained_but_never_enrolled_or_randomized(
         events=db_session.scalars(select(Audit).where(
             Audit.action=='consent_declined',Audit.entity_id==str(sid))).all()
         assert len(events)==1 and events[0].patient_id==pid
+
+
+def test_nims_emblem_and_optional_nephrology_source_fields():
+    """Institutional logo and optional fields do not change mandatory CRF requirements."""
+    from app.crf_schema import CRF_FORMS,validate_payload
+    with TestClient(app) as client:
+        logo=client.get('/nims-logo.svg')
+        assert logo.status_code==200
+        assert logo.headers['content-type'].startswith('image/svg+xml')
+        assert b'data:image/webp;base64,' in logo.content
+    for form in ('C_baseline','E_followup','P_transplant'):
+        values=CRF_FORMS[form]['fields']['nephrology_unit']
+        assert values['required'] is False
+        assert values['choices']==['NP1','NP2','NP3']
+        assert validate_payload(form,{'nephrology_unit':'NP1'},partial=True)['nephrology_unit']=='NP1'
+        with pytest.raises(ValueError,match='Invalid selection'):
+            validate_payload(form,{'nephrology_unit':'NP4'},partial=True)
+    for form in ('C_baseline','E_followup','G_cmv_event','H_adverse_event',
+                 'I_clinical_outcome','P_transplant','M_medication','N_laboratory','O_infection'):
+        spec=CRF_FORMS[form]['fields']['additional_notes']
+        assert spec['type']=='textarea' and spec['required'] is False
+        assert validate_payload(form,{'additional_notes':'Documented clinical clarification'},
+                                partial=True)['additional_notes']=='Documented clinical clarification'
