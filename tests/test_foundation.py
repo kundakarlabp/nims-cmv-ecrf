@@ -1786,3 +1786,105 @@ def test_signed_crf_evidence_and_verification_labels_are_not_digital_signoffs():
         validate_payload('E_followup',{
             'scheduled_month':'1','actual_visit_on':'2026-11-01',
             'pcr_study_funded':'assumed_study_paid'})
+
+
+def test_partial_eligibility_draft_is_private_editable_and_never_signed():
+    """A partially filled eligibility form survives reload without modifying signed criteria."""
+    from app.trial_api import INCLUSION_ITEMS,EXCLUSION_ITEMS
+    with TestClient(app) as admin:
+        headers=auth(admin);_,sid=setup_synthetic_trial(admin,headers)
+        assert admin.post('/api/users',headers=headers,json={
+            'username':'eligdraftpi','display_name':'Synthetic draft PI',
+            'role':'pi','password':'DraftPiPassword123456!'}).status_code==200
+    url=f'/api/trial/subjects/{sid}/eligibility-draft'
+    with TestClient(app) as scientist:
+        h=auth(scientist,'syntheticscreener','SyntheticScreenerPassword123!')
+        assert scientist.get(url).status_code==403
+        assert scientist.put(url,headers=h,json={'inclusion':{'age_ge_18':True}}).status_code==403
+    with TestClient(app) as consultant:
+        h=auth(consultant,'testeligibilityconsultant','EligibilityTestPassword123!')
+        assert consultant.get(url).json()['draft'] is None
+        signed_before=consultant.get(f'/api/trial/subjects/{sid}/eligibility').json()['eligibility']
+        assert signed_before['baseline']['is_eligible'] is True
+        partial={'inclusion':{'age_ge_18':True,'vgcv_within_10_days':None},
+                 'exclusion':{'crcl_below_10':False},
+                 'baseline':{'age_years':'50','review_notes':'TEST: review after lab available'}}
+        created=consultant.put(url,headers=h,json=partial)
+        assert created.status_code==200,created.text
+        assert created.json()['is_draft'] is True
+        assert created.json()['not_approved_eligibility'] is True
+        restored=consultant.get(url)
+        assert restored.status_code==200,restored.text
+        assert restored.json()['draft']['payload']['baseline']['review_notes']==partial['baseline']['review_notes']
+        revision=restored.json()['draft']['revision']
+        invalid=consultant.put(url,headers=h,json={'inclusion':{'not_a_real_criterion':True},
+            'expected_revision':revision})
+        assert invalid.status_code==422
+        conflict=consultant.put(url,headers=h,json={**partial,'expected_revision':revision+5})
+        assert conflict.status_code==409
+        updated=consultant.put(url,headers=h,json={**partial,
+            'baseline':{'age_years':'51'},'expected_revision':revision})
+        assert updated.status_code==200,updated.text
+        assert updated.json()['revision']==revision+1
+        signed_after=consultant.get(f'/api/trial/subjects/{sid}/eligibility').json()['eligibility']
+        assert signed_after['baseline']['is_eligible'] is True
+        assert signed_after['baseline']['age_years']==signed_before['baseline']['age_years']
+    with TestClient(app) as pi:
+        h=auth(pi,'eligdraftpi','DraftPiPassword123456!')
+        assert pi.get(url).json()['draft'] is None
+    with TestClient(app) as consultant:
+        h=auth(consultant,'testeligibilityconsultant','EligibilityTestPassword123!')
+        signed=consultant.put(f'/api/trial/subjects/{sid}/eligibility',headers=h,json={
+            'inclusion':{k:True for k in INCLUSION_ITEMS},
+            'exclusion':{k:False for k in EXCLUSION_ITEMS},
+            'age_years':50,'anc_per_ul':3000,'platelets_per_ul':180000,
+            'hemoglobin_g_dl':11,'crcl_cg_ml_min':68,
+            'baseline_cbc_on':'2026-10-02','reviewed_on':'2026-10-02'})
+        assert signed.status_code==200,signed.text
+        assert consultant.get(url).json()['draft'] is None
+    with TestClient(app) as pi:
+        h=auth(pi,'eligdraftpi','DraftPiPassword123456!')
+        enrolled=pi.post(f'/api/trial/subjects/{sid}/enroll',headers=h,json={
+            'enrolled_on':'2026-10-03','pcr_anchor_on':'2026-10-01',
+            'pcr_anchor_basis':'transplant_date',
+            'reviewed_eligibility_and_consent':True,'approved_visit_anchor':True})
+        assert enrolled.status_code==200,enrolled.text
+        blocked=pi.put(url,headers=h,json={'inclusion':{'age_ge_18':True}})
+        assert blocked.status_code==409
+
+
+def test_one_record_lookup_supports_direct_crf_correction_without_cross_patient_access():
+    with TestClient(app) as admin:
+        h=auth(admin);_,sid=setup_synthetic_trial(admin,h)
+        assert admin.post('/api/users',headers=h,json={
+            'username':'directeditpi','display_name':'Synthetic direct edit PI',
+            'role':'pi','password':'DirectEditPiPassword123!'}).status_code==200
+    with TestClient(app) as pi:
+        h=auth(pi,'directeditpi','DirectEditPiPassword123!')
+        enrolled=pi.post(f'/api/trial/subjects/{sid}/enroll',headers=h,json={
+            'enrolled_on':'2026-10-03','pcr_anchor_on':'2026-10-01',
+            'pcr_anchor_basis':'transplant_date',
+            'reviewed_eligibility_and_consent':True,'approved_visit_anchor':True})
+        assert enrolled.status_code==200,enrolled.text
+        created=pi.post(f'/api/trial/crf/subjects/{sid}/entries',headers=h,json={
+            'section':'E_followup','occurred_on':'2026-11-01',
+            'payload':{'scheduled_month':'1','actual_visit_on':'2026-11-01',
+                       'contact_notes':'TEST: original source note'}})
+        assert created.status_code==200,created.text
+        entry_id=created.json()['entry_id']
+        entry=pi.get(f'/api/trial/crf/entries/{entry_id}')
+        assert entry.status_code==200,entry.text
+        assert entry.json()['subject_id']==sid
+        assert entry.json()['payload']['contact_notes']=='TEST: original source note'
+        changed=pi.put(f'/api/trial/crf/entries/{entry_id}',headers=h,json={
+            'expected_revision':1,'occurred_on':'2026-11-01',
+            'payload':{'scheduled_month':'1','actual_visit_on':'2026-11-01',
+                       'contact_notes':'TEST: corrected source note'},
+            'reason':'Corrected source note'})
+        assert changed.status_code==200,changed.text
+        assert changed.json()['revision']==2
+        assert pi.get(f'/api/trial/crf/entries/{entry_id}').json()['payload']['contact_notes']=='TEST: corrected source note'
+    with TestClient(app) as technician:
+        h=auth(technician,'syntheticscreener','SyntheticScreenerPassword123!')
+        denied=technician.get(f'/api/trial/crf/entries/{entry_id}')
+        assert denied.status_code==403
