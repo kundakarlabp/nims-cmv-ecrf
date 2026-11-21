@@ -144,7 +144,14 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
    }else if(p.endsWith('/entries'))result={entries:[]};
    else if(p.endsWith('/timeline')){
     if(courseFailures>0){courseFailures--;return route.abort('failed');}
-    result={entries:[],next_cursor:null,note:'Synthetic test timeline'};
+    const sid=Number((p.match(/subjects\\/(\\d+)\\/timeline/)||[])[1]);
+    result={entries:sid===2?[{
+      id:222,subject_id:2,section:'M_medication',title:'M. Medication exposure',
+      occurred_on:'2026-10-04',revision:1,review_status:'pending',
+      payload:{start_on:'2026-10-04',source_reference:'TEST-DIRECT-EDIT',
+       drug:'mycophenolate_sodium',dose_per_administration:360},
+      fields:{source_reference:{label:'Source document'}}}]:[],
+      next_cursor:null,note:'Synthetic test timeline'};
    }
    return route.fulfill({contentType:'application/json',body:JSON.stringify(result)});
   });
@@ -244,6 +251,13 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   await page.click('#tw-course-records [data-course-retry]');
   await page.waitForFunction(()=>$('tw-course-records').textContent.includes('Synthetic test timeline'));
   assert.doesNotMatch(await page.textContent('#tw-course-records'),/could not be loaded/i);
+  assert.equal(await page.locator('#tw-course-records [data-course-edit="222"]').count(),1,
+   'Previously submitted clinical history provides direct entry editing');
+  await page.click('#tw-course-records [data-course-edit="222"]');
+  await page.waitForFunction(()=>activeTab==='crf'&&$('tw-crf-submit').textContent==='Save changes');
+  assert.equal(await page.inputValue('#twcrf-source_reference'),'TEST-DIRECT-EDIT');
+  assert.match(await page.textContent('#tw-crf-draft-status'),/Editing existing entry/);
+  await page.evaluate(async()=>{await tab('course');});
   await page.setViewportSize({width:390,height:844});
   assert.equal(await page.locator('#tw-participant-context').evaluate(el=>getComputedStyle(el).gridColumnStart),'1');
   blinded=true;
