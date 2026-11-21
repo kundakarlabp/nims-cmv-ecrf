@@ -13,7 +13,13 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
  start_on:f('Effective date','date',true),source_reference:f('Source','text',true),
  dose_per_administration:f('Dose','number'),drug:f('Drug')}},
  N_laboratory:{title:'N. Laboratory',repeat:'event',supplementary:true,fields:{sample_on:f('Sample date','date',true)}},
- O_infection:{title:'O. Infection',repeat:'event',supplementary:true,fields:{onset_on:f('Onset','date',true)}}};
+ O_infection:{title:'O. Infection',repeat:'event',supplementary:true,fields:{onset_on:f('Onset','date',true)}},
+ E_followup:{title:'E. Scheduled follow-up',repeat:'month',fields:{
+   scheduled_month:{...f('Protocol visit month','select',true),choices:['1','2','3','4','6','9','12']},
+   actual_visit_on:f('Visit date','date',true),
+   pcr_specimen_code:f('Linked specimen','text')}},
+ D_adherence:{title:'D. Study drug adherence',repeat:'event',fields:{
+   visit_on:f('Visit date','date',true),dispensing_slip_code:f('MSS code','text')}}};
 
 (async()=>{
  const executablePath=process.env.CMV_TEST_CHROME||
@@ -470,6 +476,22 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   }
   assert.equal(await page.locator('#tw-progress-stage-notfound').count(),0);
   assert.equal(await page.locator('#tw-progress-step-4').count(),1,'Patient trial workflow has exactly four stages');
+  // Force an old patient's PCR response to complete AFTER the new patient's
+  // linked-specimen options have rendered. No old source may leak into the UI.
+  await page.evaluate(async()=>{await tab('crf');});
+  await page.selectOption('#tw-context-subject','1');
+  await page.waitForFunction(()=>selected==='TEST-P-1'&&$('tw-crf-subject').value==='1');
+  holdOldPCR=true;
+  await page.selectOption('#tw-crf-section','E_followup');
+  for(let i=0;i<150&&!releaseOldPCR;i++)await new Promise(resolve=>setTimeout(resolve,20));
+  assert.ok(releaseOldPCR,'The prior participant linked-PCR response must be delayed');
+  await page.selectOption('#tw-context-subject','2');
+  await page.waitForFunction(()=>document.querySelector('#twcrf-pcr_specimen_code option[value="TEST-PCR-2-M1"]'));
+  releaseOldPCR();
+  await page.waitForTimeout(150);
+  assert.equal(await page.locator('#twcrf-pcr_specimen_code option[value="TEST-PCR-1-M1"]').count(),0,
+   'An earlier participant PCR response must not overwrite the current participant linked records');
+  assert.equal(await page.locator('#twcrf-pcr_specimen_code option[value="TEST-PCR-2-M1"]').count(),1);
   assert.deepEqual(errors,[]);
   console.log('Real browser passed: patient-centric navigation, in-page allocation, cross-patient draft isolation and mobile layout');
  }finally{await browser.close();}

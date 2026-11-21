@@ -306,9 +306,28 @@ async function restoreSignedInSession(){
  catch(e){if(e.status!==401)show('loginMessage','Session could not be restored. '+e.message,true);}
 }
 function debounceList(){clearTimeout(timer);timer=setTimeout(loadPatients,250)}
-async function loadPatients(){try{let list=await api('/api/patients?q='+encodeURIComponent($('search').value));$('patients').innerHTML=list.map(p=>'<button class="patient '+(p.id===selected?'selected':'')+'" onclick="choose(\''+p.id+'\')"><strong>'+escapeHTML(p.name)+'</strong><div class="hint">CR '+escapeHTML(p.cr_number)+' · '+escapeHTML(p.study_id||'No trial ID')+'</div></button>').join('')||'<p class="hint">No patients registered.</p>'}catch(e){show('msg',e.message,true)}}
-async function choose(id){selected=id;await loadPatients();await loadRecord()}
-async function loadRecord(){if(!selected)return;try{let r=await api('/api/patients/'+selected);$('currentPatient').textContent=r.patient.name+' / '+r.patient.cr_number;$('recordCount').textContent=r.entries.length;$('records').innerHTML=r.entries.map(x=>'<div class="event"><strong>'+escapeHTML(x.kind)+'</strong> · '+escapeHTML(x.occurred_on)+'<div class="hint">Revision '+x.revision+' · Review: '+escapeHTML(x.review_status)+' · '+escapeHTML(JSON.stringify(x.payload))+'</div></div>').join('')||'<p class="hint">No entries yet.</p>';$('entryList').innerHTML=r.entries.map(x=>'<div class="event"><strong>'+escapeHTML(x.kind)+'</strong> · '+escapeHTML(x.occurred_on)+' · revision '+x.revision+' · '+escapeHTML(x.review_status)+'<label>Correct structured JSON<textarea id="edit-'+x.id+'">'+escapeHTML(JSON.stringify(x.payload,null,2))+'</textarea></label><label>Reason for correction<input id="edit-reason-'+x.id+'" maxlength="500"></label><button class="secondary" onclick="correctEntry(\''+x.id+'\','+x.revision+',\''+x.occurred_on+'\')">Save correction</button></div>').join('')||'<p class="hint">No entries yet.</p>'}catch(e){show('msg',e.message,true)}}
+let patientDirectoryRequest=0,patientRecordRequest=0;
+async function loadPatients(){
+ const request=++patientDirectoryRequest,q=$('search').value;
+ try{
+  let list=await api('/api/patients?q='+encodeURIComponent(q));
+  if(request!==patientDirectoryRequest||q!==$('search').value)return;
+  $('patients').innerHTML=list.map(p=>'<button class="patient '+(p.id===selected?'selected':'')+'" onclick="choose(\''+p.id+'\')"><strong>'+escapeHTML(p.name)+'</strong><div class="hint">CR '+escapeHTML(p.cr_number)+' · '+escapeHTML(p.study_id||'No trial ID')+'</div></button>').join('')||'<p class="hint">No patients registered.</p>';
+ }catch(e){if(request===patientDirectoryRequest)show('msg',e.message,true)}
+}
+async function choose(id){selected=id;await loadPatients();if(selected===id)await loadRecord()}
+async function loadRecord(){
+ const patientId=selected,request=++patientRecordRequest;
+ if(!patientId){
+  $('currentPatient').textContent='None';$('recordCount').textContent='0';
+  $('records').textContent='Select a participant.';$('entryList').textContent='';
+  return;
+ }
+ try{
+  let r=await api('/api/patients/'+encodeURIComponent(patientId));
+  if(request!==patientRecordRequest||selected!==patientId)return;$('currentPatient').textContent=r.patient.name+' / '+r.patient.cr_number;$('recordCount').textContent=r.entries.length;$('records').innerHTML=r.entries.map(x=>'<div class="event"><strong>'+escapeHTML(x.kind)+'</strong> · '+escapeHTML(x.occurred_on)+'<div class="hint">Revision '+x.revision+' · Review: '+escapeHTML(x.review_status)+' · '+escapeHTML(JSON.stringify(x.payload))+'</div></div>').join('')||'<p class="hint">No entries yet.</p>';$('entryList').innerHTML=r.entries.map(x=>'<div class="event"><strong>'+escapeHTML(x.kind)+'</strong> · '+escapeHTML(x.occurred_on)+' · revision '+x.revision+' · '+escapeHTML(x.review_status)+'<label>Correct structured JSON<textarea id="edit-'+x.id+'">'+escapeHTML(JSON.stringify(x.payload,null,2))+'</textarea></label><label>Reason for correction<input id="edit-reason-'+x.id+'" maxlength="500"></label><button class="secondary" onclick="correctEntry(\''+x.id+'\','+x.revision+',\''+x.occurred_on+'\')">Save correction</button></div>').join('')||'<p class="hint">No entries yet.</p>';
+ }catch(e){if(request===patientRecordRequest&&selected===patientId)show('msg',e.message,true)}
+}
 async function register(){
  try{
   // Never use a cached login-time mode to authorize an identifiable record.
@@ -509,14 +528,17 @@ function scheduleDraft(){
  setDraftStatus('Unsaved changes · autosave pending…');
  draftTimer=setTimeout(function(){void saveDraftNow().catch(function(){});},1200);
 }
+let genericDraftRestoreRequest=0;
 async function restoreDraft(){
+ const request=++genericDraftRestoreRequest,patientId=selected,kind=activeKind;
  clearTimeout(draftTimer);
  draftRevision=null;lastSavedDraft=null;
  $('eventDate').value=new Date().toISOString().slice(0,10);
  setFormPayload({});
  if(!selected){setDraftStatus('Select a patient to start a draft.');return;}
  try{
-  const response=await api('/api/patients/'+encodeURIComponent(selected)+'/drafts/'+encodeURIComponent(activeKind));
+  const response=await api('/api/patients/'+encodeURIComponent(patientId)+'/drafts/'+encodeURIComponent(kind));
+  if(request!==genericDraftRestoreRequest||patientId!==selected||kind!==activeKind)return;
   if(response.draft){
    draftRevision=response.draft.revision;
    setFormPayload(response.draft.payload||{});
@@ -524,7 +546,8 @@ async function restoreDraft(){
    lastSavedDraft=JSON.stringify({occurred_on:response.draft.occurred_on,payload:response.draft.payload||{}});
    setDraftStatus('Private draft restored from server · revision '+draftRevision);
   }else setDraftStatus('No previous draft · changes will autosave to server.');
- }catch(err){setDraftStatus('Could not load draft: '+err.message,true);}
+ }catch(err){if(request===genericDraftRestoreRequest&&patientId===selected&&kind===activeKind)
+    setDraftStatus('Could not load draft: '+err.message,true);}
 }
 choose=async function(id){
  if(activeTab==='entry'){try{await saveDraftNow();}catch(err){show('msg','Cannot switch patient while draft is unsaved: '+err.message,true);return;}}

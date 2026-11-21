@@ -333,13 +333,17 @@ tab=async function(name){
 };
 function registryLabel(p){return (p.cr_number?'CR '+p.cr_number+' · ':'')+(p.name||'')+(p.study_id?' · '+p.study_id:'');}
 function subjectLabel(s){return (s.cr_number?'CR '+s.cr_number+' · ':'')+(s.study_code||s.screening_code)+' · '+s.status;}
+let registryLoadRequest=0;
 async function loadRegistry(){
+ const request=++registryLoadRequest,selectedAtStart=selected;
  const people=await api('/api/patients?limit=100');
+ if(request!==registryLoadRequest||selectedAtStart!==selected)return;
  // A selected patient may be outside the newest 100 records; fetch that record
  // explicitly instead of silently falling back to another person's first row.
  if(selected&&!people.some(p=>p.id===selected)){
-  people.unshift((await api('/api/patients/'+encodeURIComponent(selected))).patient);
+  people.unshift((await api('/api/patients/'+encodeURIComponent(selectedAtStart))).patient);
  }
+ if(request!==registryLoadRequest||selectedAtStart!==selected)return;
  fill('tw-patient',people,'id',registryLabel);
  $('tw-patient').value=selected||'';
 }
@@ -1092,6 +1096,7 @@ let currentCrfSchema=null,currentCrfSpec=null,currentCrfEntry=null;
 let baselineSource=null,baselineSourceRequest=0;
 let crfLoadedSection=null,crfLoadedSubject=null;
 let crfDraftRevision=null,crfDraftKey=null,crfDraftLast=null,crfDraftTimer=null,crfDraftQueue=Promise.resolve();
+let crfDraftRestoreRequest=0,crfLinkedLoadRequest=0;
 const crfEditable={
  C_baseline:['pi','consultant','scientist'],
  D_adherence:['pi','consultant','scientist','nurse','pharmacy'],
@@ -1174,6 +1179,7 @@ async function crfSaveDraft(){
  catch(e){$('tw-crf-draft-status').textContent='DRAFT UNSAVED: '+e.message;throw e;}
 }
 async function crfRestoreDraft(){
+ const restoreRequest=++crfDraftRestoreRequest;
  clearTimeout(crfDraftTimer);
  crfDraftRevision=null;crfDraftKey=null;crfDraftLast=null;
  const savedMonth=currentCrfSpec?.repeat==='month' ?
@@ -1188,7 +1194,8 @@ async function crfRestoreDraft(){
  const r=await api('/api/trial/crf/subjects/'+subjectId+
   '/drafts/'+encodeURIComponent(section)+
   '?occurrence_key='+encodeURIComponent(key));
- if(subjectId!==n('tw-crf-subject')||section!==value('tw-crf-section')||key!==crfKey())return;
+ if(restoreRequest!==crfDraftRestoreRequest||
+    subjectId!==n('tw-crf-subject')||section!==value('tw-crf-section')||key!==crfKey())return;
  crfDraftKey=key;
  if(r.draft){
   crfSetValues(r.draft.payload);
@@ -1255,6 +1262,8 @@ $('tw-crf-source-copy').onclick=()=>{
  notify('tw-crf-status','Reviewed measurements copied into blank fields only. Verify clinical dates and sign the baseline source before submission.');
 };
 function crfRender(){
+ // Invalidate in-flight linked-specimen and draft reads before rebuilding controls.
+ crfLinkedLoadRequest++;crfDraftRestoreRequest++;
  currentCrfSpec=currentCrfSchema?.[value('tw-crf-section')]||null;
  crfLoadedSection=value('tw-crf-section');crfLoadedSubject=n('tw-crf-subject');
  currentCrfEntry=null;
@@ -1287,10 +1296,15 @@ function crfRender(){
  $('tw-crf-submit').classList.toggle('hide',!crfCanEdit());
 }
 async function loadCrfSchema(){
+ const previousSection=value('tw-crf-section');
+ const subjectAtStart=n('tw-crf-subject');
  const r=await api('/api/trial/crf/schema');
+ // A late schema response from the previous patient must not rewrite this form.
+ if(subjectAtStart!==n('tw-crf-subject'))return;
  currentCrfSchema=r.forms;
  fill('tw-crf-section',Object.entries(r.forms).map(([id,s])=>({id,title:s.title})),
      'id',x=>x.title);
+ if(previousSection&&r.forms[previousSection])$('tw-crf-section').value=previousSection;
  crfRender();await populateCrfLinkedIdentifiers();await crfRestoreDraft();
  if(n('tw-crf-subject'))await selectParticipantSubject(n('tw-crf-subject'));
 }
@@ -1364,9 +1378,15 @@ $('tw-crf-entries').addEventListener('click',e=>{
  if(!row)return;
  void task('tw-crf-status',async()=>{
   if(edit){
+   await crfSaveDraft();
+   if(row.subject_id!==n('tw-crf-subject'))
+    throw Error('Selected participant changed; reload submitted records before editing');
    if(value('tw-crf-section')!==row.section){
     $('tw-crf-section').value=row.section;crfRender();
    }
+   await populateCrfLinkedIdentifiers();
+   if(row.subject_id!==n('tw-crf-subject')||value('tw-crf-section')!==row.section)
+    throw Error('Participant or section changed while loading this entry');
    currentCrfEntry=row;crfSetValues(row.payload);
    $('tw-crf-date').value=row.occurred_on;
    $('tw-crf-draft-status').textContent='Editing submitted entry '+id+
@@ -1475,19 +1495,26 @@ loadDashboard=async function(){
 };
 
 async function populateCrfLinkedIdentifiers(){
- if(!currentCrfSpec||!crfLoadedSubject)return;
+ const request=++crfLinkedLoadRequest;
+ const subjectId=crfLoadedSubject,section=crfLoadedSection;
+ if(!currentCrfSpec||!subjectId)return;
  let fieldName,values=[],render;
- if(crfLoadedSection==='E_followup'){
+ if(section==='E_followup'){
   fieldName='pcr_specimen_code';
-  const r=await api('/api/trial/subjects/'+crfLoadedSubject+'/pcr');
+  const r=await api('/api/trial/subjects/'+subjectId+'/pcr');
   values=r.pcr_records||[];
   render=x=>x.specimen_code+' · month '+x.scheduled_month+' · '+x.status;
- }else if(crfLoadedSection==='D_adherence'){
+ }else if(section==='D_adherence'){
   fieldName='dispensing_slip_code';
-  const r=await api('/api/trial/subjects/'+crfLoadedSubject+'/pharmacy');
+  const r=await api('/api/trial/subjects/'+subjectId+'/pharmacy');
   values=r.dispenses||[];
   render=x=>x.slip_code+' · '+x.quantity_issued+' tablets issued';
  }else return;
+ // Never display another participant's specimen codes or MSS slips after
+ // asynchronous switching, even if the same section is reopened immediately.
+ if(request!==crfLinkedLoadRequest||subjectId!==crfLoadedSubject||
+    subjectId!==n('tw-crf-subject')||section!==crfLoadedSection||
+    section!==value('tw-crf-section'))return;
  const previous=document.querySelector('#tw-crf-fields [data-crf-field="'+fieldName+'"]');
  if(!previous)return;
  const parent=previous.parentElement,initial=previous.value;
@@ -1497,7 +1524,7 @@ async function populateCrfLinkedIdentifiers(){
   values.map(x=>'<option value="'+txt(fieldName==='pcr_specimen_code'?x.specimen_code:x.slip_code)+'">'+
       txt(render(x))+'</option>').join('');
  parent.replaceChild(select,previous);
- if(initial)select.value=initial;
+ if(initial&&[...select.options].some(x=>x.value===initial))select.value=initial;
 }
 
 
@@ -1703,9 +1730,12 @@ $('tw-context-find').oninput=()=>{
   $('tw-context-find-results').value='';
  });},250);
 };
-$('tw-context-find-results').onchange=()=>{void task('tw-context-error',async()=>{
+$('tw-context-find-results').onchange=()=>{
  const id=value('tw-context-find-results');
  if(!id)return;
+ // Search selection invalidates pending suggestions from the previous query.
+ ++contextFindVersion;clearTimeout(contextFindTimer);
+ const switchPromise=task('tw-context-error',async()=>{
  if(activeTab==='entry')await saveDraftNow();
  await window.choose(id);
  if(selected!==id)throw Error('Could not confirm patient selection; no entry was changed');
@@ -1717,7 +1747,12 @@ $('tw-context-find-results').onchange=()=>{void task('tw-context-error',async()=
  if(activeTab==='course')await loadClinicalCourse();
  $('tw-context-find').value='';
  $('tw-context-find-results').innerHTML='<option value="">Patient selected · search again to switch</option>';
-});};
+ });
+ window.cmvPatientContextSwitch=switchPromise;
+ void switchPromise.finally(()=>{
+  if(window.cmvPatientContextSwitch===switchPromise)window.cmvPatientContextSwitch=null;
+ });
+};
 css.textContent+='@media(max-width:860px){#workspace>#tw-participant-context,#workspace>.panel{grid-column:1!important}}';
 panel('course','Patient course',
  '<p class="hint">Dated source records supplement the approved CRF. Record each changed regimen separately; distinguish orders from doses actually given. Blank results remain unknown.</p>'+
