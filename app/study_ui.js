@@ -72,7 +72,13 @@ panel('study','Enrollment',
  choose('Donor relationship','tw-relationship',[['','Select verified relationship'],['living_related','Living related'],
     ['living_unrelated','Living unrelated'],['deceased','Deceased']])+
  choose('rATG induction','tw-ratg',[['','Undocumented'],['true','Yes'],['false','No']])+
-
+ '<details class="tw-screening-correction" id="tw-screening-correction"><summary>Correct previously entered CMV IgG results (source-verified)</summary>'+
+ '<p class="hint">For a screened participant only. A correction is audited and requires a new signed eligibility review; it never grants enrollment.</p>'+
+ choose('Corrected donor CMV IgG','tw-correct-digg',[['','Choose recorded result'],['positive','Positive'],['negative','Negative'],['unknown','Unknown / unavailable']])+
+ choose('Corrected recipient CMV IgG','tw-correct-rigg',[['','Choose recorded result'],['positive','Positive'],['negative','Negative'],['unknown','Unknown / unavailable']])+
+ field('Laboratory source reference','tw-correct-source')+
+ '<label>Reason for correction<textarea id="tw-correct-reason" maxlength="500" placeholder="Explain the verified discrepancy"></textarea></label>'+
+ btn('Save audited CMV correction','tw-screening-correct-save')+'</details>'+
  btn('Save screening','tw-screen-save')+' '+btn('Record consent declined','tw-decline-consent')+'</section>'+
  '<section class="study-card"><h3>2 · Protocol inclusion/exclusion checklist</h3>'+
  choose('Screened subject','tw-checklist-subject',[])+
@@ -82,6 +88,9 @@ panel('study','Enrollment',
  field('Hemoglobin (g/dL)','tw-hb','number')+
  field('Cockcroft–Gault CrCl (mL/min)','tw-crcl','number')+
  field('CBC date','tw-cbc-date','date')+field('Investigator review date','tw-review-on','date')+
+ choose('Nephrology unit','tw-nephrology-unit',[['','Select unit (optional)'],['NP1','NP1'],['NP2','NP2'],['NP3','NP3']])+
+ field('Signed eligibility source reference (optional)','tw-eligibility-source')+
+ '<label>Eligibility reviewer notes (optional)<textarea id="tw-eligibility-notes" maxlength="1000" placeholder="Source clarifications or timing details; do not substitute for protocol answers"></textarea></label>'+
  btn('Validate complete eligibility checklist','tw-checklist-save')+'</section>'+
  '<section class="study-card"><h3>3 · Enrollment verification</h3>'+
  choose('Screened subject','tw-screened',[])+field('Enrollment date','tw-enroll-date','date')+
@@ -328,6 +337,10 @@ async function selectEnrollmentPatient(){
  $('tw-patient').value=selected||'';
  showEnrollmentStudyId();
  const subject=studySubjects.find(s=>s.patient_id===selected);
+ $('tw-correct-digg').value=subject?.donor_cmv_igg||'';
+ $('tw-correct-rigg').value=subject?.recipient_cmv_igg||'';
+ $('tw-correct-source').value='';
+ $('tw-correct-reason').value='';
  for(const id of ['tw-screened','tw-checklist-subject'])$(id).value=subject?.status==='screened'?String(subject.id):'';
  if(participantContext?.patient_id===selected&&participantContext.transplant_on)$('tw-anchor-date').value=participantContext.transplant_on;
  await loadEligibilityReview();
@@ -521,6 +534,25 @@ $('tw-screen-save').onclick=()=>{void task('tw-status',async()=>{
  window.dispatchEvent(new Event('cmv:workflow-updated'));
  if(!$('tw-progress-step-2'))$('tw-checklist-subject').scrollIntoView({block:'center'});
 });};
+$('tw-screening-correct-save').onclick=()=>{void task('tw-status',async()=>{
+ const subject=studySubjects.find(x=>x.patient_id===selected&&x.status==='screened');
+ if(!subject)throw Error('Select an existing screened participant to correct the recorded CMV IgG results');
+ const source=value('tw-correct-source'),reason=value('tw-correct-reason');
+ if(source.length<3||reason.length<12)
+  throw Error('Enter a laboratory source reference and a correction reason of at least 12 characters');
+ if(value('tw-correct-digg')===subject.donor_cmv_igg&&value('tw-correct-rigg')===subject.recipient_cmv_igg)
+  throw Error('No serostatus change. Review the saved donor and recipient values');
+ if(!confirm('Save this source-verified screening correction? A new signed eligibility review will be required.'))return;
+ await api('/api/trial/subjects/'+subject.id+'/screening-serostatus',{
+  method:'PUT',body:JSON.stringify({
+   donor_cmv_igg:value('tw-correct-digg'),recipient_cmv_igg:value('tw-correct-rigg'),
+   source_reference:source,correction_reason:reason
+  })});
+ await loadSubjects();await selectParticipantSubject(subject.id);await selectEnrollmentPatient();
+ notify('tw-status','CMV IgG correction recorded in audit history. Revalidate all eligibility criteria before enrollment.');
+ openStudyStage(2);
+ window.dispatchEvent(new Event('cmv:workflow-updated'));
+});};
 $('tw-decline-consent').onclick=()=>{void task('tw-status',async()=>{
  const subject=studySubjects.find(x=>x.patient_id===selected&&x.status==='screened');
  if(!subject)throw Error('Save screening for this patient before recording consent declined');
@@ -698,8 +730,11 @@ let eligibilityItems=null;
 let eligibilityRequest=0;
 async function loadEligibilityReview(){
  const request=++eligibilityRequest,sid=n('tw-checklist-subject');
- for(const el of document.querySelectorAll('[data-eligibility]'))el.value='';
- for(const id of ['tw-age','tw-anc','tw-platelets','tw-hb','tw-crcl','tw-cbc-date'])$(id).value='';
+ for(const el of document.querySelectorAll('[data-eligibility]')){
+  el.value='';el.dataset.autoChecked='';
+ }
+ for(const id of ['tw-age','tw-anc','tw-platelets','tw-hb','tw-crcl','tw-cbc-date',
+                   'tw-nephrology-unit','tw-eligibility-source','tw-eligibility-notes'])$(id).value='';
  $('tw-review-on').value=today();
  window.cmvSavedEligibility={sid,assessment:null};
  window.cmvEligibilityDirty=false;
@@ -715,6 +750,9 @@ async function loadEligibilityReview(){
  const b=e.baseline||{};
  for(const [id,key] of Object.entries({'tw-age':'age_years','tw-anc':'anc_per_ul','tw-platelets':'platelets_per_ul','tw-hb':'hemoglobin_g_dl','tw-crcl':'crcl_cg_ml_min','tw-cbc-date':'baseline_cbc_on'}))$(id).value=b[key]??'';
  $('tw-review-on').value=e.reviewed_on||today();
+ $('tw-nephrology-unit').value=b.nephrology_unit||'';
+ $('tw-eligibility-source').value=b.signed_source_reference||'';
+ $('tw-eligibility-notes').value=b.review_notes||'';
  prefillObjectiveEligibility();updateEligibilityProgress();updateEnrollmentReadiness();
 }
 for(const id of ['tw-checklist-subject','tw-screened'])$(id).onchange=()=>{void task('tw-status',async()=>{
@@ -747,12 +785,17 @@ function updateEnrollmentReadiness(){
  const blockers=[];
  if(window.cmvEligibilityDirty)
   blockers.push('Eligibility checklist contains unsaved edits. Validate and save the review before enrollment.');
- if(review?.baseline?.is_eligible===false)
+ if(!review)blockers.push('Signed protocol eligibility checklist has not been saved.');
+ else if(review.baseline?.requires_source_reverification)
+   blockers.push('CMV serostatus changed after eligibility review. Revalidate and save the signed checklist.');
+ else if(review.baseline?.is_eligible!==true)
    blockers.push('Saved checklist marked INELIGIBLE. '+reviewedEligibilityReasons(review).join('; '));
- else if(!review)blockers.push('Signed protocol eligibility checklist has not been saved.');
+ if(subject?.donor_cmv_igg!=='positive')
+   blockers.push('Recorded donor CMV IgG is '+(subject?.donor_cmv_igg||'unavailable')+
+    '. Correct only from the verified laboratory source, then revalidate eligibility.');
  if(days!==null&&Number.isFinite(days)&&(days<0||days>10))
-   blockers.push('Protocol timing conflict: enrollment is '+days+
-    ' days after transplantation; approved window is 0–10 days. Do not backdate to bypass this requirement.');
+   blockers.push('Protocol timing conflict: enrollment date is '+days+
+    ' days after the documented transplant; allowed interval is 0–10 days. Do not backdate.');
  if(!subject){target.textContent='Select a screened participant.';button.disabled=true;return;}
  if(blockers.length){
   target.textContent=blockers.join(' ');
@@ -868,8 +911,9 @@ for(const id of ['tw-age','tw-anc','tw-platelets','tw-hb','tw-crcl']){
   window.cmvEligibilityDirty=true;updateEligibilityProgress();updateEnrollmentReadiness();
  });
 }
-for(const id of ['tw-cbc-date','tw-review-on'])
- $(id).addEventListener('change',()=>{
+for(const id of ['tw-cbc-date','tw-review-on','tw-nephrology-unit',
+                 'tw-eligibility-source','tw-eligibility-notes'])
+ $(id).addEventListener('input',()=>{
   window.cmvEligibilityDirty=true;updateEligibilityProgress();updateEnrollmentReadiness();
  });
 $('tw-checklist-save').onclick=()=>{void task('tw-status',async()=>{
@@ -891,7 +935,9 @@ $('tw-checklist-save').onclick=()=>{void task('tw-status',async()=>{
    age_years:n('tw-age'),anc_per_ul:n('tw-anc'),
    platelets_per_ul:n('tw-platelets'),hemoglobin_g_dl:n('tw-hb'),
    crcl_cg_ml_min:n('tw-crcl'),baseline_cbc_on:value('tw-cbc-date'),
-   reviewed_on:value('tw-review-on')
+   reviewed_on:value('tw-review-on'),nephrology_unit:value('tw-nephrology-unit')||null,
+   signed_source_reference:value('tw-eligibility-source')||null,
+   review_notes:value('tw-eligibility-notes')||null
   })});
  window.cmvEligibilityDirty=false;
  window.cmvSavedEligibility={sid:subject,assessment:{
