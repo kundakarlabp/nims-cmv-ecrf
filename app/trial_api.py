@@ -6,7 +6,7 @@ independent production gates. These endpoints do not prescribe or randomize.
 """
 from calendar import monthrange
 from datetime import date, datetime, timedelta
-from typing import Literal
+from typing import Literal, Any
 import os
 import re
 import secrets
@@ -22,7 +22,7 @@ from .main import (
 from .trial_models import (
     TrialSubject, PCRRecord, DrugLot, DrugAuthorization, DrugDispense,
     DrugReturn, UserInvitation, LoginThrottle, UserTotp, StaffAccess, TrialEligibility, TrialScreeningMeta,
-    RandomizationSlot, TrialCRFEntry, TrialCRFReview
+    RandomizationSlot, TrialCRFEntry, TrialCRFReview, TrialCRFDraft
 )
 
 router=APIRouter(prefix="/api/trial",tags=["trial-workflows"])
@@ -308,6 +308,94 @@ def eligibility_schema(u:AuthContext=Depends(current)):
     return {"version":"CRF 3.0 / Protocol 5.0, 14 August 2026",
         "inclusion":INCLUSION_ITEMS,"exclusion":EXCLUSION_ITEMS}
 
+# Private, partial eligibility working drafts reuse the existing CRF draft table.
+# They never count as a signed eligibility review or as enrolment authority.
+_ELIGIBILITY_DRAFT_SECTION="B_eligibility_working"
+_ELIGIBILITY_DRAFT_FIELDS={
+ "age_years","anc_per_ul","platelets_per_ul","hemoglobin_g_dl",
+ "crcl_cg_ml_min","baseline_cbc_on","reviewed_on","nephrology_unit",
+ "signed_source_reference","review_notes"
+}
+
+class EligibilityDraftIn(BaseModel):
+    inclusion:dict[str,bool|None]=Field(default_factory=dict)
+    exclusion:dict[str,bool|None]=Field(default_factory=dict)
+    baseline:dict[str,Any]=Field(default_factory=dict)
+    expected_revision:int|None=Field(default=None,ge=1)
+
+def _eligibility_draft(s:Session,subject_id:int,user_id:str):
+    return s.scalar(select(TrialCRFDraft).where(
+        TrialCRFDraft.user_id==user_id,
+        TrialCRFDraft.subject_id==subject_id,
+        TrialCRFDraft.section==_ELIGIBILITY_DRAFT_SECTION,
+        TrialCRFDraft.occurrence_key=="MAIN"))
+
+@router.get("/subjects/{subject_id}/eligibility-draft")
+def get_eligibility_draft(subject_id:int,
+    u:AuthContext=Depends(current),s:Session=Depends(db)):
+    role(u,{"pi","consultant"})
+    subject=find_subject(s,subject_id)
+    draft=_eligibility_draft(s,subject.id,u.user_id)
+    reviewed=s.get(TrialEligibility,subject.id)
+    stale=bool(draft and reviewed and reviewed.updated_at and
+               reviewed.updated_at>=draft.updated_at)
+    return {"draft":None if stale else
+            {"payload":draft.payload,"revision":draft.revision,
+             "updated_at":draft.updated_at} if draft else None,
+            "signed_review_exists":bool(reviewed)}
+
+@router.put("/subjects/{subject_id}/eligibility-draft")
+def save_eligibility_draft(subject_id:int,data:EligibilityDraftIn,
+    u:AuthContext=Depends(current),s:Session=Depends(db)):
+    role(u,{"pi","consultant"})
+    subject=find_subject(s,subject_id)
+    if subject.status!="screened":
+        raise HTTPException(409,"Eligibility working drafts are available only before enrollment")
+    if set(data.inclusion)-set(INCLUSION_ITEMS) or set(data.exclusion)-set(EXCLUSION_ITEMS):
+        raise HTTPException(422,"Unknown eligibility criterion in draft")
+    if set(data.baseline)-_ELIGIBILITY_DRAFT_FIELDS:
+        raise HTTPException(422,"Unknown eligibility draft field")
+    if any(v is not None and type(v) is not bool
+           for v in list(data.inclusion.values())+list(data.exclusion.values())):
+        raise HTTPException(422,"Eligibility draft answers must be yes, no or blank")
+    if any(v is not None and not isinstance(v,(str,int,float)) or isinstance(v,bool)
+           for v in data.baseline.values()):
+        raise HTTPException(422,"Invalid eligibility draft field")
+    payload={"inclusion":data.inclusion,"exclusion":data.exclusion,
+             "baseline":data.baseline}
+    if len(str(payload))>12000:raise HTTPException(413,"Working draft exceeds limit")
+    draft=_eligibility_draft(s,subject.id,u.user_id)
+    if not draft:
+        if data.expected_revision is not None:raise HTTPException(409,"Draft was removed elsewhere; reload")
+        draft=TrialCRFDraft(user_id=u.user_id,subject_id=subject.id,
+            section=_ELIGIBILITY_DRAFT_SECTION,occurrence_key="MAIN",
+            occurred_on=date.today(),payload=payload)
+        s.add(draft)
+        try:s.commit()
+        except IntegrityError:s.rollback();raise HTTPException(409,"Draft created in another tab; reload")
+    else:
+        if draft.revision!=data.expected_revision:
+            raise HTTPException(409,"Draft changed in another tab; reload")
+        changed=s.execute(update(TrialCRFDraft).where(
+            TrialCRFDraft.id==draft.id,TrialCRFDraft.revision==data.expected_revision)
+            .values(payload=payload,updated_at=now(),
+                    revision=TrialCRFDraft.revision+1))
+        if changed.rowcount!=1:s.rollback();raise HTTPException(409,"Draft changed; reload")
+        s.commit();s.refresh(draft)
+    return {"revision":draft.revision,"is_draft":True,
+            "not_approved_eligibility":True}
+
+@router.delete("/subjects/{subject_id}/eligibility-draft")
+def delete_eligibility_draft(subject_id:int,expected_revision:int=Query(ge=1),
+    u:AuthContext=Depends(current),s:Session=Depends(db)):
+    role(u,{"pi","consultant"})
+    subject=find_subject(s,subject_id)
+    draft=_eligibility_draft(s,subject.id,u.user_id)
+    if not draft or draft.revision!=expected_revision:
+        raise HTTPException(409,"Draft already changed or deleted; reload")
+    s.delete(draft);s.commit()
+    return {"ok":True}
+
 @router.get("/subjects/{subject_id}/eligibility")
 def eligibility_detail(subject_id:int,u:AuthContext=Depends(current),s:Session=Depends(db)):
     role(u,{"pi","consultant","scientist","monitor"})
@@ -379,6 +467,9 @@ def eligibility_review(subject_id:int,data:EligibilityReviewIn,
              "reviewed_by":u.user_id,"reviewed_on":data.reviewed_on},
         "Protocol eligibility checklist confirmed by named account"+
         (": "+data.signed_source_reference if data.signed_source_reference else ""))
+    # A signed review supersedes this account's private partial working draft.
+    working=_eligibility_draft(s,t.id,u.user_id)
+    if working:s.delete(working)
     s.commit()
     return {"subject_id":t.id,"eligible":eligible,
         "reviewed_by":u.user_id,"reviewed_on":data.reviewed_on,
