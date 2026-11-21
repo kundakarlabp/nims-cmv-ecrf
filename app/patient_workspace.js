@@ -335,6 +335,8 @@ style.textContent+=`
 #course .tw-course-source{white-space:pre-wrap;overflow-wrap:anywhere;padding:9px;line-height:1.5}
 @media(max-width:750px){#course #tw-course-actions{grid-template-columns:minmax(0,1fr)}}
 `;
+style.textContent += "\n/* Nov mobile QA: form widths must follow available content width rather than\n   two-column desktop defaults on Chrome's scaled desktop-site viewport. */\n#study #tw-trial-layout{grid-template-columns:minmax(0,1fr)!important}\n#study #tw-next-steps{margin:0 0 10px;max-width:none}\n#study #tw-next-steps ul{display:flex;flex-wrap:wrap;gap:8px}\n#study #tw-next-steps li{flex:1 1 145px;border:0;background:#f6f9fe;border-radius:8px;padding:8px}\n#study .tw-progress-stage>.study-card{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));min-width:0}\n#study #tw-eligibility-fields{grid-column:1/-1;width:100%;min-width:0;display:block!important}\n#study #tw-eligibility-fields .tw-eligibility-grid{display:grid!important;grid-template-columns:minmax(0,1fr)!important;gap:0!important;min-width:0}\n#study #tw-eligibility-fields .tw-eligibility-grid label{display:grid!important;grid-template-columns:minmax(0,1fr) 132px!important;\n align-items:center;gap:12px;min-width:0!important;width:100%!important;\n overflow-wrap:normal;word-break:normal;white-space:normal;line-height:1.5;padding:9px 11px}\n#study #tw-eligibility-fields .tw-eligibility-grid label select{min-width:0!important;width:100%!important;\n max-width:132px!important;margin:0!important;font-size:13px}\n#study .tw-eligibility-group,#study .tw-eligibility-group>summary{min-width:0;width:100%}\n#tw-crf-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}\n#tw-crf-fields label.study-card{margin:0!important;padding:12px!important;min-width:0}\n#tw-crf-fields label.study-card [data-crf-field]{min-height:44px}\n#tw-patient-banner{position:relative}\n#tw-switch-patient{margin:0;min-height:36px;padding:7px 10px;font-size:12px;\n background:#edf3ff;color:#2b5a9a}\n#tw-participant-context #tw-record-switch{display:none!important}\n#tw-header-search .tw-search-native{display:none!important}\n#tw-search-suggestions{position:absolute;top:calc(100% + 3px);left:0;right:0;z-index:120;\n background:#fff;border:1px solid #cfdced;border-radius:12px;\n box-shadow:0 12px 28px #1e3a5b25;max-height:300px;overflow-y:auto;padding:5px}\n#tw-search-suggestions[hidden]{display:none!important}\n.tw-search-option{display:flex;align-items:center;gap:10px;width:100%;margin:0;\n color:#203e60;background:#fff;border-radius:8px;text-align:left;min-height:45px;\n font-size:13px;font-weight:500;overflow-wrap:anywhere}\n.tw-search-option:hover,.tw-search-option:focus-visible{background:#eaf2ff}\n.tw-search-help{font-size:12px;color:#637791;padding:9px 11px}\n#tw-search-suggestions .tw-search-option+.tw-search-option{border-top:1px solid #f0f2f7}\n#loginPanel{max-width:470px!important;border:1px solid #dce6f3!important;\n box-shadow:0 16px 46px #12274016!important;padding:28px!important;margin:40px auto!important}\n#loginPanel h2{font-size:23px;color:#1e365b;margin:8px 0 4px}\n#loginPanel .hint{font-size:13px}\n#loginPanel label{font-size:13px;font-weight:600;margin:16px 0 6px}\n#loginPanel input{min-height:48px;font-size:16px;border-radius:10px}\n#loginPanel>button[onclick=\"login()\"]{width:100%;min-height:47px;margin:18px 0 8px;font-size:15px}\n#tw-login-header{display:flex;align-items:center;gap:12px;background:#f3f7ff;\n padding:13px;border-radius:11px;color:#2e538c}\n#tw-login-header svg{width:27px;height:27px}\n#tw-login-header>div{font-size:12px;line-height:1.45}\n#tw-login-header strong{display:block;font-size:15px;color:#203c69}\n#tw-login-show-password{width:auto;margin:5px 0 0;padding:4px 1px;\n background:transparent;color:#345b9b;font-size:12px}\n#tw-login-activation{border-top:1px solid #e2e9f3;margin:20px 0 0;padding:14px 0 0}\n#tw-login-activation>summary{cursor:pointer;font-size:13px;font-weight:650;color:#476b99}\n#tw-login-activation>h3{font-size:14px;margin:12px 0}\n#loginPanel #tw-login-activation button{width:100%;min-height:42px}\n#loginPanel>hr{display:none}\n#dashboard>.dash-header{display:none!important}\n#dashboard>h2{display:none}\n#dashboard{padding-top:0!important}\n#dashboard .tw-overview-header{padding:2px 0 8px}\n#dashboard .tw-overview-kpi{padding:13px;border-radius:11px}\n#dashboard .tw-overview-header>div>p{margin:0}\n#dashboard .tw-overview-kpi strong{font-size:25px}\n#dashboard .tw-compact-overview-card{padding:13px;margin:9px 0}\n#dashboard .tw-overview-metrics{margin:7px 0}\n#dashboard .tw-overview-action{min-height:54px;margin:4px 0}\n#tw-pcr-status.err{background:#fff4ef}\n@media(max-width:1250px){\n #study #tw-eligibility-fields .tw-eligibility-grid label{grid-template-columns:minmax(0,1fr) minmax(110px,142px)!important}\n #tw-crf-fields{grid-template-columns:minmax(0,1fr)!important}\n #study #tw-next-steps ul{display:none}\n #study #tw-next-steps>h3{padding:8px 11px;font-size:12px}\n}\n@media(max-width:750px){\n #study .tw-progress-stage>.study-card{grid-template-columns:minmax(0,1fr)!important}\n #study #tw-eligibility-fields .tw-eligibility-grid label{grid-template-columns:minmax(0,1fr) 118px!important;gap:8px;padding:9px 4px}\n #tw-crf-fields label.study-card{padding:11px!important}\n #tw-patient-banner #tw-switch-patient{margin-left:auto}\n #tw-overview-more{margin:7px 0}\n #loginPanel{margin:16px 10px!important;padding:19px!important}\n}\n";
+style.textContent += "\n#tw-pcr-visit-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:9px;margin:12px 0}\n.tw-pcr-visit{display:flex;flex-direction:column;align-items:stretch;gap:5px;text-align:left;\n margin:0;border:1px solid #d9e4f4;background:#f8fbff;color:#284a78;\n min-width:0;min-height:104px;padding:12px;box-shadow:none}\n.tw-pcr-visit:hover:not(:disabled){background:#eaf3ff}\n.tw-pcr-visit strong{font-size:15px;color:#23466f}\n.tw-pcr-visit span{font-size:12px;color:#667e9d}\n.tw-pcr-visit em{text-transform:capitalize;font-style:normal;font-size:12px;font-weight:700;color:#2a69a2}\n.tw-pcr-visit[data-pcr-status=\"verified\"]{background:#eaf7ee;border-color:#b8dfc4}\n.tw-pcr-visit[data-pcr-status=\"verified\"] em{color:#207749}\n.tw-pcr-visit[data-pcr-status=\"result_entered\"]{background:#fff9e9;border-color:#eedba9}\n.tw-pcr-visit[data-pcr-status=\"result_entered\"] em{color:#947019}\n.tw-pcr-visit:disabled{cursor:default;opacity:1}\n#tw-pcr-table-details{margin:12px 0}\n#tw-pcr-table-details>summary{font-size:12px}\n#tw-pcr-table{padding:10px;overflow-x:auto}\n@media(max-width:750px){#tw-pcr-visit-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}\n";
 document.head.appendChild(style);
 
 // Legacy route buttons retain their IDs and DOM state for the existing router.
@@ -364,6 +366,14 @@ banner.innerHTML='<div><div class="tw-identity-secondary">CURRENT PATIENT</div>'
  '<div><span class="tw-stage-status" id="tw-banner-status">Not selected</span>'+
  '<div id="tw-patient-meta"></div></div>';
 root.insertBefore(banner,context);
+const switchPatientButton=document.createElement('button');
+switchPatientButton.id='tw-switch-patient';switchPatientButton.type='button';
+switchPatientButton.textContent='Switch patient';switchPatientButton.className='secondary';
+switchPatientButton.onclick=()=>{
+ const finder=document.getElementById('tw-context-find');
+ finder.focus();finder.select();
+};
+banner.appendChild(switchPatientButton);
 const subnav=document.createElement('nav');subnav.id='tw-patient-subnav';
 subnav.setAttribute('aria-label','Patient workflow');
 const subButtons={};
@@ -497,9 +507,62 @@ const switchLabel=document.createElement('summary');switchLabel.textContent='Cha
 switchRecord.appendChild(switchLabel);
 switchRecord.appendChild(document.getElementById('tw-context-subject').closest('label'));
 context.insertBefore(switchRecord,document.getElementById('tw-context-error'));
+// One study record is normally linked to one patient. This low-frequency
+// selector belongs in the patient's optional tools, never the main form.
+const recordTools=document.createElement('details');
+recordTools.id='tw-patient-record-tools';
+const recordToolsSummary=document.createElement('summary');
+recordToolsSummary.textContent='Record tools';
+recordTools.append(recordToolsSummary,switchRecord);
+banner.appendChild(recordTools);
+switchLabel.textContent='Advanced: change linked study record';
 const avatar=document.createElement('span');avatar.className='tw-avatar';avatar.setAttribute('aria-hidden','true');
 banner.insertBefore(avatar,banner.firstChild);
 const pcr=document.getElementById('pcr'),emptyPcr=document.createElement('div');
+const pcrGrid=document.createElement('div');
+pcrGrid.id='tw-pcr-visit-grid';pcrGrid.setAttribute('aria-label','Protocol PCR visit status');
+const firstPcrHeading=[...pcr.querySelectorAll('h3')].find(el=>
+ el.textContent.includes('Seven protocol timepoints'));
+if(firstPcrHeading)firstPcrHeading.insertAdjacentElement('afterend',pcrGrid);
+const originalPcrTable=document.getElementById('tw-pcr-table');
+const pcrTableDetails=document.createElement('details');
+pcrTableDetails.id='tw-pcr-table-details';pcrTableDetails.className='tw-clinical-section';
+const pcrDetailSummary=document.createElement('summary');
+pcrDetailSummary.textContent='Show specimen codes and full result table';
+originalPcrTable.parentNode.insertBefore(pcrTableDetails,originalPcrTable);
+pcrTableDetails.append(pcrDetailSummary,originalPcrTable);
+window.cmvRenderPcrVisits=function(records,sid){
+ pcrGrid.replaceChildren();
+ if(!sid||!records?.length)return;
+ for(const record of records){
+  const status=record.status||'planned';
+  const control=status==='planned'?'tw-collect-id':
+    status==='collected'?'tw-result-id':
+    status==='result_entered'?'tw-verify-id':null;
+  const button=document.createElement('button');button.type='button';
+  button.className='tw-pcr-visit';
+  button.dataset.pcrStatus=status;
+  const heading=document.createElement('strong');
+  heading.textContent='Month '+record.scheduled_month;
+  const target=document.createElement('span');
+  target.textContent='Target '+(record.target_on||'not documented');
+  const statusEl=document.createElement('em');
+  statusEl.textContent=status.replaceAll('_',' ');
+  button.append(heading,target,statusEl);
+  if(!control){button.disabled=true;button.title='Result already source-verified';}
+  else button.onclick=()=>{
+   if(Number(document.getElementById('tw-pcr-subject').value)!==sid)return;
+   const select=document.getElementById(control);
+   if(![...select.options].some(x=>x.value===String(record.id)))return;
+   select.value=String(record.id);
+   const details=select.closest('details.tw-clinical-section');
+   if(details)details.open=true;
+   select.scrollIntoView({block:'center',behavior:'smooth'});
+   select.focus();
+  };
+  pcrGrid.append(button);
+ }
+};
 function disclosure(card){
  const heading=card.querySelector('h3');
  if(!heading)return;
@@ -847,6 +910,92 @@ resultLabel.firstChild.textContent='Select matching patient';
 const showMatches=()=>{searchHeader.classList.toggle('tw-searching',searchInput.value.trim().length>=3);};
 searchInput.addEventListener('input',showMatches);
 searchResult.addEventListener('change',()=>{searchHeader.classList.remove('tw-searching');});
+// The existing select remains the authoritative exact-match control for
+// accessibility and regression tests; visible search results are simple
+// tap targets rather than a second full-width native dropdown.
+resultLabel.classList.add('tw-search-native');
+const suggestions=document.createElement('div');
+suggestions.id='tw-search-suggestions';suggestions.hidden=true;
+suggestions.setAttribute('role','listbox');
+suggestions.setAttribute('aria-label','Patient search results');
+searchHeader.appendChild(suggestions);
+let visibleSuggestionRequest=0;
+function drawSuggestions(){
+ const q=searchInput.value.trim();
+ suggestions.replaceChildren();
+ if(q.length<3){suggestions.hidden=true;return;}
+ const opts=[...searchResult.options].filter(x=>x.value);
+ if(!opts.length){
+  const p=document.createElement('p');p.className='tw-search-help';
+  p.textContent=searchResult.options[0]?.textContent||'Searching…';
+  suggestions.append(p);
+ }else{
+  opts.slice(0,12).forEach(opt=>{
+   const button=document.createElement('button');button.type='button';
+   button.className='tw-search-option';
+   button.setAttribute('role','option');
+   button.textContent=opt.textContent;
+   button.onclick=()=>{
+    const chosen=opt.value;
+    if(![...searchResult.options].some(x=>x.value===chosen))return;
+    searchResult.value=chosen;
+    suggestions.hidden=true;
+    searchHeader.classList.remove('tw-searching');
+    searchResult.dispatchEvent(new Event('change',{bubbles:true}));
+    searchInput.value='';
+   };
+   suggestions.append(button);
+  });
+ }
+ suggestions.hidden=false;
+}
+new MutationObserver(drawSuggestions).observe(searchResult,{childList:true,subtree:true});
+searchInput.addEventListener('input',()=>{visibleSuggestionRequest++;drawSuggestions();});
+searchInput.addEventListener('keydown',event=>{
+ if(event.key==='Escape'){suggestions.hidden=true;searchHeader.classList.remove('tw-searching');}
+ if(event.key==='Enter'){
+  const first=suggestions.querySelector('.tw-search-option');
+  if(first){event.preventDefault();first.click();}
+ }
+});
+searchInput.addEventListener('blur',()=>{setTimeout(()=>{
+ if(!searchHeader.contains(document.activeElement)){suggestions.hidden=true;}
+},150);});
+const loginPanel=document.getElementById('loginPanel');
+loginPanel.querySelector('h2').textContent='Study staff sign in';
+const intro=document.createElement('div');intro.id='tw-login-header';
+intro.innerHTML='<span aria-hidden="true" style="font-size:24px;font-weight:800">+</span>'+
+ '<div><strong>NIMS CMV Trial · eCRF</strong><span>Secure clinical data workspace</span></div>';
+loginPanel.insertBefore(intro,loginPanel.firstChild);
+const pass=document.getElementById('loginPass');
+const showPassword=document.createElement('button');showPassword.type='button';
+showPassword.id='tw-login-show-password';
+showPassword.textContent='Show password';
+showPassword.onclick=()=>{const shown=pass.type==='text';
+ pass.type=shown?'password':'text';showPassword.textContent=shown?'Show password':'Hide password';};
+pass.closest('label').insertAdjacentElement('afterend',showPassword);
+for(const id of ['loginName','loginPass','loginOtp']){
+ document.getElementById(id).addEventListener('keydown',e=>{
+  if(e.key==='Enter'){
+   e.preventDefault();loginPanel.querySelector('button[onclick="login()"]').click();
+  }
+ });
+}
+const activationHeading=[...loginPanel.children].find(el=>
+ el.tagName==='H3'&&el.textContent.includes('Activate individual staff account'));
+if(activationHeading){
+ const activation=document.createElement('details');activation.id='tw-login-activation';
+ const title=document.createElement('summary');title.textContent='First time? Activate your staff account';
+ activation.append(title);
+ let node=activationHeading.previousElementSibling;
+ while(node){
+  const next=node.nextElementSibling;
+  activation.append(node);
+  node=next;
+ }
+ loginPanel.append(activation);
+}
+
 const menuToggle=document.getElementById('tw-mobile-menu');
 header.insertBefore(menuToggle,searchHeader);
 // Hide secondary status labels on everyday views but preserve them for
