@@ -332,6 +332,9 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   await page.fill('#tw-cbc-date','2026-10-02');await page.fill('#tw-review-on','2026-10-02');
   for(const el of await page.locator('[data-eligibility]').all())await el.selectOption(await el.getAttribute('data-eligibility')==='inclusion'?'true':'false');
   await page.click('#tw-checklist-save');await page.waitForFunction(()=>$('tw-status').textContent.includes('Eligible.'));
+  // Saving eligibility advances to enrollment; reopening an earlier step is
+  // always available when a source measurement needs correction.
+  await page.locator('#tw-progress-step-2 > summary').click();
   await page.fill('#tw-age','51');
   assert.equal(await page.isDisabled('#tw-enroll-save'),true,
     'Changing a source measurement after approval must require revalidation');
