@@ -333,13 +333,17 @@ tab=async function(name){
 };
 function registryLabel(p){return (p.cr_number?'CR '+p.cr_number+' · ':'')+(p.name||'')+(p.study_id?' · '+p.study_id:'');}
 function subjectLabel(s){return (s.cr_number?'CR '+s.cr_number+' · ':'')+(s.study_code||s.screening_code)+' · '+s.status;}
+let registryLoadRequest=0;
 async function loadRegistry(){
+ const request=++registryLoadRequest,selectedAtStart=selected;
  const people=await api('/api/patients?limit=100');
+ if(request!==registryLoadRequest||selectedAtStart!==selected)return;
  // A selected patient may be outside the newest 100 records; fetch that record
  // explicitly instead of silently falling back to another person's first row.
  if(selected&&!people.some(p=>p.id===selected)){
-  people.unshift((await api('/api/patients/'+encodeURIComponent(selected))).patient);
+  people.unshift((await api('/api/patients/'+encodeURIComponent(selectedAtStart))).patient);
  }
+ if(request!==registryLoadRequest||selectedAtStart!==selected)return;
  fill('tw-patient',people,'id',registryLabel);
  $('tw-patient').value=selected||'';
 }
@@ -1726,9 +1730,12 @@ $('tw-context-find').oninput=()=>{
   $('tw-context-find-results').value='';
  });},250);
 };
-$('tw-context-find-results').onchange=()=>{void task('tw-context-error',async()=>{
+$('tw-context-find-results').onchange=()=>{
  const id=value('tw-context-find-results');
  if(!id)return;
+ // Search selection invalidates pending suggestions from the previous query.
+ ++contextFindVersion;clearTimeout(contextFindTimer);
+ const switchPromise=task('tw-context-error',async()=>{
  if(activeTab==='entry')await saveDraftNow();
  await window.choose(id);
  if(selected!==id)throw Error('Could not confirm patient selection; no entry was changed');
@@ -1740,7 +1747,12 @@ $('tw-context-find-results').onchange=()=>{void task('tw-context-error',async()=
  if(activeTab==='course')await loadClinicalCourse();
  $('tw-context-find').value='';
  $('tw-context-find-results').innerHTML='<option value="">Patient selected · search again to switch</option>';
-});};
+ });
+ window.cmvPatientContextSwitch=switchPromise;
+ void switchPromise.finally(()=>{
+  if(window.cmvPatientContextSwitch===switchPromise)window.cmvPatientContextSwitch=null;
+ });
+};
 css.textContent+='@media(max-width:860px){#workspace>#tw-participant-context,#workspace>.panel{grid-column:1!important}}';
 panel('course','Patient course',
  '<p class="hint">Dated source records supplement the approved CRF. Record each changed regimen separately; distinguish orders from doses actually given. Blank results remain unknown.</p>'+
