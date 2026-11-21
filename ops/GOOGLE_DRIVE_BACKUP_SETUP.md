@@ -23,15 +23,18 @@ config is stored privately at `~/.config/rclone/rclone.conf` with mode `0600`.
 The helper checks access and upload/download SHA-256 verification. The OCI
 maintenance timer keeps subsequent copies current.
 
-## Option B: GitHub Actions repair (requested by project owner)
+## Option B: GitHub Actions emergency repair (manual only)
 
 This requires a **one-time Google authorization on a trusted personal device**
 and an SSH identity already authorized on OCI. GitHub cannot invent a Drive OAuth
 refresh token or SSH identity from the ChatGPT Google Drive connection.
 
-The private GitHub repository must have these three Actions **repository
-secrets**, entered by the owner in GitHub Settings → Secrets and variables →
-Actions. Do not commit them, attach them to issues, or paste them into chat.
+Do not configure any additional secrets while OCI's direct Drive backup is healthy.
+Only if an owner explicitly starts an emergency repair, the GitHub repository
+must have these three Actions **repository secrets**, entered privately in
+GitHub Settings → Secrets and variables → Actions. This repository may be
+public; neither secrets nor patient data must ever appear in tracked files,
+issues, or chat.
 
 1. `OCI_SSH_PRIVATE_KEY`: dedicated SSH private key authorized for the OCI
    `ubuntu` deployment account. Prefer a scoped deployment key rather than a
@@ -47,8 +50,11 @@ Actions. Do not commit them, attach them to issues, or paste them into chat.
    unrelated rclone remotes or clinical databases in this secret. Encoded
    configuration is still a secret.
 
-Run **Actions → Repair OCI Google Drive clinical backup → Run workflow** on
-`main`, or let it run after a successful reviewed release. The job uses
+For an owner-authorized emergency only, run **Actions → Repair OCI Google
+Drive clinical backup → Run workflow** on `main`. The repair intentionally
+does **not** run after normal code releases or on a schedule: the existing
+OCI five-minute maintenance timer performs automatic direct Drive backups.
+The manual job uses
 fixed SSH commands, a pinned host key and protected Actions secrets. The
 credential crosses to OCI through encrypted SSH stdin and is merged into the
 deployment user's existing rclone configuration; unrelated remotes are
