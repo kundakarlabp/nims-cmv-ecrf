@@ -1,86 +1,89 @@
-# OCI to Google Drive clinical recovery (no GitHub backup storage)
+# NIMS CMV — recover the encrypted Google Drive clinical backup
 
-The source implementation is ready for review. Production backup is NOT verified
-until OCI has a working Google Drive OAuth connection.
+OCI clinical data and the randomization key stay on the existing host. The
+existing backup procedure makes an encrypted archive, verifies a disposable
+PostgreSQL restore, then uploads the **ciphertext only** to the designated
+private Drive folder and reads those exact bytes back before writing receipts.
 
-## Verified destination
+Target folder: `1Mnzme95zuQM5WKuHWtsv2-nzhtPUK_EM`.
 
-Private owner-only folder:
-https://drive.google.com/drive/folders/1Mnzme95zuQM5WKuHWtsv2-nzhtPUK_EM
+**Do not disable** the eight-hour backup freshness gate or fabricate receipts
+to permit enrollment. The clinic can remain read-only while the backup is stale.
 
-Google Drive reports owner kundakarlabp@gmail.com and shared=false. The PI
-must confirm that institutional data-governance permits this personally owned
-destination before exporting identifiable trial records.
+## Option A: existing trusted interactive OCI setup (no Google secret in GitHub)
 
-## One-time OCI setup
+On OCI as the unprivileged deployment user, after signing in privately:
 
-After the next CI-approved deployment, open a private interactive terminal on
-the existing OCI VM, signed in as the deployment user (`ubuntu`), and run:
+    cd /home/ubuntu/nims-cmv
+    python3 ops/connect_google_drive.py
 
-```sh
-cd /home/ubuntu/nims-cmv
-python3 ops/connect_google_drive.py
-```
+Complete Google authorization as the approved Drive owner, name the remote
+`nims_cmv_drive`, and set `root_folder_id` to the exact folder above. Rclone
+config is stored privately at `~/.config/rclone/rclone.conf` with mode `0600`.
+The helper checks access and upload/download SHA-256 verification. The OCI
+maintenance timer keeps subsequent copies current.
 
-This helper reuses an already-authorized `nims_cmv_drive` remote, or launches
-the normal Google authorization wizard if absent. Select the exact private
-folder ID below. It protects the config, verifies real Drive access, uploads
-only the newest **already encrypted and isolated-restore-verified** archive,
-downloads that exact object and checks its size and SHA-256 before writing
-recovery receipts. It never handles patient-level application records or
-prints credentials. Do not run the interactive wizard under `sudo` or in
-GitHub Actions; it must use the OCI deployment user's protected config.
+## Option B: GitHub Actions repair (requested by project owner)
 
-The CI/release workflow deploys this helper but deliberately cannot create
-Google OAuth authorization or remotely read tokens. A consent step with the
-Drive owner is unavoidable. See current rclone guidance for a headless OAuth
-authorization and a dedicated Google OAuth client ID when necessary.
+This requires a **one-time Google authorization on a trusted personal device**
+and an SSH identity already authorized on OCI. GitHub cannot invent a Drive OAuth
+refresh token or SSH identity from the ChatGPT Google Drive connection.
 
-If the host has no `rclone`, install it from the operating system's verified
-package repository before running the helper. The existing five-minute OCI
-maintenance timer will continue automatic copies after the initial consent.
+The private GitHub repository must have these three Actions **repository
+secrets**, entered by the owner in GitHub Settings → Secrets and variables →
+Actions. Do not commit them, attach them to issues, or paste them into chat.
 
-The ChatGPT Google Drive connection does NOT authenticate rclone on the Oracle
-instance. Never paste Google OAuth tokens, config, or private keys in GitHub
-or chat.
+1. `OCI_SSH_PRIVATE_KEY`: dedicated SSH private key authorized for the OCI
+   `ubuntu` deployment account. Prefer a scoped deployment key rather than a
+   personal master key. Noninteractive runners cannot prompt for a passphrase.
+2. `OCI_SSH_KNOWN_HOSTS`: the actual OCI server public host-key line for
+   `152.70.77.77`, verified independently from an owner-managed connection.
+   Never rely on `StrictHostKeyChecking=no` or blindly trust
+   a key collected inside the Actions runner.
+3. `CMV_DRIVE_RCLONE_CONFIG_B64`: base64 encoding of a **single remote section**
+   obtained privately from successful owner-authorized `rclone config`:
+   `[nims_cmv_drive]`, `type = drive`, exact `root_folder_id` above, and
+   a refreshable JSON `token` containing a `refresh_token`. Do not include
+   unrelated rclone remotes or clinical databases in this secret. Encoded
+   configuration is still a secret.
 
-1. On OCI as the deployment owner run: rclone version; rclone listremotes
-2. If a Google Drive remote is already configured for the correct owner,
-   use rclone config, COPY that remote to name nims_cmv_drive, EDIT it and set
-   the advanced root_folder_id to 1Mnzme95zuQM5WKuHWtsv2-nzhtPUK_EM.
-   If none exists, run rclone config and create the drive remote under that
-   name and root folder ID, then authorize it in your Google browser.
-3. Protect the private file: chmod 600 ~/.config/rclone/rclone.conf
-4. Test on OCI: rclone lsf nims_cmv_drive:
-5. Test from the deployed repository:
-   python3 -c 'from ops.drive_offsite import connection_ready; print(connection_ready())'
-   It must output True. Do not display the OAuth token or configuration file.
-6. The existing OCI five-minute deployment/maintenance timer handles recovery
-   transfers. It creates a new clinical PostgreSQL archive around every six
-   hours, verifies an isolated restoration, uploads the already sealed bundle,
-   checks downloaded bytes, and writes verified backup/restore receipts.
-7. The administrator can see Drive-configured and Drive-receipt states on
-   /operations. Check the actual patient entry readiness separately.
+Run **Actions → Repair OCI Google Drive clinical backup → Run workflow** on
+`main`, or let it run after a successful reviewed release. The job uses
+fixed SSH commands, a pinned host key and protected Actions secrets. The
+credential crosses to OCI through encrypted SSH stdin and is merged into the
+deployment user's existing rclone configuration; unrelated remotes are
+preserved. It never uploads archives, clinical tables or recovery keys to the
+GitHub runner.
 
-## Storage and protections
+The host repair command acquires both maintenance and deployment locks, creates
+a **fresh** encrypted archive, checks an isolated database restore, uploads the
+sealed archive to the exact Drive folder, downloads it, verifies size and
+SHA-256, and finally checks the app-readable freshness receipts. Public
+`/readyz` verification must report clinical write readiness before the action
+succeeds.
 
-The existing clinical recovery archive is sealed AUTOMATICALLY on OCI before
-upload; you do not need to set up another rclone crypt remote or key. A direct
-Google Drive remote and HTTPS transport are used. No backup is uploaded into
-GitHub Actions, releases, issues or Supabase. Only this folder is targeted.
+If the action reports **missing Actions secrets** or **SSH authentication**
+failure, provide the three secrets privately through GitHub Settings. If
+**Google authentication fails**, reauthorize `nims_cmv_drive` on a trusted
+device and replace its secret. The runner never logs actual credentials.
 
-The 28 latest recovery objects are retained (at the existing 32 MiB cap,
-under approximately 900 MiB total). Only precisely matched old recovery
-objects are pruned. No other files on Drive are deleted.
+OCI independently owns scheduled follow-up backups and rclone token refresh.
+Keep a tested recovery-key escrow outside OCI. The Drive folder must be
+approved for encrypted trial recovery under institutional governance; a
+personally owned account alone does not establish institutional approval.
 
-A source-code release or remote configuration alone is NOT proof of an actual
-Drive backup. Completion requires remote readback/sha256 and a successful
-disposable-PostgreSQL restore. Keep the owner-held SSH private key used for
-the existing recovery-key escrow outside OCI.
+## How completion is verified
 
-Normal public GitHub code CI and OCI release workflow remain. The failing
-GitHub clinical-backup workflow and release-triggered dispatch are retired.
+Check NIMS CMV OCI operations after the action finishes:
 
-If backup freshness passes eight hours without a verified copy, clinical
-writes may pause while login and read access remain available. Verify Drive
-quota and renewal of the OAuth connection during ongoing operations.
+- Google Drive configuration present and offsite receipt fresh (under 8 hours).
+- Current isolated-restore proof (under 30 days).
+- Clinical write readiness true, database reachable, no backup blocker.
+- OCI running/deployed/approved application commits reconciled.
+
+Successful GitHub CI, workflow creation, or an OAuth configuration file alone
+does **not** prove that an offsite recovery copy exists. Do not mark the repair
+complete until runtime checks pass.
+
+Retention is limited to the 28 latest correctly named recovery archives. The
+existing uploader does not delete unrelated Drive files.
