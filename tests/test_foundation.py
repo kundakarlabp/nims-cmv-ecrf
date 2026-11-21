@@ -1014,10 +1014,21 @@ def test_crf_pcr_month_link_rejects_wrong_subject_and_unapproved_results():
             'payload':{'scheduled_month':'1','actual_visit_on':'2026-11-01',
                        'pcr_specimen_code':m2['specimen_code']}})
         assert bad.status_code==422,bad.text
+        premature=scientist.post(f'/api/trial/crf/subjects/{sid}/entries',
+          headers=h,json={'section':'E_followup','occurred_on':'2026-11-01',
+            'payload':{'scheduled_month':'1','actual_visit_on':'2026-11-01',
+                       'pcr_specimen_code':pcrs[0]['specimen_code'],
+                       'pcr_sample_on':'2026-11-01'}})
+        assert premature.status_code==422,premature.text
+        assert 'collection' in premature.text.lower()
         good=scientist.post(f'/api/trial/crf/subjects/{sid}/entries',
           headers=h,json={'section':'E_followup','occurred_on':'2026-11-01',
-            'payload':{'scheduled_month':'1','actual_visit_on':'2026-11-01'}})
+            'payload':{'scheduled_month':'1','actual_visit_on':'2026-11-01',
+                       'pcr_study_funded':'unknown',
+                       'pcr_funding_source_reference':'TEST-FUNDING-SOURCE'}})
         assert good.status_code==200,good.text
+        entries=scientist.get(f'/api/trial/crf/subjects/{sid}/entries').json()['entries']
+        assert next(x for x in entries if x['section']=='E_followup')['payload']['pcr_study_funded']=='unknown'
 
 
 def test_staff_expiration_enforced_on_active_sessions_and_login():
@@ -1757,3 +1768,21 @@ def test_eligibility_exception_review_records_staff_and_pi_without_bypassing_v5(
         latest=consultant.get(f'/api/trial/subjects/{sid}/eligibility').json()[
             'eligibility']['baseline']['exception_review']
         assert latest['pi_decision'] is None
+
+
+def test_signed_crf_evidence_and_verification_labels_are_not_digital_signoffs():
+    from app.crf_schema import CRF_FORMS, validate_payload
+    follow=CRF_FORMS['E_followup']['fields']
+    assert follow['pcr_sample_on']['type']=='date'
+    assert follow['pcr_study_funded']['choices']==['yes','no','unknown']
+    assert 'eac_decision_source_reference' in CRF_FORMS['G_cmv_event']['fields']
+    assert 'not electronic sign-off' in CRF_FORMS['L_final_status']['fields']['final_reviewer']['label'].lower()
+    source=validate_payload('E_followup',{
+        'scheduled_month':'1','actual_visit_on':'2026-11-01',
+        'pcr_study_funded':'unknown','pcr_funding_source_reference':'TEST-SOURCE'
+    })
+    assert source['pcr_study_funded']=='unknown'
+    with pytest.raises(ValueError,match='Invalid selection'):
+        validate_payload('E_followup',{
+            'scheduled_month':'1','actual_visit_on':'2026-11-01',
+            'pcr_study_funded':'assumed_study_paid'})
