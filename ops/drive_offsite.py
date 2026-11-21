@@ -129,7 +129,7 @@ def sync_latest(private_dir, *, verify_restore=None):
 
     receipt_dir = private_dir / "backup-state"
     reference = f"gdrive:{FOLDER_ID}:clinical-{manifest['id']}.tar"
-    line = f"{manifest['stamp']} {digest} {reference}\\n".encode()
+    line = f"{manifest['stamp']} {digest} {reference}\n".encode()
     receipt_dir.mkdir(mode=0o755, exist_ok=True)
     # Test that the bytes *downloaded from Drive* can restore to a separate
     # PostgreSQL database. Once proven for this exact hash, retain the proof;
@@ -155,7 +155,7 @@ def sync_latest(private_dir, *, verify_restore=None):
     # Dedicated direct-transfer marker: mere presence of OAuth config must
     # never be reported as evidence that this server uploaded the archive.
     # The other receipts preserve the pre-existing clinical freshness gates.
-    # Both receipts refer to the same bundle restored in an isolated DB before
+    # All receipts refer to the same bundle restored in an isolated DB before
     # uploading and independently read back from Drive.
     for name in ("last_success", "last_restore", "last_oci_direct"):
         final = receipt_dir / name
