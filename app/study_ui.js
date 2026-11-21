@@ -185,9 +185,10 @@ panel('crf','Structured eCRF and clinical logs',
  '<div id="tw-crf-source" class="study-card hide" aria-live="polite"></div>'+
  btn('Use reviewed eligibility measurements','tw-crf-source-copy')+
  '<div id="tw-crf-draft-status" class="status">No draft loaded.</div>'+
- '<label>Correction reason (required only when revising submitted form)<input id="tw-crf-reason"></label>'+
- btn('Save private working draft','tw-crf-save')+' '+
- btn('Submit form for source review','tw-crf-submit')+
+ '<label id="tw-crf-reason-wrap" class="hide">Correction reason<input id="tw-crf-reason" maxlength="500" placeholder="What was corrected? Minimum 8 characters"></label>'+
+ btn('Save draft','tw-crf-save')+' '+
+ btn('Submit completed form','tw-crf-submit')+' '+
+ btn('Close editor','tw-crf-close-edit')+
  '<div class="study-card"><h3>Submitted forms and review states</h3>'+
  '<div id="tw-crf-entries"></div></div>'+
  '<div id="tw-crf-status" class="status hide"></div>'
@@ -1403,6 +1404,8 @@ function crfRender(){
  $('tw-crf-save').classList.toggle('hide',!crfCanEdit());
  $('tw-crf-submit').classList.toggle('hide',!crfCanEdit());
  $('tw-crf-submit').textContent='Submit completed form';
+ $('tw-crf-reason-wrap').classList.add('hide');
+ $('tw-crf-close-edit').classList.add('hide');
 }
 async function loadCrfSchema(){
  const previousSection=value('tw-crf-section');
@@ -1480,6 +1483,8 @@ $('tw-crf-submit').onclick=()=>{void task('tw-crf-status',async()=>{
  currentCrfEntry=null;crfDraftRevision=null;crfDraftKey=null;crfDraftLast=null;
  crfSetValues({});$('tw-crf-reason').value='';
  $('tw-crf-submit').textContent='Submit completed form';
+ $('tw-crf-reason-wrap').classList.add('hide');
+ $('tw-crf-close-edit').classList.add('hide');
  await loadCrfEntries();await crfRestoreDraft();
 });};
 async function openCrfEntryForEdit(row){
@@ -1499,10 +1504,20 @@ async function openCrfEntryForEdit(row){
  $('tw-crf-reason').value='';
  $('tw-crf-reason').placeholder='Briefly describe the correction (e.g. corrected value from signed report)';
  $('tw-crf-submit').textContent='Save changes';
+ $('tw-crf-reason-wrap').classList.remove('hide');
+ $('tw-crf-close-edit').classList.remove('hide');
  $('tw-crf-draft-status').textContent='Editing existing entry · revision '+row.revision+
   ' · enter a brief reason, then Save changes';
  $('tw-crf-fields').scrollIntoView({block:'start',behavior:'smooth'});
 }
+$('tw-crf-close-edit').classList.add('secondary');
+$('tw-crf-save').classList.add('secondary');
+$('tw-crf-close-edit').onclick=()=>{void task('tw-crf-status',async()=>{
+ if(!currentCrfEntry)return;
+ await crfSaveDraft();
+ currentCrfEntry=null;crfRender();await populateCrfLinkedIdentifiers();await crfRestoreDraft();
+ notify('tw-crf-status','Editor closed. Submitted record unchanged; any unsent draft remains available.');
+});};
 $('tw-crf-entries').addEventListener('click',e=>{
  const edit=e.target.closest('button[data-crf-edit]');
  const review=e.target.closest('button[data-crf-review]');
