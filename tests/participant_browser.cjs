@@ -144,7 +144,7 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
    }else if(p.endsWith('/entries'))result={entries:[]};
    else if(p.endsWith('/timeline')){
     if(courseFailures>0){courseFailures--;return route.abort('failed');}
-    const sid=Number((p.match(/subjects\\/(\\d+)\\/timeline/)||[])[1]);
+    const sid=Number(p.split('/')[5]);
     result={entries:sid===2?[{
       id:222,subject_id:2,section:'M_medication',title:'M. Medication exposure',
       occurred_on:'2026-10-04',revision:1,review_status:'pending',
