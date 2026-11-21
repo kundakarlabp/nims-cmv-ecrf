@@ -17,6 +17,9 @@ import sys
 import tempfile
 import time
 
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
 from app.clinical_gate import backup_fresh, restore_verified
 from ops import clinical_maintenance as maintenance
 from ops import drive_offsite
