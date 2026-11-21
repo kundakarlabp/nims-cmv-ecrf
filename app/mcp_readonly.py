@@ -98,6 +98,10 @@ def backup_status(u):
     drive_current = bool(fresh and backup_kind == "google_drive")
     drive_configured = (host.get("google_drive_backup_configuration_present")
                         if host_fresh else None)
+    direct_verified = (host.get("google_drive_direct_receipt_verified")
+                       if host_fresh else None)
+    downloaded_restore = (host.get("google_drive_downloaded_restore_verified")
+                          if host_fresh else None)
     return {
         "checked_at": datetime.now(UTC).isoformat(),
         "clinical_mode": active,
@@ -106,17 +110,20 @@ def backup_status(u):
         "backup_receipt_backend": backup_kind,
         "restore_receipt_backend": restore_kind,
         "google_drive_receipt_current": drive_current,
-        "google_drive_transfer_mode": ("oci_direct" if drive_configured is True else
+        "google_drive_transfer_mode": ("oci_direct" if drive_configured is True and direct_verified is True else
                                        "connector_acknowledged" if drive_current else
                                        "not_ready"),
+        "oci_direct_receipt_for_latest_bundle": direct_verified,
+        "drive_downloaded_isolated_restore_for_latest_bundle": downloaded_restore,
         "host_report_fresh": host_fresh,
         "google_drive_configuration_present": drive_configured,
         "google_drive_receipt_present_on_host": host.get("google_drive_backup_receipt_present")
             if host_fresh else None,
         "external_google_drive_listing_checked": False,
-        "note": ("A valid receipt follows an OCI isolated database restore and offsite "
-                 "readback; this tool does not independently list Google Drive or "
-                 "prove a full disaster-recovery restore."),
+        "note": ("Direct mode requires a matching OCI-generated Drive receipt. "
+                 "The downloaded-archive restore proof is a separate disposable "
+                 "database test with the OCI-held recovery key; this tool does not "
+                 "list Google Drive or prove owner-held SSH-key recovery."),
     }
 
 
@@ -126,12 +133,18 @@ def restore_verification(u):
     _operator(u)
     clinical = bool(main.CLINICAL_MODE)
     valid = bool(clinical and restore_verified())
+    host = _host_snapshot()
+    offsite = (host.get("google_drive_downloaded_restore_verified")
+               if host.get("fresh") is True else None)
     return {
         "checked_at": datetime.now(UTC).isoformat(),
         "clinical_mode": clinical,
         "isolated_restore_proof_current_30d": valid,
         "restore_receipt_backend": _receipt_kind("CLINICAL_RESTORE_RECEIPT_PATH"),
         "verification_scope": "existing_disposable_database_restore_proof",
+        "drive_downloaded_archive_isolated_restore_verified": offsite,
+        "downloaded_restore_scope": "OCI-held-key_disposable_database_only",
+        "owner_ssh_key_independent_recovery_tested": False,
         "new_restore_performed_by_this_tool": False,
         "full_offsite_disaster_recovery_tested_by_this_tool": False,
     }

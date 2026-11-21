@@ -188,3 +188,50 @@ def test_ambiguous_duplicate_drive_names_rejected(tmp_path, monkeypatch):
     monkeypatch.setattr(drive, "_rclone", duplicate)
     with pytest.raises(RuntimeError, match="Ambiguous duplicate"):
         drive.sync_latest(root)
+
+
+
+def test_drive_downloaded_restore_is_proved_once_per_verified_bundle(tmp_path, monkeypatch):
+    root, _, manifest, raw = fixture(tmp_path, monkeypatch)
+    name = "clinical-" + manifest["id"] + ".tar"
+    calls = []
+    def existing(action, *args):
+        if action == "lsjson":
+            return json.dumps([{"Name": name}]).encode()
+        if action == "cat":
+            calls.append("download")
+            return raw
+        raise AssertionError("Existing Drive archive must not be overwritten")
+    monkeypatch.setattr(drive, "_rclone", existing)
+    restored = []
+    def verify(data):
+        restored.append(data)
+        return True
+    assert drive.sync_latest(root, verify_restore=verify)
+    assert drive.sync_latest(root, verify_restore=verify)
+    assert restored == [raw]
+    assert calls == ["download", "download"]
+    state = root / "backup-state"
+    assert (state / "last_offsite_restore").read_bytes() == (
+        state / "last_oci_direct").read_bytes() == (
+        state / "last_success").read_bytes()
+
+
+def test_drive_restore_failure_never_advances_receipt(tmp_path, monkeypatch):
+    root, _, manifest, raw = fixture(tmp_path, monkeypatch)
+    name = "clinical-" + manifest["id"] + ".tar"
+    def existing(action, *args):
+        if action == "lsjson":
+            return json.dumps([{"Name": name}]).encode()
+        if action == "cat":
+            return raw
+        raise AssertionError(action)
+    monkeypatch.setattr(drive, "_rclone", existing)
+    def failed_restore(_):
+        raise RuntimeError("synthetic disposable PostgreSQL restore failure")
+    with pytest.raises(RuntimeError, match="synthetic disposable"):
+        drive.sync_latest(root, verify_restore=failed_restore)
+    state=root / "backup-state"
+    assert not (state / "last_success").exists()
+    assert not (state / "last_offsite_restore").exists()
+    assert not (state / "last_oci_direct").exists()

@@ -72,6 +72,6 @@ def test_main_accepts_connector_readback_before_cutover(tmp_path,monkeypatch):
     monkeypatch.setattr(maintenance,'backup_and_restore',lambda dc:order.append('backup'))
     monkeypatch.setattr(maintenance,'accept_receipts',lambda:order.append('accept'))
     monkeypatch.setattr(maintenance,'cutover',lambda dc,values:order.append('cutover') or 'clinical_active')
-    monkeypatch.setattr('ops.drive_offsite.sync_latest',lambda private:order.append('sync') or False)
+    monkeypatch.setattr('ops.drive_offsite.sync_latest',lambda private, **kwargs:order.append('sync') or False)
     maintenance.main()
     assert order==['backup','accept','sync','cutover']
