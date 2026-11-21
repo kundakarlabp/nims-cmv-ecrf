@@ -478,21 +478,14 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   assert.equal(await page.locator('#tw-progress-step-4').count(),1,'Patient trial workflow has exactly four stages');
   // Force an old patient's PCR response to complete AFTER the new patient's
   // linked-specimen options have rendered. No old source may leak into the UI.
-  await page.evaluate(async()=>{
-   await tab('crf');
-   $('tw-crf-subject').value='1';
-   $('tw-crf-section').value='E_followup';
-   crfRender();
-  });
+  await page.evaluate(async()=>{await tab('crf');});
+  await page.selectOption('#tw-context-subject','1');
+  await page.waitForFunction(()=>selected==='TEST-P-1'&&$('tw-crf-subject').value==='1');
   holdOldPCR=true;
-  await page.evaluate(()=>{window.__pendingOldLinkedPCR=populateCrfLinkedIdentifiers();});
+  await page.selectOption('#tw-crf-section','E_followup');
   for(let i=0;i<150&&!releaseOldPCR;i++)await new Promise(resolve=>setTimeout(resolve,20));
   assert.ok(releaseOldPCR,'The prior participant linked-PCR response must be delayed');
-  await page.evaluate(async()=>{
-   $('tw-crf-subject').value='2';
-   crfRender();
-   await populateCrfLinkedIdentifiers();
-  });
+  await page.selectOption('#tw-context-subject','2');
   await page.waitForFunction(()=>document.querySelector('#twcrf-pcr_specimen_code option[value="TEST-PCR-2-M1"]'));
   releaseOldPCR();
   await page.waitForTimeout(150);
