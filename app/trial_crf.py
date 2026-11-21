@@ -282,6 +282,15 @@ def submit_crf(subject_id:int,data:CRFSubmitIn,
     return {"entry_id":row.id,"revision":row.revision,"occurrence_key":key,
             "review_status":"pending"}
 
+@router.get("/entries/{entry_id}")
+def read_crf_entry(entry_id:int,u:AuthContext=Depends(current),s:Session=Depends(db)):
+    """One participant-specific record for direct edit from the clinical timeline."""
+    row=s.get(TrialCRFEntry,entry_id)
+    if not row:raise HTTPException(404,"eCRF entry not found")
+    allow_read(u,row.section)
+    find_subject(s,row.subject_id)
+    return visible_entry(row,review_state(s,row))
+
 class CRFEditIn(BaseModel):
     expected_revision:int=Field(ge=1)
     occurred_on:date
