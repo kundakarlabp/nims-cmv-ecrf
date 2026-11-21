@@ -329,6 +329,10 @@ def get_eligibility_draft(subject_id:int,u:AuthContext=Depends(current),
     role(u,{"pi","consultant","scientist"})
     find_subject(s,subject_id)
     draft=_eligibility_draft(s,u,subject_id)
+    signed=s.get(TrialEligibility,subject_id)
+    # A newer signed review supersedes any older per-user working copy.
+    # Keep the old row for recovery/audit rather than displaying stale answers.
+    if draft and signed and signed.updated_at>=draft.updated_at:draft=None
     return {"draft":{"payload":draft.payload,"revision":draft.revision,
              "updated_at":draft.updated_at} if draft else None,
             "status":"private_working_draft_not_signed_eligibility"}
@@ -361,10 +365,16 @@ def put_eligibility_draft(subject_id:int,data:EligibilityDraftIn,
         try:s.commit()
         except IntegrityError:s.rollback();raise HTTPException(409,"Eligibility draft concurrently created; reload")
     else:
-        if draft.revision!=data.expected_revision:
-            raise HTTPException(409,"Eligibility draft changed in another session; reload")
+        expected=data.expected_revision
+        if draft.revision!=expected:
+            signed=s.get(TrialEligibility,subject_id)
+            # The browser was shown no working draft because the signed review
+            # superseded it. Permit a new draft; never replace an active one.
+            if expected is not None or not signed or signed.updated_at<draft.updated_at:
+                raise HTTPException(409,"Eligibility draft changed in another session; reload")
+            expected=draft.revision
         changed=s.execute(update(TrialCRFDraft).where(
-            TrialCRFDraft.id==draft.id,TrialCRFDraft.revision==data.expected_revision)
+            TrialCRFDraft.id==draft.id,TrialCRFDraft.revision==expected)
             .values(payload=payload,revision=TrialCRFDraft.revision+1,updated_at=now()))
         if changed.rowcount!=1:
             s.rollback();raise HTTPException(409,"Concurrent eligibility draft update")
