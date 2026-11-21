@@ -212,6 +212,11 @@ def correct_screening_serostatus(subject_id:int,data:ScreeningSerostatusCorrecti
         baseline=dict(check.baseline)
         baseline["requires_source_reverification"]=True
         baseline["is_eligible"]=False
+        if baseline.get("exception_review"):
+            old_exception=dict(baseline["exception_review"])
+            old_exception.update({"status":"source_changed_re_review_required",
+                "pi_decision":None,"pi_actor_id":None,"pi_reviewed_at":None})
+            baseline["exception_review"]=old_exception
         check.baseline=baseline
         check.updated_at=now()
         audit(s,u,"eligibility_revalidation_required","trial_eligibility",
@@ -356,6 +361,10 @@ def eligibility_review(subject_id:int,data:EligibilityReviewIn,
     if data.signed_source_reference:
         baseline["signed_source_reference"]=data.signed_source_reference
     prior=s.get(TrialEligibility,t.id)
+    # A repeat eligibility review does not silently delete a recorded request.
+    # No exception recommendation can convert a v5.0 failure into eligibility.
+    if prior and prior.baseline.get("exception_review"):
+        baseline["exception_review"]=dict(prior.baseline["exception_review"])
     if prior:
         old=as_dict(prior)
         prior.inclusion=incl;prior.exclusion=excl;prior.baseline=baseline
@@ -374,6 +383,112 @@ def eligibility_review(subject_id:int,data:EligibilityReviewIn,
     return {"subject_id":t.id,"eligible":eligible,
         "reviewed_by":u.user_id,"reviewed_on":data.reviewed_on,
         "note":"A complete checklist is mandatory; no auto-randomization."}
+
+
+class EligibilityExceptionRequestIn(BaseModel):
+    """Collect a staff decision and source dates without changing approved v5.0 eligibility."""
+    recommend_inclusion:bool
+    prophylaxis_first_dose_on:date|None=None
+    source_reference:str=Field(min_length=3,max_length=120)
+    reason:str=Field(min_length=12,max_length=1000)
+    prior_regimen:str|None=Field(default=None,max_length=250)
+
+@router.post("/subjects/{subject_id}/eligibility-exception-request")
+def record_eligibility_exception_request(subject_id:int,data:EligibilityExceptionRequestIn,
+    u:AuthContext=Depends(current),s:Session=Depends(db)):
+    role(u,{"pi","consultant","scientist"})
+    t=s.scalar(select(TrialSubject).where(TrialSubject.id==subject_id).with_for_update())
+    if not t:raise HTTPException(404,"Study subject not found")
+    p=eligible_patient(s,t.patient_id)
+    if t.status!="screened" or t.study_code or t.enrolled_on:
+        raise HTTPException(409,"Only screened, never-enrolled subjects may be reviewed")
+    signed_check=s.get(TrialEligibility,t.id)
+    if not signed_check:
+        raise HTTPException(422,"Save the factual signed eligibility checklist first")
+    if signed_check.baseline.get("requires_source_reverification"):
+        raise HTTPException(422,"Repeat the signed eligibility review after the latest source correction")
+    if not p.transplant_date:raise HTTPException(422,"Verified transplant date is required")
+    if data.recommend_inclusion and t.recipient_cmv_igg!="positive":
+        raise HTTPException(422,"This proposal only considers recipient CMV IgG positive cases")
+    if data.prophylaxis_first_dose_on:
+        if data.prophylaxis_first_dose_on<p.transplant_date:
+            raise HTTPException(422,"Prophylaxis first dose cannot precede transplantation")
+        if data.prophylaxis_first_dose_on>date.today():
+            raise HTTPException(422,"First dose date cannot be in the future")
+    old=as_dict(signed_check)
+    baseline=dict(signed_check.baseline)
+    baseline["exception_review"]={
+        "staff_recommend_inclusion":data.recommend_inclusion,
+        "staff_source_reference":data.source_reference,
+        "staff_reason":data.reason,
+        "staff_actor_id":u.user_id,
+        "staff_recorded_at":now().isoformat(),
+        "recorded_donor_cmv_igg":t.donor_cmv_igg,
+        "recorded_recipient_cmv_igg":t.recipient_cmv_igg,
+        "transplant_on":p.transplant_date.isoformat(),
+        "prophylaxis_first_dose_on":(
+            data.prophylaxis_first_dose_on.isoformat() if data.prophylaxis_first_dose_on else None),
+        "days_to_first_dose":(
+            (data.prophylaxis_first_dose_on-p.transplant_date).days
+            if data.prophylaxis_first_dose_on else None),
+        "pre_randomization_regimen":data.prior_regimen,
+        "pi_decision":None,
+        "pi_actor_id":None,
+        "pi_reviewed_at":None,
+        "amendment_approval":None,
+        "status":"pending_pi_review" if data.recommend_inclusion else "staff_does_not_recommend",
+    }
+    signed_check.baseline=baseline;signed_check.updated_at=now()
+    audit(s,u,"eligibility_exception_request","trial_eligibility",str(t.id),t.patient_id,
+        old,as_dict(signed_check),
+        "Source-verified candidate review only; no eligibility or allocation override")
+    s.commit()
+    return {"subject_id":t.id,"decision_recorded":True,
+            "status":baseline["exception_review"]["status"],
+            "protocol_eligible":bool(baseline.get("is_eligible"))}
+
+class EligibilityExceptionPIReviewIn(BaseModel):
+    support_inclusion:bool
+    supporting_reference:str=Field(min_length=3,max_length=120)
+    review_reason:str=Field(min_length=12,max_length=1000)
+
+@router.post("/subjects/{subject_id}/eligibility-exception-pi-review")
+def review_eligibility_exception_pi(subject_id:int,data:EligibilityExceptionPIReviewIn,
+    u:AuthContext=Depends(current),s:Session=Depends(db)):
+    role(u,{"pi"})
+    t=s.scalar(select(TrialSubject).where(TrialSubject.id==subject_id).with_for_update())
+    if not t:raise HTTPException(404,"Study subject not found")
+    eligible_patient(s,t.patient_id)
+    if t.status!="screened" or t.study_code or t.enrolled_on:
+        raise HTTPException(409,"Cannot review screening exceptions after enrollment")
+    check=s.get(TrialEligibility,t.id)
+    if not check:raise HTTPException(422,"Signed eligibility checklist is missing")
+    exception=dict(check.baseline.get("exception_review") or {})
+    if not exception:
+        raise HTTPException(422,"Staff exception recommendation has not been recorded")
+    if exception.get("status")=="source_changed_re_review_required":
+        raise HTTPException(422,"Source data changed; renew the staff recommendation and PI review")
+    if data.support_inclusion and not exception["staff_recommend_inclusion"]:
+        raise HTTPException(422,"Request staff to update their decision and source before PI endorsement")
+    old=as_dict(check)
+    exception.update({
+        "pi_decision":"support_amendment_review" if data.support_inclusion else "decline",
+        "pi_actor_id":u.user_id,
+        "pi_reviewed_at":now().isoformat(),
+        "pi_reference":data.supporting_reference,
+        "pi_reason":data.review_reason,
+        "status":"requires_approved_protocol_amendment"
+                  if data.support_inclusion else "pi_declined",
+    })
+    baseline=dict(check.baseline)
+    baseline["exception_review"]=exception
+    check.baseline=baseline;check.updated_at=now()
+    audit(s,u,"eligibility_exception_pi_review","trial_eligibility",str(t.id),t.patient_id,
+        old,as_dict(check),
+        "PI review recorded; version 5.0 eligibility and randomization gates remain unchanged")
+    s.commit()
+    return {"subject_id":t.id,"pi_review_recorded":True,
+            "status":exception["status"],"protocol_eligible":bool(baseline.get("is_eligible"))}
 
 @router.get("/action-worklist")
 def action_worklist(limit:int=Query(default=80,ge=1,le=200),

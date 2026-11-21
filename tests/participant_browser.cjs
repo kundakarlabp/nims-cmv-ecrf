@@ -326,6 +326,15 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   assert.match(await page.locator('#tw-checklist-subject option:checked').textContent(),/TEST-CR-4/);
   await page.waitForFunction(()=>$('tw-progress-step-2').open);
   assert.equal(await page.locator('#tw-review-inclusion-count').count(),1);
+  assert.equal(await page.locator('#tw-eligibility-exception-panel').count(),1,
+   'R+ donor-status and timing discrepancies have a dedicated review section');
+  assert.equal(await page.locator('#tw-exception-first-dose').count(),1,
+   'Actual prophylaxis-start date is captured separately from enrollment date');
+  assert.equal(await page.locator('#tw-exception-staff-save').count(),1);
+  assert.equal(await page.locator('#tw-exception-pi-save').count(),1);
+  assert.equal(await page.isDisabled('#tw-inline-rand-submit'),true,
+   'Exception-review controls must never release a concealed allocation');
+
   assert.equal(await page.inputValue('[data-eligibility="inclusion"][data-key="written_consent"]'),'true',
    'Recorded signed consent is suggested without guessing unknown results');
   for(const [id,v] of Object.entries({'tw-age':'50','tw-anc':'3000','tw-platelets':'180000','tw-hb':'11','tw-crcl':'68',}))await page.fill('#'+id,v);

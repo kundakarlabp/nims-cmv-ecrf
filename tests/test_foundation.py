@@ -1670,3 +1670,90 @@ def test_serostatus_correction_requires_source_revalidation_and_audits_notes():
             'donor_cmv_igg':'unknown','source_reference':'LAB-003',
             'correction_reason':'Attempt to alter allocation baseline'})
         assert refused.status_code==409
+
+
+def test_eligibility_exception_review_records_staff_and_pi_without_bypassing_v5():
+    """R+ broadening and late first-dose requests stay out of randomization until approved."""
+    from app.trial_api import INCLUSION_ITEMS, EXCLUSION_ITEMS
+    with TestClient(app) as admin:
+        h=auth(admin)
+        _,sid=setup_synthetic_trial(admin,h)
+        assert admin.post('/api/users',headers=h,json={
+            'username':'exceptionreviewpi','display_name':'Synthetic exception PI',
+            'role':'pi','password':'ExceptionReviewStrongPassword123!'}).status_code==200
+    with TestClient(app) as consultant:
+        h=auth(consultant,'testeligibilityconsultant','EligibilityTestPassword123!')
+        correction=consultant.put(f'/api/trial/subjects/{sid}/screening-serostatus',
+            headers=h,json={
+                'donor_cmv_igg':'unknown','source_reference':'TEST-CMV-IGG-SOURCE',
+                'correction_reason':'Original donor serostatus requires verification'})
+        assert correction.status_code==200,correction.text
+        inclusion={k:True for k in INCLUSION_ITEMS}
+        inclusion['donor_cmv_positive']=False
+        inclusion['vgcv_within_10_days']=False
+        review=consultant.put(f'/api/trial/subjects/{sid}/eligibility',
+            headers=h,json={
+                'inclusion':inclusion,'exclusion':{k:False for k in EXCLUSION_ITEMS},
+                'age_years':50,'anc_per_ul':3000,'platelets_per_ul':180000,
+                'hemoglobin_g_dl':11,'crcl_cg_ml_min':68,
+                'baseline_cbc_on':'2026-10-02','reviewed_on':'2026-10-03',
+                'review_notes':'Recorded donor and delayed-start discrepancies'})
+        assert review.status_code==200 and review.json()['eligible'] is False
+        endpoint=f'/api/trial/subjects/{sid}/eligibility-exception-request'
+        refused=consultant.post(endpoint,headers=h,json={
+            'recommend_inclusion':True,'source_reference':'TEST-LAB',
+            'reason':'Reconsider for amendment','prophylaxis_first_dose_on':'2026-09-30'})
+        assert refused.status_code==422
+        recorded=consultant.post(endpoint,headers=h,json={
+            'recommend_inclusion':True,'source_reference':'TEST-LAB-RESULT',
+            'reason':'Recipient positive; consider broader enrollment after protocol amendment',
+            'prophylaxis_first_dose_on':'2026-10-15',
+            'prior_regimen':'TEST-REGIMEN'})
+        assert recorded.status_code==200,recorded.text
+        assert recorded.json()['status']=='pending_pi_review'
+        data=consultant.get(f'/api/trial/subjects/{sid}/eligibility').json()['eligibility']
+        assert data['baseline']['is_eligible'] is False
+        item=data['baseline']['exception_review']
+        assert item['recorded_donor_cmv_igg']=='unknown'
+        assert item['recorded_recipient_cmv_igg']=='positive'
+        assert item['days_to_first_dose']==14
+        assert item['pre_randomization_regimen']=='TEST-REGIMEN'
+        rereview=consultant.put(f'/api/trial/subjects/{sid}/eligibility',
+            headers=h,json={
+                'inclusion':inclusion,'exclusion':{k:False for k in EXCLUSION_ITEMS},
+                'age_years':50,'anc_per_ul':3000,'platelets_per_ul':180000,
+                'hemoglobin_g_dl':11,'crcl_cg_ml_min':68,
+                'baseline_cbc_on':'2026-10-02','reviewed_on':'2026-10-03'})
+        assert rereview.status_code==200 and rereview.json()['eligible'] is False
+        assert consultant.get(f'/api/trial/subjects/{sid}/eligibility').json()[
+            'eligibility']['baseline']['exception_review']['status']=='pending_pi_review'
+        pi_review_url=f'/api/trial/subjects/{sid}/eligibility-exception-pi-review'
+        assert consultant.post(pi_review_url,headers=h,json={
+            'support_inclusion':True,'supporting_reference':'TEST-PI',
+            'review_reason':'Recommend prospective NIEC amendment'}).status_code==403
+    with TestClient(app) as pi:
+        h=auth(pi,'exceptionreviewpi','ExceptionReviewStrongPassword123!')
+        endorsed=pi.post(pi_review_url,headers=h,json={
+            'support_inclusion':True,'supporting_reference':'TEST-PI-REVIEW',
+            'review_reason':'Support amendment submission; no exception to current protocol'})
+        assert endorsed.status_code==200,endorsed.text
+        assert endorsed.json()['status']=='requires_approved_protocol_amendment'
+        denied=pi.post(f'/api/trial/subjects/{sid}/enroll',headers=h,json={
+            'enrolled_on':'2026-10-03','pcr_anchor_on':'2026-10-01',
+            'pcr_anchor_basis':'transplant_date',
+            'reviewed_eligibility_and_consent':True,'approved_visit_anchor':True})
+        assert denied.status_code==422
+        assert 'INELIGIBLE' in denied.text
+        no_allocation=pi.get(f'/api/trial/randomization/subjects/{sid}/preflight')
+        assert no_allocation.status_code==200
+        assert no_allocation.json()['ready'] is False
+    with TestClient(app) as consultant:
+        h=auth(consultant,'testeligibilityconsultant','EligibilityTestPassword123!')
+        declined=consultant.post(endpoint,headers=h,json={
+            'recommend_inclusion':False,'source_reference':'TEST-LAB-RESULT',
+            'reason':'Declined after source review; existing protocol not met'})
+        assert declined.status_code==200
+        assert declined.json()['status']=='staff_does_not_recommend'
+        latest=consultant.get(f'/api/trial/subjects/{sid}/eligibility').json()[
+            'eligibility']['baseline']['exception_review']
+        assert latest['pi_decision'] is None
