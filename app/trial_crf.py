@@ -85,9 +85,19 @@ def enrich_from_sources(s,subject,section,payload):
             PCRRecord.specimen_code==result["pcr_specimen_code"]))
         if not specimen or specimen.scheduled_month!=int(result["scheduled_month"]):
             raise HTTPException(422,"PCR specimen code does not match this subject and scheduled month")
+        # The signed CRF E collection date must agree with the linked
+        # laboratory ledger; never infer a collection date for a planned PCR.
+        if result.get("pcr_sample_on"):
+            if not specimen.collected_on:
+                raise HTTPException(422,"Record and verify specimen collection in the PCR ledger before linking its sample date")
+            if result["pcr_sample_on"]!=specimen.collected_on.isoformat():
+                raise HTTPException(422,"CRF PCR sample date conflicts with the source specimen collection date")
         result["_verified_pcr_reference"]={
             "specimen_code":specimen.specimen_code,
             "result_status":specimen.status,
+            "collected_on":specimen.collected_on.isoformat() if specimen.collected_on else None,
+            "reported_on":specimen.reported_on.isoformat() if specimen.reported_on else None,
+            "lab_accession":specimen.lab_accession,
             "result_kind":specimen.result_kind if specimen.status=="verified" else None,
             "quantitative_iu_ml":specimen.quantitative_iu_ml if specimen.status=="verified" else None
         }
