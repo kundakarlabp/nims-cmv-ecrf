@@ -74,8 +74,13 @@ def _prune_remote():
         _rclone("deletefile", REMOTE + ":" + old)
 
 
-def sync_latest(private_dir):
-    """Return False if OAuth is not configured; never fake a backup receipt."""
+def sync_latest(private_dir, *, verify_restore=None):
+    """Verify the exact Drive bytes; optionally restore them in an isolated DB.
+
+    The host only calls verify_restore once per newly verified bundle. The
+    existing OCI maintenance lock serializes backup creation and verification.
+    A cached receipt never bypasses the Google Drive download/hash check.
+    """
     private_dir = Path(private_dir)
     if not connection_ready():
         return False
@@ -124,11 +129,35 @@ def sync_latest(private_dir):
 
     receipt_dir = private_dir / "backup-state"
     reference = f"gdrive:{FOLDER_ID}:clinical-{manifest['id']}.tar"
-    line = f"{manifest['stamp']} {digest} {reference}\n".encode()
+    line = f"{manifest['stamp']} {digest} {reference}\\n".encode()
     receipt_dir.mkdir(mode=0o755, exist_ok=True)
+    # Test that the bytes *downloaded from Drive* can restore to a separate
+    # PostgreSQL database. Once proven for this exact hash, retain the proof;
+    # still perform remote byte/hash verification on every later maintenance.
+    proof = receipt_dir / "last_offsite_restore"
+    if verify_restore is not None:
+        try:
+            already_proven = proof.read_bytes() == line
+        except OSError:
+            already_proven = False
+        if not already_proven:
+            if verify_restore(verified) is not True:
+                raise RuntimeError("Drive-downloaded database restore not verified")
+            temporary = receipt_dir / ("last_offsite_restore.tmp-" + secrets.token_hex(6))
+            descriptor = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+            try:
+                os.fchmod(descriptor, 0o644)
+                with os.fdopen(descriptor, "wb") as file:
+                    file.write(line)
+                os.replace(temporary, proof)
+            finally:
+                temporary.unlink(missing_ok=True)
+    # Dedicated direct-transfer marker: mere presence of OAuth config must
+    # never be reported as evidence that this server uploaded the archive.
+    # The other receipts preserve the pre-existing clinical freshness gates.
     # Both receipts refer to the same bundle restored in an isolated DB before
     # uploading and independently read back from Drive.
-    for name in ("last_success", "last_restore"):
+    for name in ("last_success", "last_restore", "last_oci_direct"):
         final = receipt_dir / name
         temporary = receipt_dir / (name + ".tmp-" + secrets.token_hex(6))
         descriptor = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
