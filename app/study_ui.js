@@ -936,7 +936,7 @@ $('tw-checklist-save').onclick=()=>{void task('tw-status',async()=>{
    platelets_per_ul:n('tw-platelets'),hemoglobin_g_dl:n('tw-hb'),
    crcl_cg_ml_min:n('tw-crcl'),baseline_cbc_on:value('tw-cbc-date'),
    reviewed_on:value('tw-review-on'),nephrology_unit:value('tw-nephrology-unit')||null,
-   signed_source_reference:value('tw-eligibility-source')||null,
+   ...(value('tw-eligibility-source')?{signed_source_reference:value('tw-eligibility-source')}:{}),
    review_notes:value('tw-eligibility-notes')||null
   })});
  window.cmvEligibilityDirty=false;
