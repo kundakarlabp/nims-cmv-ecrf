@@ -91,6 +91,24 @@ panel('study','Enrollment',
  choose('Nephrology unit','tw-nephrology-unit',[['','Select unit (optional)'],['NP1','NP1'],['NP2','NP2'],['NP3','NP3']])+
  field('Signed eligibility source reference (optional)','tw-eligibility-source')+
  '<label>Eligibility reviewer notes (optional)<textarea id="tw-eligibility-notes" maxlength="1000" placeholder="Source clarifications or timing details; do not substitute for protocol answers"></textarea></label>'+
+ '<details class="study-card" id="tw-eligibility-exception-panel"><summary>R+ donor-status / timing discrepancy review</summary>'+
+ '<p class="hint">Record the factual donor result and actual prophylaxis-start date. A staff or PI recommendation does not change protocol v5.0 eligibility. A substantial amendment requires NIEC approval before allocation under revised rules.</p>'+
+ choose('Staff decision: consider this R+ patient for inclusion?','tw-exception-staff-decision',[
+  ['','Choose recommendation'],['yes','Yes — send to PI for amendment review'],
+  ['no','No — record screen failure']])+
+ field('First actual valganciclovir prophylaxis dose date (if documented)','tw-exception-first-dose','date')+
+ field('Source reference for CMV serology / actual prophylaxis','tw-exception-source')+
+ '<label>Pre-randomisation antiviral regimen (if any)<input id="tw-exception-regimen" maxlength="250" placeholder="Document the actual regimen or leave blank if not recorded"></label>'+
+ '<label>Reason / clinical evidence<textarea id="tw-exception-reason" maxlength="1000" placeholder="Explain donor status and/or delayed start; do not backdate"></textarea></label>'+
+ btn('Record staff recommendation (no allocation)','tw-exception-staff-save')+
+ '<div id="tw-exception-status" class="status" role="status" aria-live="polite">No staff/PI exception decision recorded.</div>'+
+ '<h4>PI assessment</h4>'+
+ choose('PI decision','tw-exception-pi-decision',[
+  ['','Choose decision'],['yes','Support proposed protocol amendment'],
+  ['no','Decline this recruitment exception']])+
+ field('PI supporting source / amendment reference','tw-exception-pi-source')+
+ '<label>PI rationale<textarea id="tw-exception-pi-reason" maxlength="1000"></textarea></label>'+
+ btn('Record PI assessment (no allocation)','tw-exception-pi-save')+'</details>'+
  btn('Validate complete eligibility checklist','tw-checklist-save')+'</section>'+
  '<section class="study-card"><h3>3 · Enrollment verification</h3>'+
  choose('Screened subject','tw-screened',[])+field('Enrollment date','tw-enroll-date','date')+
@@ -257,7 +275,7 @@ function setRole(){
    }
  }
  for(const [id,roles] of [
-  ['tw-screen-save',['pi','consultant','scientist']],['tw-screening-correct-save',['pi','consultant']],['tw-checklist-save',['pi','consultant']],['tw-enroll-save',['pi']],
+  ['tw-screen-save',['pi','consultant','scientist']],['tw-screening-correct-save',['pi','consultant']],['tw-checklist-save',['pi','consultant']],['tw-exception-staff-save',['pi','consultant','scientist']],['tw-exception-pi-save',['pi']],['tw-enroll-save',['pi']],
   ['tw-collect-save',['pi','consultant','scientist','nurse','technician','microbiology']],
   ['tw-result-save',['microbiology','technician']],
   ['tw-verify-save',['pi','consultant','scientist','monitor']],
@@ -734,7 +752,11 @@ async function loadEligibilityReview(){
   el.value='';el.dataset.autoChecked='';
  }
  for(const id of ['tw-age','tw-anc','tw-platelets','tw-hb','tw-crcl','tw-cbc-date',
-                   'tw-nephrology-unit','tw-eligibility-source','tw-eligibility-notes'])$(id).value='';
+                   'tw-nephrology-unit','tw-eligibility-source','tw-eligibility-notes',
+                   'tw-exception-staff-decision','tw-exception-first-dose','tw-exception-source',
+                   'tw-exception-regimen','tw-exception-reason','tw-exception-pi-decision',
+                   'tw-exception-pi-source','tw-exception-pi-reason'])$(id).value='';
+ $('tw-exception-status').textContent='No staff/PI exception decision recorded.';
  $('tw-review-on').value=today();
  window.cmvSavedEligibility={sid,assessment:null};
  window.cmvEligibilityDirty=false;
@@ -753,6 +775,23 @@ async function loadEligibilityReview(){
  $('tw-nephrology-unit').value=b.nephrology_unit||'';
  $('tw-eligibility-source').value=b.signed_source_reference||'';
  $('tw-eligibility-notes').value=b.review_notes||'';
+ const exception=b.exception_review||null;
+ if(exception){
+  $('tw-exception-staff-decision').value=exception.staff_recommend_inclusion?'yes':'no';
+  $('tw-exception-first-dose').value=exception.prophylaxis_first_dose_on||'';
+  $('tw-exception-source').value=exception.staff_source_reference||'';
+  $('tw-exception-regimen').value=exception.pre_randomization_regimen||'';
+  $('tw-exception-reason').value=exception.staff_reason||'';
+  $('tw-exception-pi-decision').value=exception.pi_decision==='support_amendment_review'?'yes':
+     exception.pi_decision==='decline'?'no':'';
+  $('tw-exception-pi-source').value=exception.pi_reference||'';
+  $('tw-exception-pi-reason').value=exception.pi_reason||'';
+  $('tw-exception-status').textContent='Recorded: '+(exception.status||'staff review')+
+    '. Donor CMV IgG: '+(exception.recorded_donor_cmv_igg||'unknown')+
+    '; recipient CMV IgG: '+(exception.recorded_recipient_cmv_igg||'unknown')+
+    '; actual first-dose day: '+(exception.days_to_first_dose==null?'not documented':exception.days_to_first_dose)+
+    '. Eligibility and randomisation still use the approved protocol.';
+ }
  prefillObjectiveEligibility();updateEligibilityProgress();updateEnrollmentReadiness();
 }
 for(const id of ['tw-checklist-subject','tw-screened'])$(id).onchange=()=>{void task('tw-status',async()=>{
@@ -916,6 +955,32 @@ for(const id of ['tw-cbc-date','tw-review-on','tw-nephrology-unit',
  $(id).addEventListener('input',()=>{
   window.cmvEligibilityDirty=true;updateEligibilityProgress();updateEnrollmentReadiness();
  });
+$('tw-exception-staff-save').onclick=()=>{void task('tw-status',async()=>{
+ const sid=n('tw-checklist-subject'),decision=value('tw-exception-staff-decision');
+ if(!sid||!['yes','no'].includes(decision))throw Error('Select the screened subject and a Yes/No recommendation');
+ const source=value('tw-exception-source'),reason=value('tw-exception-reason');
+ if(source.length<3||reason.length<12)throw Error('Enter source reference and a clinical rationale (at least 12 characters)');
+ if(!confirm('Record the staff recommendation without changing protocol eligibility or releasing an allocation?'))return;
+ await api('/api/trial/subjects/'+sid+'/eligibility-exception-request',{
+  method:'POST',body:JSON.stringify({recommend_inclusion:decision==='yes',
+   prophylaxis_first_dose_on:value('tw-exception-first-dose')||null,
+   source_reference:source,reason,
+   prior_regimen:value('tw-exception-regimen')||null})});
+ await loadEligibilityReview();
+ notify('tw-status','Staff assessment documented with its source and date. PI review and approved protocol are still required for exceptions.');
+});};
+$('tw-exception-pi-save').onclick=()=>{void task('tw-status',async()=>{
+ const sid=n('tw-checklist-subject'),decision=value('tw-exception-pi-decision');
+ if(!sid||!['yes','no'].includes(decision))throw Error('Select a screened subject and a PI decision');
+ const source=value('tw-exception-pi-source'),reason=value('tw-exception-pi-reason');
+ if(source.length<3||reason.length<12)throw Error('Enter PI source reference and rationale');
+ if(!confirm('Record the PI assessment? This does not change approved eligibility or randomize.'))return;
+ await api('/api/trial/subjects/'+sid+'/eligibility-exception-pi-review',{
+  method:'POST',body:JSON.stringify({support_inclusion:decision==='yes',
+   supporting_reference:source,review_reason:reason})});
+ await loadEligibilityReview();
+ notify('tw-status','PI assessment documented. Substantial eligibility changes require approved amendment before any exception-based randomization.');
+});};
 $('tw-checklist-save').onclick=()=>{void task('tw-status',async()=>{
  if(!eligibilityItems)await loadEligibilitySchema();
  const subject=n('tw-checklist-subject');if(!subject)throw Error('Select a screened subject');
