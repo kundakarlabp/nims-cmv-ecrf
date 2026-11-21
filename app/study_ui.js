@@ -91,6 +91,8 @@ panel('study','Enrollment',
  choose('Nephrology unit','tw-nephrology-unit',[['','Select unit (optional)'],['NP1','NP1'],['NP2','NP2'],['NP3','NP3']])+
  field('Signed eligibility source reference (optional)','tw-eligibility-source')+
  '<label>Eligibility reviewer notes (optional)<textarea id="tw-eligibility-notes" maxlength="1000" placeholder="Source clarifications or timing details; do not substitute for protocol answers"></textarea></label>'+
+ '<p id="tw-eligibility-draft-status" class="hint" role="status" aria-live="polite">Select a screened participant.</p>'+
+ btn('Save eligibility draft','tw-eligibility-draft-save')+
  '<details class="study-card" id="tw-eligibility-exception-panel"><summary>R+ donor-status / timing discrepancy review</summary>'+
  '<p class="hint">Record the factual donor result and actual prophylaxis-start date. A staff or PI recommendation does not change protocol v5.0 eligibility. A substantial amendment requires NIEC approval before allocation under revised rules.</p>'+
  choose('Staff decision: consider this R+ patient for inclusion?','tw-exception-staff-decision',[
@@ -750,8 +752,88 @@ $('tw-mfa-confirm').onclick=()=>{void task('tw-mfa-status',async()=>{
 
 let eligibilityItems=null;
 let eligibilityRequest=0;
+let eligibilityDraftTimer=null,eligibilityDraftQueue=Promise.resolve();
+let eligibilityDraftRevision=null,eligibilityDraftLast=null,eligibilityDraftLoadedSid=null;
+function eligibilityDraftSnapshot(){
+ const inclusion={},exclusion={},baseline={};
+ for(const el of document.querySelectorAll('[data-eligibility]')){
+  if(el.value!=='')(el.dataset.eligibility==='inclusion'?inclusion:exclusion)[el.dataset.key]=el.value==='true';
+ }
+ for(const [key,id] of Object.entries({
+  age_years:'tw-age',anc_per_ul:'tw-anc',platelets_per_ul:'tw-platelets',
+  hemoglobin_g_dl:'tw-hb',crcl_cg_ml_min:'tw-crcl',baseline_cbc_on:'tw-cbc-date',
+  reviewed_on:'tw-review-on',nephrology_unit:'tw-nephrology-unit',
+  signed_source_reference:'tw-eligibility-source',review_notes:'tw-eligibility-notes'
+ }))if($(id)?.value!=='')baseline[key]=$(id).value;
+ return {inclusion,exclusion,baseline};
+}
+async function saveEligibilityDraft(){
+ clearTimeout(eligibilityDraftTimer);
+ const sid=eligibilityDraftLoadedSid;
+ if(!sid||!studySubjects.some(x=>x.id===sid&&x.status==='screened'))return;
+ const payload=eligibilityDraftSnapshot(),serial=JSON.stringify(payload);
+ if(serial===eligibilityDraftLast)return;
+ if(!Object.keys(payload.inclusion).length&&!Object.keys(payload.exclusion).length&&
+    !Object.keys(payload.baseline).some(x=>x!=='reviewed_on')&&eligibilityDraftRevision===null)return;
+ eligibilityDraftQueue=eligibilityDraftQueue.catch(()=>{}).then(async()=>{
+  if(serial===eligibilityDraftLast)return;
+  const r=await api('/api/trial/subjects/'+sid+'/eligibility-draft',{
+   method:'PUT',body:JSON.stringify({...payload,expected_revision:eligibilityDraftRevision})});
+  if(sid===eligibilityDraftLoadedSid){
+   eligibilityDraftRevision=r.revision;eligibilityDraftLast=serial;
+   $('tw-eligibility-draft-status').textContent='Draft saved · not a signed eligibility review';
+  }
+ });
+ try{await eligibilityDraftQueue;}
+ catch(e){
+  if(sid===eligibilityDraftLoadedSid)$('tw-eligibility-draft-status').textContent='Save failed: '+e.message;
+  throw e;
+ }
+}
+function scheduleEligibilityDraft(){
+ if(!eligibilityDraftLoadedSid||eligibilityDraftLoadedSid!==n('tw-checklist-subject'))return;
+ clearTimeout(eligibilityDraftTimer);
+ $('tw-eligibility-draft-status').textContent='Unsaved changes · autosave pending';
+ eligibilityDraftTimer=setTimeout(()=>{void saveEligibilityDraft().catch(()=>{});},1200);
+}
+async function restoreEligibilityDraft(sid,request){
+ if(!['pi','consultant'].includes($('currentRole').textContent.trim())&&!window.currentWorkspaceFullAccess){
+  $('tw-eligibility-draft-status').textContent='Eligibility review is read-only for this role.';
+  return;
+ }
+ try{
+  const r=await api('/api/trial/subjects/'+sid+'/eligibility-draft');
+  if(request!==eligibilityRequest||sid!==n('tw-checklist-subject'))return;
+  eligibilityDraftLoadedSid=sid;
+  if(!r.draft){
+   $('tw-eligibility-draft-status').textContent='Changes autosave as a private draft until confirmed.';
+   return;
+  }
+  const d=r.draft.payload||{};
+  for(const el of document.querySelectorAll('[data-eligibility]')){
+   const v=d[el.dataset.eligibility]?.[el.dataset.key];
+   if(typeof v==='boolean')el.value=String(v);
+  }
+  for(const [key,id] of Object.entries({
+   age_years:'tw-age',anc_per_ul:'tw-anc',platelets_per_ul:'tw-platelets',
+   hemoglobin_g_dl:'tw-hb',crcl_cg_ml_min:'tw-crcl',baseline_cbc_on:'tw-cbc-date',
+   reviewed_on:'tw-review-on',nephrology_unit:'tw-nephrology-unit',
+   signed_source_reference:'tw-eligibility-source',review_notes:'tw-eligibility-notes'
+  }))if(Object.hasOwn(d.baseline||{},key))$(id).value=String(d.baseline[key]);
+  eligibilityDraftRevision=r.draft.revision;eligibilityDraftLast=JSON.stringify(d);
+  window.cmvEligibilityDirty=true;
+  prefillObjectiveEligibility();updateEligibilityProgress();updateEnrollmentReadiness();
+  $('tw-eligibility-draft-status').textContent='Restored saved draft · confirm checklist when ready';
+ }catch(e){
+  if(request===eligibilityRequest)
+   $('tw-eligibility-draft-status').textContent='Draft unavailable: '+e.message;
+ }
+}
 async function loadEligibilityReview(){
  const request=++eligibilityRequest,sid=n('tw-checklist-subject');
+ clearTimeout(eligibilityDraftTimer);
+ eligibilityDraftLoadedSid=null;eligibilityDraftRevision=null;eligibilityDraftLast=null;
+ $('tw-eligibility-draft-status').textContent='Loading eligibility…';
  for(const el of document.querySelectorAll('[data-eligibility]')){
   el.value='';el.dataset.autoChecked='';
  }
@@ -764,12 +846,16 @@ async function loadEligibilityReview(){
  $('tw-review-on').value=today();
  window.cmvSavedEligibility={sid,assessment:null};
  window.cmvEligibilityDirty=false;
- if(!sid){updateEligibilityProgress();updateEnrollmentReadiness();return;}
+ if(!sid){
+  $('tw-eligibility-draft-status').textContent='Select a screened participant.';
+  updateEligibilityProgress();updateEnrollmentReadiness();return;
+ }
  const r=await api('/api/trial/subjects/'+sid+'/eligibility');
  if(request!==eligibilityRequest||sid!==n('tw-checklist-subject'))return;
  const e=r.eligibility;
  window.cmvSavedEligibility={sid,assessment:e||null};
- if(!e){prefillObjectiveEligibility();updateEnrollmentReadiness();return;}
+ if(!e){prefillObjectiveEligibility();updateEnrollmentReadiness();
+  await restoreEligibilityDraft(sid,request);return;}
  for(const el of document.querySelectorAll('[data-eligibility]')){
   const v=e[el.dataset.eligibility]?.[el.dataset.key];el.value=typeof v==='boolean'?String(v):'';
  }
@@ -797,8 +883,10 @@ async function loadEligibilityReview(){
     '. Eligibility and randomisation still use the approved protocol.';
  }
  prefillObjectiveEligibility();updateEligibilityProgress();updateEnrollmentReadiness();
+ await restoreEligibilityDraft(sid,request);
 }
 for(const id of ['tw-checklist-subject','tw-screened'])$(id).onchange=()=>{void task('tw-status',async()=>{
+ await saveEligibilityDraft();
  const sid=n(id);if(!sid)return;
  await selectParticipantSubject(sid);await selectEnrollmentPatient();
 });};
