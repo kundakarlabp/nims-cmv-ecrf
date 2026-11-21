@@ -1542,3 +1542,48 @@ def test_nims_emblem_and_optional_nephrology_source_fields():
         assert spec['type']=='textarea' and spec['required'] is False
         assert validate_payload(form,{'additional_notes':'Documented clinical clarification'},
                                 partial=True)['additional_notes']=='Documented clinical clarification'
+
+
+def test_enrollment_ineligibility_and_transplant_window_report_specific_reasons():
+    """One signed negative eligibility criterion blocks enrollment and cannot be bypassed."""
+    from app.trial_api import INCLUSION_ITEMS, EXCLUSION_ITEMS
+    with TestClient(app) as admin:
+        h=auth(admin)
+        _,sid=setup_synthetic_trial(admin,h)
+        assert admin.post('/api/users',headers=h,json={
+            'username':'testeligibilitywindowpi',
+            'display_name':'Synthetic window verification PI','role':'pi',
+            'password':'TestWindowValidPassword123!'}).status_code==200
+    review={
+        'inclusion':{k:True for k in INCLUSION_ITEMS},
+        'exclusion':{k:False for k in EXCLUSION_ITEMS},
+        'age_years':50,'anc_per_ul':3000,'platelets_per_ul':180000,
+        'hemoglobin_g_dl':11,'crcl_cg_ml_min':68,
+        'baseline_cbc_on':'2026-10-02','reviewed_on':'2026-10-02'
+    }
+    with TestClient(app) as consultant:
+        h=auth(consultant,'testeligibilityconsultant','EligibilityTestPassword123!')
+        review['exclusion']['unable_to_complete_followup']=True
+        result=consultant.put(f'/api/trial/subjects/{sid}/eligibility',headers=h,json=review)
+        assert result.status_code==200 and result.json()['eligible'] is False
+    request={'enrolled_on':'2026-10-03','pcr_anchor_on':'2026-10-01',
+        'pcr_anchor_basis':'transplant_date','reviewed_eligibility_and_consent':True,
+        'approved_visit_anchor':True}
+    with TestClient(app) as pi:
+        h=auth(pi,'testeligibilitywindowpi','TestWindowValidPassword123!')
+        refused=pi.post(f'/api/trial/subjects/{sid}/enroll',headers=h,json=request)
+        assert refused.status_code==422, refused.text
+        assert 'INELIGIBLE' in refused.text
+        assert 'Unable/unwilling to complete follow-up' in refused.text
+    with TestClient(app) as consultant:
+        h=auth(consultant,'testeligibilityconsultant','EligibilityTestPassword123!')
+        review['exclusion']['unable_to_complete_followup']=False
+        assert consultant.put(f'/api/trial/subjects/{sid}/eligibility',
+                              headers=h,json=review).json()['eligible'] is True
+    with TestClient(app) as pi:
+        h=auth(pi,'testeligibilitywindowpi','TestWindowValidPassword123!')
+        late=pi.post(f'/api/trial/subjects/{sid}/enroll',headers=h,json={
+            **request,'enrolled_on':'2026-11-21'})
+        assert late.status_code==422
+        assert '0–10 days' in late.text
+        assert '51 days' in late.text
