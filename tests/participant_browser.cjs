@@ -253,6 +253,7 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   assert.doesNotMatch(await page.textContent('#tw-course-records'),/could not be loaded/i);
   assert.equal(await page.locator('#tw-course-records [data-course-edit="222"]').count(),1,
    'Previously submitted clinical history provides direct entry editing');
+  await page.locator('#tw-course-records details.study-card > summary').first().click();
   await page.click('#tw-course-records [data-course-edit="222"]');
   await page.waitForFunction(()=>activeTab==='crf'&&$('tw-crf-submit').textContent==='Save changes');
   assert.equal(await page.inputValue('#twcrf-source_reference'),'TEST-DIRECT-EDIT');
