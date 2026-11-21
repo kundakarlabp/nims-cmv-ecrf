@@ -314,6 +314,14 @@ def patient_workspace_script():
                         headers={'Cache-Control':'no-store, max-age=0',
                                  'Pragma':'no-cache'})
 
+@app.get('/nims-logo.svg', include_in_schema=False)
+def institution_logo():
+    # Locally hosted institutional emblem supplied by the project owner.
+    return FileResponse(Path(__file__).parent/'nims_logo.svg',
+                        media_type='image/svg+xml',
+                        headers={'Cache-Control':'public, max-age=86400'})
+
+
 @app.get('/healthz')
 def health():
     from .operations import SHA

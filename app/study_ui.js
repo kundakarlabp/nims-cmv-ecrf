@@ -511,6 +511,7 @@ $('tw-screen-save').onclick=()=>{void task('tw-status',async()=>{
   sex_at_birth:value('tw-sex')||null,pis_version:value('tw-pis')||null,
   consent_language:value('tw-consent-language')||null,
   consent_obtained_by:value('tw-consent-obtained')||null,
+  screening_note:value('tw-screening-notes')||null,
   signed_consent_source_ref:null,
   ratg_induction:value('tw-ratg')===''?null:value('tw-ratg')==='true',
   eligibility_attested:false})});
@@ -534,6 +535,9 @@ $('tw-decline-consent').onclick=()=>{void task('tw-status',async()=>{
 
 $('tw-enroll-save').onclick=()=>{void task('tw-status',async()=>{
  var id=n('tw-screened');if(!id)throw Error('Select a screened subject');
+ updateEnrollmentReadiness();
+ if($('tw-enroll-save').disabled)
+  throw Error($('tw-enrollment-readiness').textContent||'Enrollment prerequisites not met');
  var r=await api('/api/trial/subjects/'+id+'/enroll',{method:'POST',body:JSON.stringify({
   enrolled_on:value('tw-enroll-date'),pcr_anchor_on:value('tw-anchor-date'),
   pcr_anchor_basis:value('tw-anchor-basis'),
@@ -697,23 +701,73 @@ async function loadEligibilityReview(){
  for(const el of document.querySelectorAll('[data-eligibility]'))el.value='';
  for(const id of ['tw-age','tw-anc','tw-platelets','tw-hb','tw-crcl','tw-cbc-date'])$(id).value='';
  $('tw-review-on').value=today();
- if(!sid)return;
+ window.cmvSavedEligibility={sid,assessment:null};
+ window.cmvEligibilityDirty=false;
+ if(!sid){updateEligibilityProgress();updateEnrollmentReadiness();return;}
  const r=await api('/api/trial/subjects/'+sid+'/eligibility');
  if(request!==eligibilityRequest||sid!==n('tw-checklist-subject'))return;
  const e=r.eligibility;
- if(!e){prefillObjectiveEligibility();return;}
+ window.cmvSavedEligibility={sid,assessment:e||null};
+ if(!e){prefillObjectiveEligibility();updateEnrollmentReadiness();return;}
  for(const el of document.querySelectorAll('[data-eligibility]')){
   const v=e[el.dataset.eligibility]?.[el.dataset.key];el.value=typeof v==='boolean'?String(v):'';
  }
  const b=e.baseline||{};
  for(const [id,key] of Object.entries({'tw-age':'age_years','tw-anc':'anc_per_ul','tw-platelets':'platelets_per_ul','tw-hb':'hemoglobin_g_dl','tw-crcl':'crcl_cg_ml_min','tw-cbc-date':'baseline_cbc_on'}))$(id).value=b[key]??'';
  $('tw-review-on').value=e.reviewed_on||today();
- prefillObjectiveEligibility();updateEligibilityProgress();
+ prefillObjectiveEligibility();updateEligibilityProgress();updateEnrollmentReadiness();
 }
 for(const id of ['tw-checklist-subject','tw-screened'])$(id).onchange=()=>{void task('tw-status',async()=>{
  const sid=n(id);if(!sid)return;
  await selectParticipantSubject(sid);await selectEnrollmentPatient();
 });};
+/* Objective explanations are displayed from saved, attributable trial reviews.
+   A complete checklist is not necessarily an eligible checklist. */
+function reviewedEligibilityReasons(e){
+ if(!e)return [];
+ const inclusion=e.inclusion||{},exclusion=e.exclusion||{};
+ return [
+  ...Object.entries(inclusion).filter(([,v])=>v!==true)
+     .map(([k])=>'Inclusion not met: '+(eligibilityItems?.inclusion?.[k]||k)),
+  ...Object.entries(exclusion).filter(([,v])=>v!==false)
+     .map(([k])=>'Exclusion present: '+(eligibilityItems?.exclusion?.[k]||k))
+ ];
+}
+function updateEnrollmentReadiness(){
+ const target=$('tw-enrollment-readiness'),button=$('tw-enroll-save');
+ if(!target||!button)return;
+ const sid=n('tw-screened'),subject=studySubjects.find(x=>x.id===sid);
+ const review=window.cmvSavedEligibility?.sid===sid?
+  window.cmvSavedEligibility.assessment:null;
+ const transplant=participantContext?.patient_id===selected?
+  participantContext.transplant_on:null;
+ const dateEntered=value('tw-enroll-date');
+ const days=transplant&&dateEntered?
+  Math.round((Date.parse(dateEntered+'T00:00:00Z')-Date.parse(transplant+'T00:00:00Z'))/86400000):null;
+ const blockers=[];
+ if(window.cmvEligibilityDirty)
+  blockers.push('Eligibility checklist contains unsaved edits. Validate and save the review before enrollment.');
+ if(review?.baseline?.is_eligible===false)
+   blockers.push('Saved checklist marked INELIGIBLE. '+reviewedEligibilityReasons(review).join('; '));
+ else if(!review)blockers.push('Signed protocol eligibility checklist has not been saved.');
+ if(days!==null&&Number.isFinite(days)&&(days<0||days>10))
+   blockers.push('Protocol timing conflict: enrollment is '+days+
+    ' days after transplantation; approved window is 0–10 days. Do not backdate to bypass this requirement.');
+ if(!subject){target.textContent='Select a screened participant.';button.disabled=true;return;}
+ if(blockers.length){
+  target.textContent=blockers.join(' ');
+  target.classList.add('err');
+  button.disabled=true;
+ }else{
+  target.textContent=review?.baseline?.is_eligible===true?
+   'Eligibility recorded as eligible. Review consent, transplant date and stratum before confirming enrollment.':
+   'Review and save the checklist first. Source verification and trial timing are checked by the server.';
+  target.classList.remove('err');
+  button.disabled=false;
+ }
+}
+for(const id of ['tw-enroll-date','tw-screened'])
+ $(id).addEventListener('change',updateEnrollmentReadiness);
 /* Full signed checklist retained, grouped for quick, accountable review. */
 function updateEligibilityProgress(){
  for(const group of ['inclusion','exclusion']){
@@ -729,6 +783,26 @@ function updateEligibilityProgress(){
  const status=$('tw-eligibility-progress');
  if(status)status.textContent=done+' of '+total+
   ' items assessed · verify all source records before approving eligibility.';
+ const issue=$('tw-eligibility-warning');
+ if(issue&&eligibilityItems){
+  const incl=Object.entries(eligibilityItems.inclusion).filter(([key])=>{
+   const control=[...document.querySelectorAll('[data-eligibility="inclusion"]')]
+    .find(el=>el.dataset.key===key);return control?.value==='false';
+  });
+  const excl=Object.entries(eligibilityItems.exclusion).filter(([key])=>{
+   const control=[...document.querySelectorAll('[data-eligibility="exclusion"]')]
+    .find(el=>el.dataset.key===key);return control?.value==='true';
+  });
+  const reasons=[...incl.map(([,label])=>'Inclusion not met: '+label),
+                ...excl.map(([,label])=>'Exclusion present: '+label)];
+  issue.textContent=reasons.length?
+   'Eligibility concerns: '+reasons.join('; ')+'. A completed checklist does not mean eligible.':
+   (done===total?'All items reviewed; confirm the signed source before saving.':'');
+  issue.classList.toggle('tw-checklist-ineligible',reasons.length>0);
+  if(window.cmvEligibilityDirty)
+   issue.textContent='Unsaved eligibility changes. Select “Validate complete eligibility checklist” before enrollment. '+
+    issue.textContent;
+ }
 }
 async function loadEligibilitySchema(){
  eligibilityItems=await api('/api/trial/eligibility-schema');
@@ -744,10 +818,14 @@ async function loadEligibilitySchema(){
  $('tw-eligibility-fields').innerHTML=
   '<p class="hint">Source-verified values are suggested where available. Review all clinical criteria explicitly.</p>'+
   '<div class="tw-eligibility-progress" id="tw-eligibility-progress" role="status"></div>'+
+  '<p class="hint" id="tw-eligibility-warning" role="status"></p>'+
   makeFields('inclusion',eligibilityItems.inclusion,'Inclusion criteria — all Yes')+
   makeFields('exclusion',eligibilityItems.exclusion,'Exclusion criteria — all No');
  for(const el of document.querySelectorAll('[data-eligibility]'))
-  el.addEventListener('change',()=>{el.dataset.autoChecked='';updateEligibilityProgress();});
+  el.addEventListener('change',()=>{
+   el.dataset.autoChecked='';window.cmvEligibilityDirty=true;
+   updateEligibilityProgress();updateEnrollmentReadiness();
+  });
  prefillObjectiveEligibility();updateEligibilityProgress();
 }
 /* Populate only deterministic eligibility values from recorded source measurements.
@@ -784,8 +862,16 @@ function prefillObjectiveEligibility(){
   set('inclusion','written_consent',subject.consent_recorded);
  updateEligibilityProgress();
 }
-for(const id of ['tw-age','tw-anc','tw-platelets','tw-hb','tw-crcl'])
+for(const id of ['tw-age','tw-anc','tw-platelets','tw-hb','tw-crcl']){
  $(id).addEventListener('input',prefillObjectiveEligibility);
+ $(id).addEventListener('input',()=>{
+  window.cmvEligibilityDirty=true;updateEligibilityProgress();updateEnrollmentReadiness();
+ });
+}
+for(const id of ['tw-cbc-date','tw-review-on'])
+ $(id).addEventListener('change',()=>{
+  window.cmvEligibilityDirty=true;updateEligibilityProgress();updateEnrollmentReadiness();
+ });
 $('tw-checklist-save').onclick=()=>{void task('tw-status',async()=>{
  if(!eligibilityItems)await loadEligibilitySchema();
  const subject=n('tw-checklist-subject');if(!subject)throw Error('Select a screened subject');
@@ -807,9 +893,17 @@ $('tw-checklist-save').onclick=()=>{void task('tw-status',async()=>{
    crcl_cg_ml_min:n('tw-crcl'),baseline_cbc_on:value('tw-cbc-date'),
    reviewed_on:value('tw-review-on')
   })});
+ window.cmvEligibilityDirty=false;
+ window.cmvSavedEligibility={sid:subject,assessment:{
+   inclusion:make('inclusion',eligibilityItems.inclusion),
+   exclusion:make('exclusion',eligibilityItems.exclusion),
+   baseline:{is_eligible:r.eligible===true}
+ }};
  notify('tw-status',r.eligible?
   'Eligible. Confirm enrollment below to generate the Study ID and proceed to randomization.':
-  'Not eligible. Enrollment and randomization are unavailable.');
+  'Ineligible: '+reviewedEligibilityReasons(window.cmvSavedEligibility.assessment).join('; ')+
+  '. Enrollment and randomization are unavailable.');
+ updateEnrollmentReadiness();
  if(r.eligible)openStudyStage(3);
  window.dispatchEvent(new Event('cmv:workflow-updated'));
  if(r.eligible&&!$('tw-progress-step-3'))$('tw-enroll-save').scrollIntoView({block:'center'});
