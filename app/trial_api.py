@@ -374,10 +374,17 @@ def save_eligibility_draft(subject_id:int,data:EligibilityDraftIn,
         try:s.commit()
         except IntegrityError:s.rollback();raise HTTPException(409,"Draft created in another tab; reload")
     else:
-        if draft.revision!=data.expected_revision:
-            raise HTTPException(409,"Draft changed in another tab; reload")
+        expected=data.expected_revision
+        if draft.revision!=expected:
+            # A prior user's signed review can supersede this older private
+            # draft. Starting a fresh draft may replace that stale copy,
+            # but never an actively edited concurrent draft.
+            reviewed=s.get(TrialEligibility,subject.id)
+            if expected is not None or not reviewed or reviewed.updated_at<draft.updated_at:
+                raise HTTPException(409,"Draft changed in another tab; reload")
+            expected=draft.revision
         changed=s.execute(update(TrialCRFDraft).where(
-            TrialCRFDraft.id==draft.id,TrialCRFDraft.revision==data.expected_revision)
+            TrialCRFDraft.id==draft.id,TrialCRFDraft.revision==expected)
             .values(payload=payload,updated_at=now(),
                     revision=TrialCRFDraft.revision+1))
         if changed.rowcount!=1:s.rollback();raise HTTPException(409,"Draft changed; reload")
