@@ -189,7 +189,7 @@ panel('crf','Structured eCRF and clinical logs',
  '<label id="tw-crf-reason-wrap" class="hide">Correction reason (briefly describe the change)<input id="tw-crf-reason" maxlength="500" placeholder="What was corrected? (minimum 8 characters)"></label>'+
  btn('Save draft','tw-crf-save')+' '+
  btn('Submit form','tw-crf-submit')+' '+
- btn('Cancel correction','tw-crf-cancel-edit')+
+ btn('Close editor','tw-crf-cancel-edit')+
  '<div class="study-card"><h3>Submitted forms and review states</h3>'+
  '<div id="tw-crf-entries"></div></div>'+
  '<div id="tw-crf-status" class="status hide"></div>'
@@ -261,6 +261,8 @@ loginPanelElement.insertAdjacentHTML('beforeend','<hr><h3>Activate individual st
  field('One-time activation token','tw-token')+
  '<label>Choose a private password<input type="password" id="tw-password" autocomplete="new-password"></label>'+
  btn('Activate account','tw-activate-save')+'<div id="tw-activate-status" class="status hide"></div>');
+for(const id of ['tw-eligibility-draft-save','tw-crf-save','tw-crf-cancel-edit'])
+ $(id).classList.add('secondary');
 // Dates from earlier clinical events must be entered from the actual source.
 // Default only contemporaneous actions; never silently fabricate a specimen or consent date.
 for(const id of ['tw-screen-date','tw-consent-date','tw-anchor-date','tw-collected',
@@ -1512,7 +1514,7 @@ async function beginCrfCorrection(row){
 }
 $('tw-crf-cancel-edit').onclick=()=>{void task('tw-crf-status',async()=>{
  currentCrfEntry=null;crfRender();await populateCrfLinkedIdentifiers();await crfRestoreDraft();
- notify('tw-crf-status','Correction cancelled. Submitted clinical record remains unchanged.');
+ notify('tw-crf-status','Editor closed. Submitted record unchanged; any autosaved private draft remains available.');
 });};
 $('tw-crf-entries').addEventListener('click',e=>{
  const edit=e.target.closest('button[data-crf-edit]');
