@@ -28,7 +28,7 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
  try{
   const page=await browser.newPage({viewport:{width:1280,height:900}});
   const errors=[],writes=[],drafts=new Map(),contextReads=[];let blinded=false,holdOldDraft=false,releaseOldDraft=null;
-  const eligibility=new Map(),allocations=new Map();let assignedFresh=false,holdSearchContext=false,releaseSearchContext=null;
+  const eligibility=new Map(),eligibilityDrafts=new Map(),allocations=new Map();let assignedFresh=false,holdSearchContext=false,releaseSearchContext=null;
   let holdOldPCR=false,releaseOldPCR=null,holdScreenedContext=false,releaseScreenedContext=null;
   let signedIn=false,courseFailures=0;
   const session=()=>({username:'synthetic-nurse',display_name:'Synthetic nurse',role:'nurse',
@@ -56,6 +56,23 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
     const data=route.request().postDataJSON();writes.push({p,body:data});
     const person=people.find(x=>x.id===data.patient_id);
     result={id:4,patient_id:person.id,cr_number:person.cr_number,screening_code:'TEST-SCREEN-4',status:'screened',enrolled_on:null,donor_type:data.donor_type,ratg_induction:data.ratg_induction,consent_recorded:!!data.consent_on,donor_cmv_igg:data.donor_cmv_igg,recipient_cmv_igg:data.recipient_cmv_igg};subjects.push(result);
+   }else if(p.endsWith('/eligibility-draft')){
+    const id=Number(p.split('/')[4]),draft=eligibilityDrafts.get(id);
+    if(method==='PUT'){
+     const data=route.request().postDataJSON();
+     if((data.expected_revision??null)!==(draft?.revision??null))
+      return route.fulfill({status:409,contentType:'application/json',
+       body:JSON.stringify({detail:'Draft revision conflict'})});
+     const revision=(draft?.revision||0)+1;
+     eligibilityDrafts.set(id,{payload:data.payload,revision});
+     result={revision,saved:true,not_a_signed_eligibility_review:true};
+    }else if(method==='DELETE'){
+     const expected=Number(url.searchParams.get('expected_revision'));
+     if(!draft||draft.revision!==expected)
+      return route.fulfill({status:409,contentType:'application/json',
+       body:JSON.stringify({detail:'Draft revision mismatch'})});
+     eligibilityDrafts.delete(id);result={ok:true};
+    }else result={draft:draft||null,status:'private_working_draft_not_signed_eligibility'};
    }else if(p.endsWith('/eligibility')){
     const id=Number(p.split('/')[4]);
     if(method==='PUT'){
@@ -343,10 +360,20 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
 
   assert.equal(await page.inputValue('[data-eligibility="inclusion"][data-key="written_consent"]'),'true',
    'Recorded signed consent is suggested without guessing unknown results');
+  await page.fill('#tw-age','50');
+  await page.fill('#tw-eligibility-notes','Unfinished synthetic review - retain the entered value');
+  await page.evaluate(async()=>{await tab('dashboard');await tab('study');});
+  await page.waitForFunction(()=>$('tw-age').value==='50'&&
+   $('tw-eligibility-notes').value.includes('Unfinished synthetic'));
+  assert.match(await page.textContent('#tw-eligibility-draft-status'),/draft restored/i);
+  assert.equal(eligibilityDrafts.get(4)?.payload.fields.age_years,'50',
+   'Unfinished eligibility stays in the per-user draft, not signed trial eligibility');
+  assert.equal(eligibility.has(4),false);
   for(const [id,v] of Object.entries({'tw-age':'50','tw-anc':'3000','tw-platelets':'180000','tw-hb':'11','tw-crcl':'68',}))await page.fill('#'+id,v);
   await page.fill('#tw-cbc-date','2026-10-02');await page.fill('#tw-review-on','2026-10-02');
   for(const el of await page.locator('[data-eligibility]').all())await el.selectOption(await el.getAttribute('data-eligibility')==='inclusion'?'true':'false');
   await page.click('#tw-checklist-save');await page.waitForFunction(()=>$('tw-status').textContent.includes('Eligible.'));
+  assert.equal(eligibilityDrafts.has(4),false,'Signed eligibility clears the private working draft');
   // Saving eligibility advances to enrollment; reopening an earlier step is
   // always available when a source measurement needs correction.
   await page.locator('#tw-progress-step-2 > summary').click();
