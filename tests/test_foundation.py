@@ -1844,6 +1844,12 @@ def test_partial_eligibility_draft_is_private_editable_and_never_signed():
             'baseline_cbc_on':'2026-10-02','reviewed_on':'2026-10-02'})
         assert signed.status_code==200,signed.text
         assert consultant.get(url).json()['draft'] is None
+    with TestClient(app) as scientist:
+        h=auth(scientist,'syntheticscreener','SyntheticScreenerPassword123!')
+        assert scientist.get(url).json()['draft'] is None, 'Signed review must supersede old staff drafts'
+        fresh=scientist.put(url,headers=h,json={'baseline':{
+            'review_notes':'New partial entry after signed review source update'}})
+        assert fresh.status_code==200,fresh.text
     with TestClient(app) as pi:
         h=auth(pi,'eligdraftpi','DraftPiPassword123456!')
         enrolled=pi.post(f'/api/trial/subjects/{sid}/enroll',headers=h,json={
