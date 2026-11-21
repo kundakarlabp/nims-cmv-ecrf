@@ -1591,3 +1591,82 @@ def test_enrollment_ineligibility_and_transplant_window_report_specific_reasons(
         assert late.status_code==422
         assert '0–10 days' in late.text
         assert '51 days' in late.text
+
+
+def test_serostatus_correction_requires_source_revalidation_and_audits_notes():
+    """A source correction must never silently convert an old review to eligible."""
+    from app.trial_api import INCLUSION_ITEMS, EXCLUSION_ITEMS
+    with TestClient(app) as admin:
+        h=auth(admin)
+        _,sid=setup_synthetic_trial(admin,h)
+        assert admin.post('/api/users',headers=h,json={
+            'username':'testsourcecorrectionpi',
+            'display_name':'Synthetic source correction PI','role':'pi',
+            'password':'TestSourceCorrection123!'}).status_code==200
+    url=f'/api/trial/subjects/{sid}/screening-serostatus'
+    with TestClient(app) as consultant:
+        h=auth(consultant,'testeligibilityconsultant','EligibilityTestPassword123!')
+        before=consultant.get(f'/api/trial/subjects/{sid}/eligibility').json()['eligibility']
+        assert before['baseline']['is_eligible'] is True
+        no_source=consultant.put(url,headers=h,json={
+            'donor_cmv_igg':'unknown','correction_reason':'New serology report verified'})
+        assert no_source.status_code==422
+        same=consultant.put(url,headers=h,json={
+            'donor_cmv_igg':'positive','source_reference':'LAB-001',
+            'correction_reason':'Reconcile duplicate source entry'})
+        assert same.status_code==422
+        changed=consultant.put(url,headers=h,json={
+            'donor_cmv_igg':'unknown','source_reference':'LAB-001',
+            'correction_reason':'Original sample source was uncertain'})
+        assert changed.status_code==200,changed.text
+        assert changed.json()['eligibility_revalidation_required'] is True
+        after=consultant.get(f'/api/trial/subjects/{sid}/eligibility').json()['eligibility']
+        assert after['baseline']['requires_source_reverification'] is True
+        assert after['baseline']['is_eligible'] is False
+        incompatible_review={
+            'inclusion':{k:True for k in INCLUSION_ITEMS},
+            'exclusion':{k:False for k in EXCLUSION_ITEMS},
+            'age_years':50,'anc_per_ul':3000,'platelets_per_ul':180000,
+            'hemoglobin_g_dl':11,'crcl_cg_ml_min':68,
+            'baseline_cbc_on':'2026-10-02','reviewed_on':'2026-10-02'}
+        rejected=consultant.put(f'/api/trial/subjects/{sid}/eligibility',
+             headers=h,json=incompatible_review)
+        assert rejected.status_code==422
+        assert 'Serostatus' in rejected.text
+    with TestClient(app) as pi:
+        h=auth(pi,'testsourcecorrectionpi','TestSourceCorrection123!')
+        denied=pi.post(f'/api/trial/subjects/{sid}/enroll',headers=h,json={
+            'enrolled_on':'2026-10-03','pcr_anchor_on':'2026-10-01',
+            'pcr_anchor_basis':'transplant_date',
+            'reviewed_eligibility_and_consent':True,'approved_visit_anchor':True})
+        assert denied.status_code==422
+    with TestClient(app) as consultant:
+        h=auth(consultant,'testeligibilityconsultant','EligibilityTestPassword123!')
+        corrected=consultant.put(url,headers=h,json={
+            'donor_cmv_igg':'positive','source_reference':'LAB-002',
+            'correction_reason':'Correct result verified on the original laboratory source'})
+        assert corrected.status_code==200,corrected.text
+        final=consultant.put(f'/api/trial/subjects/{sid}/eligibility',
+            headers=h,json={**incompatible_review,
+                'nephrology_unit':'NP2',
+                'review_notes':'Source verified with original laboratory report',
+                'signed_source_reference':'LAB-002'})
+        assert final.status_code==200,final.text
+        assert final.json()['eligible'] is True
+        persisted=consultant.get(f'/api/trial/subjects/{sid}/eligibility').json()['eligibility']
+        baseline=persisted['baseline']
+        assert baseline['nephrology_unit']=='NP2'
+        assert baseline['review_notes']=='Source verified with original laboratory report'
+        assert baseline['signed_source_reference']=='LAB-002'
+        assert 'requires_source_reverification' not in baseline
+    with TestClient(app) as pi:
+        h=auth(pi,'testsourcecorrectionpi','TestSourceCorrection123!')
+        enrolled=pi.post(f'/api/trial/subjects/{sid}/enroll',headers=h,json={
+            'enrolled_on':'2026-10-03','pcr_anchor_on':'2026-10-01',
+            'pcr_anchor_basis':'transplant_date',
+            'reviewed_eligibility_and_consent':True,'approved_visit_anchor':True})
+        assert enrolled.status_code==200,enrolled.text
+        refused=pi.put(url,headers=h,json={
+            'donor_cmv_igg':'unknown','source_reference':'LAB-003',
+            'correction_reason':'Attempt to alter allocation baseline'})
+        assert refused.status_code==409
