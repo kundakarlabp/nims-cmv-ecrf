@@ -71,6 +71,9 @@ CRF_FORMS={
     "actual_visit_on":field("Actual visit date","date",True),
     "nephrology_unit":field("Nephrology unit (optional)","select",choices=["NP1","NP2","NP3"]),
     "pcr_specimen_code":field("Linked protocol CMV PCR specimen code"),
+    "pcr_sample_on":field("Protocol PCR sample date (from collection source, if obtained)","date"),
+    "pcr_study_funded":field("Protocol PCR study-funded?","select",choices=YNUNK),
+    "pcr_funding_source_reference":field("PCR funding/source reference (if known)"),
     "cmv_signs_symptoms":field("CMV symptoms/signs","textarea"),
     "hemoglobin_g_dl":field("Hemoglobin (g/dL)","number",minimum=0),
     "wbc_per_ul":field("WBC (/µL)","number",minimum=0),
@@ -125,7 +128,8 @@ CRF_FORMS={
     "alternative_diagnosis":field("Alternative diagnosis considered","textarea"),
     "adjudication_packet_sent":field("De-identified adjudication packet sent?","select",choices=YN),
     "packet_sent_on":field("Packet sent date","date"),
-    "blinded_adjudication":field("Blinded EAC result","select",choices=["pending","qualifying_dnaemia","cmv_syndrome","tissue_invasive_disease","does_not_qualify"]),
+    "blinded_adjudication":field("Blinded EAC result (transcribe signed committee determination only)","select",choices=["pending","qualifying_dnaemia","cmv_syndrome","tissue_invasive_disease","does_not_qualify"]),
+    "eac_decision_source_reference":field("Signed independent EAC decision reference (not a digital committee signature)"),
     "recurrent_event":field("Recurrent CMV event?","select",choices=YNUNK),
     "source_reference":field("CMV event source reference")
    }
@@ -175,7 +179,7 @@ CRF_FORMS={
     "category":field("Category"),
     "description":field("Description / reason","textarea",True),
     "corrective_action":field("Corrective action","textarea"),
-    "major_efficacy_affecting":field("Major efficacy-affecting?","select",choices=YNUNK),
+    "major_efficacy_affecting":field("Potential major efficacy-affecting deviation? PI/statistician to finalize","select",choices=YNUNK),
     "reported_to":field("Reported to IEC/DSMB?","textarea"),
     "source_reference":field("Source document")
    }
@@ -209,7 +213,7 @@ CRF_FORMS={
     "graft_status":field("Graft status","select",choices=["functioning","failed","unknown"]),
     "final_creatinine_mg_dl":field("Final creatinine (mg/dL)","number",minimum=0),
     "final_egfr_ml_min_173m2":field("Final eGFR","number",minimum=0),
-    "final_reviewer":field("Final reviewer identity / signature source"),
+    "final_reviewer":field("Final reviewer name / signed source reference (not electronic sign-off)"),
     "final_review_on":field("Final review date","date")
    }
  }
