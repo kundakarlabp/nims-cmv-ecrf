@@ -745,10 +745,10 @@ async function updatePatientBanner(){
   const p=patient.patient||{},s=clinical.subject;
   document.getElementById('tw-banner-name').textContent=p.name||'Patient';
   document.getElementById('tw-banner-identifier').textContent='CR '+(p.cr_number||'—')+
-   (s?.study_code?' · '+s.study_code:s?.screening_code?' · '+s.screening_code:'');
+   (s?.screening_code?' · Screening '+s.screening_code:'')+(s?.study_code?' · Study '+s.study_code:'');
   document.getElementById('tw-banner-status').textContent=
    clinical.allocation?.randomized?'Randomized':
-   (s?s.status.replaceAll('_',' '):'Registered');
+   (s?recruitmentLabel(s):'Registered');
   document.getElementById('tw-patient-meta').textContent='Transplant: '+(p.transplant_date||'not recorded')+
    (s?.donor_type?' · Donor: '+s.donor_type:'');
  }catch(e){if(request===bannerRequest)document.getElementById('tw-banner-status').textContent='Context unavailable';}
@@ -773,14 +773,15 @@ async function updateWorkflow(){
   if(request!==workflowRequest||selected!==id||activeTab!=='study')return;
   const eligible=eligibility?.eligibility?.baseline?.is_eligible===true;
   const checked=Boolean(eligibility?.eligibility);
+  const ineligible=s?.screening_disposition==='ineligible'||(checked&&!eligible&&!eligibility?.eligibility?.baseline?.requires_source_reverification);
   const randomized=Boolean(clinical.allocation?.randomized);
   const status=[
    {complete:!!s&&!!s.consent_recorded&&s.status!=='consent_declined',
     blocked:s?.status==='consent_declined',
     label:s?.status==='consent_declined'?'Consent declined':s?.consent_recorded?'Consent recorded':s?'Consent pending':'Not started'},
-   {complete:eligible,blocked:checked&&!eligible,label:eligible?'Confirmed':checked?'Not eligible':'Pending'},
-   {complete:!!s?.enrolled_on,blocked:s?.status==='consent_declined',label:s?.enrolled_on?'Enrolled':'Pending'},
-   {complete:randomized,blocked:s?.status==='consent_declined',label:randomized?'Randomized':'Pending'}
+   {complete:eligible,blocked:ineligible,label:eligible?'Confirmed':ineligible?'Ineligible':'Pending review'},
+   {complete:!!s?.enrolled_on,blocked:ineligible||s?.status==='consent_declined',label:s?.enrolled_on?'Enrolled':ineligible?'Not applicable':'Pending'},
+   {complete:randomized,blocked:ineligible||s?.status==='consent_declined',label:randomized?'Randomized':ineligible?'Not applicable':'Pending'}
   ];
   for(let i=0;i<steps.length;i++){
    const stage=status[i];
