@@ -544,7 +544,8 @@ def patients(q:str='',limit:int=50,u:AuthContext=Depends(current),s:Session=Depe
         else:
             st=st.where(Patient.name.ilike('%'+q.strip()+'%') |
                 Patient.cr_number.ilike('%'+q.strip()+'%') |
-                Patient.study_id.ilike('%'+q.strip()+'%'))
+                Patient.study_id.ilike('%'+q.strip()+'%') |
+                Patient.id.in_(select(TrialSubject.patient_id).where(TrialSubject.screening_code.ilike('%'+q.strip()+'%'))))
     ps=s.scalars(st.order_by(Patient.created_at.desc()).limit(limit)).all()
     return [{'id':p.id,'cr_number':None if restricted else p.cr_number,
              'name':None if restricted else p.name,'study_id':p.study_id,
