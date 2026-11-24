@@ -759,6 +759,16 @@ window.choose=async function(id){
 };
 
 let bannerRequest=0,workflowRequest=0,lastPatient=null,lastKey=null,lastHistoricalState=null;
+window.cmvRenderTrialCompletion=function(clinical){
+ if(!clinical||clinical.patient_id!==selected||activeTab!=='study')return;
+ const s=clinical.subject,complete=Boolean(s?.enrolled_on&&clinical.allocation?.randomized);
+ completedTrial.classList.toggle('hide',!complete);
+ historicalTrial.classList.toggle('tw-in-progress',!complete);
+ const historyKey=String(selected)+':'+complete;
+ if(lastHistoricalState!==historyKey){historicalTrial.open=!complete;lastHistoricalState=historyKey;}
+ subButtons.study.textContent=complete?'Trial summary':'Start trial';
+ if(complete)document.getElementById('tw-completed-title').textContent=(s.study_code||'Study participant')+' · Randomized';
+};
 async function updatePatientBanner(){
  const id=selected,request=++bannerRequest;
  if(!id){
@@ -805,6 +815,8 @@ async function updateWorkflow(){
  }
  try{
   const clinical=await api('/api/trial/crf/patients/'+encodeURIComponent(id)+'/context');
+  if(request!==workflowRequest||selected!==id||activeTab!=='study')return;
+  window.cmvRenderTrialCompletion(clinical);
   const s=clinical.subject;
   const eligibility=s?await api('/api/trial/subjects/'+s.id+'/eligibility'):null;
   if(request!==workflowRequest||selected!==id||activeTab!=='study')return;
@@ -838,19 +850,7 @@ async function updateWorkflow(){
   document.getElementById('tw-next-id').classList.toggle('done',!!s?.study_code);
   document.getElementById('tw-next-pcr').classList.toggle('done',!!s?.enrolled_on);
   document.getElementById('tw-next-rand').classList.toggle('done',randomized);
-  const complete=Boolean(s?.enrolled_on&&randomized);
-  completedTrial.classList.toggle('hide',!complete);
-  historicalTrial.classList.toggle('tw-in-progress',!complete);
-  const historyKey=String(id)+':'+complete;
-  if(lastHistoricalState!==historyKey){
-   historicalTrial.open=!complete;
-   lastHistoricalState=historyKey;
-  }
-  subButtons.study.textContent=complete?'Trial summary':'Start trial';
-  if(complete){
-   document.getElementById('tw-completed-title').textContent=
-    (s.study_code||'Study participant')+' · Randomized';
-  }
+  window.cmvRenderTrialCompletion(clinical);
   const key=(s?.id||'none')+':'+s?.status+':'+eligible+':'+randomized;
   if(lastPatient!==id||lastKey!==key){
    let next=status.findIndex(x=>!x.complete&&!x.blocked);
