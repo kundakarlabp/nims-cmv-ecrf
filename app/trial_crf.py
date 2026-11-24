@@ -167,7 +167,7 @@ def patient_context(patient_id:str,u:AuthContext=Depends(current),s:Session=Depe
     if u.role in {"pi","consultant","scientist"} or u.pi_authorized or u.workspace_full_access:
         meta=s.get(TrialScreeningMeta,subject.id)
         result["screening"]={"version":screening_version(subject,meta),"consent_on":subject.consent_on,"consent_version":subject.consent_version,
-            "screening_note":subject.screening_note,"metadata":as_dict(meta) if meta else {}}
+            "screening_note":subject.screening_note,"disposition_reason":subject.discontinuation_reason,"metadata":as_dict(meta) if meta else {}}
     return result
 
 @router.get("/subjects/{subject_id}/timeline")
