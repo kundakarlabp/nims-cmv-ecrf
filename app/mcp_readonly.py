@@ -259,6 +259,7 @@ def trial_workflow_status(identifier, u, s):
         "subject_id": subject.id,
         "study_code": subject.study_code,
         "screening_code": subject.screening_code,
+        "recruitment_disposition": trial_api.screening_disposition(subject, eligible),
         "enrollment": {
             "status": subject.status,
             "completed": subject.enrolled_on is not None,
