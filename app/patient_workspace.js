@@ -375,6 +375,22 @@ switchPatientButton.onclick=()=>{
  finder.focus();finder.select();
 };
 banner.appendChild(switchPatientButton);
+const archivePatientButton=document.createElement('button');
+archivePatientButton.type='button';archivePatientButton.id='tw-archive-patient';
+archivePatientButton.textContent='Archive erroneous record';archivePatientButton.className='secondary hide';
+banner.appendChild(archivePatientButton);
+archivePatientButton.onclick=()=>{void task('tw-status',async()=>{
+ const id=selected;if(!id)return;
+ const r=await api('/api/patients/'+encodeURIComponent(id));
+ if(selected!==id)return;
+ const p=r.patient;
+ const reason=window.prompt('Reason for archiving this erroneous or duplicate patient record (not a genuine screening failure)');
+ if(!reason||reason.trim().length<8)return;
+ if(!confirm('Archive this exact CR '+p.cr_number+'? Its audit history remains; it will leave active lists.'))return;
+ await api('/api/assistant/patients/'+encodeURIComponent(id)+'/archive-erroneous',{
+  method:'POST',body:JSON.stringify({expected_revision:p.revision,expected_cr_number:p.cr_number,reason:reason.trim(),confirm_archive:true})});
+ if(selected===id){clearParticipant();await loadPatients();await loadSubjects();await tab('dashboard');await updatePatientBanner();}
+});};
 const subnav=document.createElement('nav');subnav.id='tw-patient-subnav';
 subnav.setAttribute('aria-label','Patient workflow');
 const subButtons={};
@@ -425,6 +441,26 @@ screeningNotesBox.id='tw-screening-notes';screeningNotesBox.rows=3;
 screeningNotesBox.maxLength=1000;screeningNotesBox.placeholder='Clarifications from the recorded screening source';
 screeningNotes.appendChild(screeningNotesBox);
 moreScreening.appendChild(screeningNotes);
+const decisionBox=document.createElement('div');decisionBox.className='study-card';
+decisionBox.innerHTML='<p id="tw-screening-disposition" class="hint">Select a screened patient</p>'+
+ '<button id="tw-mark-ineligible" class="secondary hide" type="button">Mark ineligible</button> '+
+ '<button id="tw-reopen-screening" class="secondary hide" type="button">Reopen screening</button>';
+screeningCard.appendChild(decisionBox);
+for(const [id,route,label] of [['tw-mark-ineligible','mark-ineligible','document ineligibility'],['tw-reopen-screening','reopen-screening','reopen screening']]){
+ document.getElementById(id).onclick=()=>{void task('tw-status',async()=>{
+  const p=selected,s=participantContext?.patient_id===p?participantContext.subject:null;
+  if(!s)throw Error('Select the exact screening record');
+  const reason=window.prompt('Document the reason to '+label);
+  if(!reason||reason.trim().length<5)return;
+  if(!confirm('Confirm '+label+' for '+s.screening_code+'? No allocation will be changed.'))return;
+  await saveEligibilityDraftNow();
+  await api('/api/trial/subjects/'+s.id+'/'+route,{method:'POST',body:JSON.stringify({reason:reason.trim(),confirmed:true})});
+  if(selected!==p)return;
+  await loadSubjects();await selectParticipantSubject(s.id);await selectEnrollmentPatient();
+  window.dispatchEvent(new Event('cmv:workflow-updated'));
+  notify('tw-status','Screening disposition saved.');
+ });};
+}
 const enrollmentCard=steps[2].querySelector('.study-card');
 const enrollmentNotice=document.createElement('div');
 enrollmentNotice.id='tw-enrollment-readiness';enrollmentNotice.className='status';
@@ -723,13 +759,23 @@ window.choose=async function(id){
 };
 
 let bannerRequest=0,workflowRequest=0,lastPatient=null,lastKey=null,lastHistoricalState=null;
+window.cmvRenderTrialCompletion=function(clinical){
+ if(!clinical||clinical.patient_id!==selected||activeTab!=='study')return;
+ const s=clinical.subject,complete=Boolean(s?.enrolled_on&&clinical.allocation?.randomized);
+ completedTrial.classList.toggle('hide',!complete);
+ historicalTrial.classList.toggle('tw-in-progress',!complete);
+ const historyKey=String(selected)+':'+complete;
+ if(lastHistoricalState!==historyKey){historicalTrial.open=!complete;lastHistoricalState=historyKey;}
+ subButtons.study.textContent=complete?'Trial summary':'Start trial';
+ if(complete)document.getElementById('tw-completed-title').textContent=(s.study_code||'Study participant')+' · Randomized';
+};
 async function updatePatientBanner(){
  const id=selected,request=++bannerRequest;
  if(!id){
   document.getElementById('tw-banner-name').textContent='Select a patient';
   document.getElementById('tw-banner-identifier').textContent='Search by hospital CR, name or study ID below.';
   document.getElementById('tw-banner-status').textContent='Not selected';
-  document.getElementById('tw-patient-meta').textContent='';return;
+  document.getElementById('tw-patient-meta').textContent='';archivePatientButton.classList.add('hide');return;
  }
  try{
   // IT administrators can use the registry, but should not read clinical
@@ -743,12 +789,13 @@ async function updatePatientBanner(){
   ]);
   if(selected!==id||request!==bannerRequest)return;
   const p=patient.patient||{},s=clinical.subject;
+  archivePatientButton.classList.toggle('hide',!['admin','pi','consultant','scientist'].includes(clinicalRole)||!!p.study_id||!!s?.enrolled_on||!!clinical.allocation?.randomized||!p.cr_number);
   document.getElementById('tw-banner-name').textContent=p.name||'Patient';
   document.getElementById('tw-banner-identifier').textContent='CR '+(p.cr_number||'—')+
-   (s?.study_code?' · '+s.study_code:s?.screening_code?' · '+s.screening_code:'');
+   (s?.screening_code?' · Screening '+s.screening_code:'')+(s?.study_code?' · Study '+s.study_code:'');
   document.getElementById('tw-banner-status').textContent=
    clinical.allocation?.randomized?'Randomized':
-   (s?s.status.replaceAll('_',' '):'Registered');
+   (s?recruitmentLabel(s):'Registered');
   document.getElementById('tw-patient-meta').textContent='Transplant: '+(p.transplant_date||'not recorded')+
    (s?.donor_type?' · Donor: '+s.donor_type:'');
  }catch(e){if(request===bannerRequest)document.getElementById('tw-banner-status').textContent='Context unavailable';}
@@ -768,19 +815,26 @@ async function updateWorkflow(){
  }
  try{
   const clinical=await api('/api/trial/crf/patients/'+encodeURIComponent(id)+'/context');
+  if(request!==workflowRequest||selected!==id||activeTab!=='study')return;
+  window.cmvRenderTrialCompletion(clinical);
   const s=clinical.subject;
   const eligibility=s?await api('/api/trial/subjects/'+s.id+'/eligibility'):null;
   if(request!==workflowRequest||selected!==id||activeTab!=='study')return;
   const eligible=eligibility?.eligibility?.baseline?.is_eligible===true;
+  const roleName=document.getElementById('currentRole').textContent.trim();
+  document.getElementById('tw-mark-ineligible').classList.toggle('hide',!s||s.status!=='screened'||eligible||!['pi','consultant','scientist'].includes(roleName));
+  document.getElementById('tw-reopen-screening').classList.toggle('hide',s?.status!=='ineligible'||!['pi','consultant'].includes(roleName));
+  document.getElementById('tw-screening-disposition').textContent=recruitmentLabel(s)+(clinical.screening?.disposition_reason?' · '+clinical.screening.disposition_reason:'');
   const checked=Boolean(eligibility?.eligibility);
+  const ineligible=s?.screening_disposition==='ineligible'||(checked&&!eligible&&!eligibility?.eligibility?.baseline?.requires_source_reverification);
   const randomized=Boolean(clinical.allocation?.randomized);
   const status=[
    {complete:!!s&&!!s.consent_recorded&&s.status!=='consent_declined',
     blocked:s?.status==='consent_declined',
     label:s?.status==='consent_declined'?'Consent declined':s?.consent_recorded?'Consent recorded':s?'Consent pending':'Not started'},
-   {complete:eligible,blocked:checked&&!eligible,label:eligible?'Confirmed':checked?'Not eligible':'Pending'},
-   {complete:!!s?.enrolled_on,blocked:s?.status==='consent_declined',label:s?.enrolled_on?'Enrolled':'Pending'},
-   {complete:randomized,blocked:s?.status==='consent_declined',label:randomized?'Randomized':'Pending'}
+   {complete:eligible,blocked:ineligible,label:eligible?'Confirmed':ineligible?'Ineligible':'Pending review'},
+   {complete:!!s?.enrolled_on,blocked:ineligible||s?.status==='consent_declined',label:s?.enrolled_on?'Enrolled':ineligible?'Not applicable':'Pending'},
+   {complete:randomized,blocked:ineligible||s?.status==='consent_declined',label:randomized?'Randomized':ineligible?'Not applicable':'Pending'}
   ];
   for(let i=0;i<steps.length;i++){
    const stage=status[i];
@@ -796,19 +850,7 @@ async function updateWorkflow(){
   document.getElementById('tw-next-id').classList.toggle('done',!!s?.study_code);
   document.getElementById('tw-next-pcr').classList.toggle('done',!!s?.enrolled_on);
   document.getElementById('tw-next-rand').classList.toggle('done',randomized);
-  const complete=Boolean(s?.enrolled_on&&randomized);
-  completedTrial.classList.toggle('hide',!complete);
-  historicalTrial.classList.toggle('tw-in-progress',!complete);
-  const historyKey=String(id)+':'+complete;
-  if(lastHistoricalState!==historyKey){
-   historicalTrial.open=!complete;
-   lastHistoricalState=historyKey;
-  }
-  subButtons.study.textContent=complete?'Trial summary':'Start trial';
-  if(complete){
-   document.getElementById('tw-completed-title').textContent=
-    (s.study_code||'Study participant')+' · Randomized';
-  }
+  window.cmvRenderTrialCompletion(clinical);
   const key=(s?.id||'none')+':'+s?.status+':'+eligible+':'+randomized;
   if(lastPatient!==id||lastKey!==key){
    let next=status.findIndex(x=>!x.complete&&!x.blocked);
@@ -819,6 +861,9 @@ async function updateWorkflow(){
  }catch(e){if(request===workflowRequest)document.getElementById('tw-result-1').textContent='Reload to check';}
 }
 function syncNavigation(){
+ const archive=document.getElementById('tw-archive-panel');
+ const mayArchive=['admin','pi','consultant','scientist'].includes(document.getElementById('currentRole').textContent.trim())&&!!csrf;
+ if(archive){archive.classList.toggle('hide',!mayArchive);if(!mayArchive)document.getElementById('tw-archive-list').replaceChildren();}
  const name=activeTab,isPatient=patientTabs.has(name);
  for(const [key,b] of Object.entries(mainButtons)){
   const match=key==='patients'?isPatient:key==='overview'?name==='dashboard':
@@ -878,6 +923,23 @@ const directoryLayout=document.createElement('div');
 directoryLayout.className='tw-directory-columns';
 directory.insertBefore(directoryLayout,directory.firstChild);
 directoryLayout.append(directoryFinder,registration);
+const archivePanel=document.createElement('details');archivePanel.className='hide';
+archivePanel.id='tw-archive-panel';archivePanel.innerHTML='<summary>Archived erroneous records</summary><p class="hint">Restoration retains all prior audit events.</p><button type="button" id="tw-archive-refresh" class="secondary">Load archive</button><div id="tw-archive-list"></div>';
+directoryFinder.appendChild(archivePanel);
+document.getElementById('tw-archive-refresh').onclick=()=>{void task('tw-status',async()=>{
+ const rows=await api('/api/assistant/archived-patients');
+ const target=document.getElementById('tw-archive-list');target.replaceChildren();
+ if(!rows.length){target.textContent='No archived records.';return;}
+ for(const p of rows){const row=document.createElement('div');row.className='event';const info=document.createElement('p');
+ info.textContent=p.cr_number+' · '+p.name+' · '+p.reason;row.appendChild(info);
+ const button=document.createElement('button');button.type='button';button.className='secondary';button.textContent='Restore record';
+ button.onclick=()=>{void task('tw-status',async()=>{
+  const reason=window.prompt('Reason for restoring CR '+p.cr_number);
+  if(!reason||reason.trim().length<8)return;
+  await api('/api/assistant/patients/'+encodeURIComponent(p.id)+'/restore-archived',{method:'POST',body:JSON.stringify({expected_revision:p.revision,expected_cr_number:p.cr_number,reason:reason.trim(),confirm_archive:true})});
+  await loadPatients();await loadSubjects();document.getElementById('tw-archive-refresh').click();
+ });};row.appendChild(button);target.appendChild(row);}
+});};
 directory.querySelector('h2')?.remove();
 for(const id of ['review','registry','entry','dose','due']){
  const node=document.getElementById(id);
@@ -918,8 +980,8 @@ const searchResult=document.getElementById('tw-context-find-results');
 const findLabel=searchInput.closest('label'),resultLabel=searchResult.closest('label');
 searchHeader.append(findLabel,resultLabel);
 header.insertBefore(searchHeader,document.getElementById('who'));
-searchInput.placeholder='Search patient name, CR number or study ID';
-searchInput.setAttribute('aria-label','Search patient name, CR number or study ID');
+searchInput.placeholder='Search name, CR, Screening ID or Study ID';
+searchInput.setAttribute('aria-label','Search patient name, CR number, Screening ID or Study ID');
 findLabel.firstChild.textContent='';
 resultLabel.firstChild.textContent='Select matching patient';
 const showMatches=()=>{searchHeader.classList.toggle('tw-searching',searchInput.value.trim().length>=3);};

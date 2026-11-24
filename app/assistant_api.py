@@ -14,14 +14,14 @@ from .main import (
     AuthContext, current, db, Patient, PatientIn, EntryIn, EntryEdit,
     create_patient, patient as get_patient_record, patients as search_registry,
     new_entry, edit_entry, permission, audit, as_dict, now, CLINICAL_MODE,
-    patient_archived, active_patient_filter, ARCHIVE_ACTION
+    patient_archived, active_patient_filter, ARCHIVE_ACTION, RESTORE_ACTION, latest_archive_event, normalized_screening_code
 )
 from .trial_api import subjects as find_subjects, find_subject
 from .trial_crf import (
     CRFDraftInput, CRFSubmitIn, CRFEditIn,
     save_draft, submit_crf, edit_crf, list_forms,
 )
-from .trial_models import TrialCRFEntry
+from .trial_models import TrialCRFEntry, TrialSubject, RandomizationSlot
 
 router = APIRouter(prefix="/api/assistant", tags=["authenticated-assistant-workflow"])
 
@@ -199,10 +199,12 @@ def exact_registry_match(identifier: str, s: Session) -> Patient:
     if len(value) < 2 or len(value) > 100:
         raise HTTPException(422, "Enter an exact patient name, CR number or study ID")
     lower = value.casefold()
+    code = normalized_screening_code(value) or value
     matches = s.scalars(select(Patient).where(active_patient_filter(),or_(
         func.lower(Patient.name) == lower,
         func.lower(Patient.cr_number) == lower,
-        func.lower(Patient.study_id) == lower
+        func.lower(Patient.study_id) == lower,
+        Patient.id.in_(select(TrialSubject.patient_id).where(func.lower(TrialSubject.screening_code)==code.casefold()))
     )).limit(2)).all()
     if not matches:
         raise HTTPException(404, "No exact patient match; search the registry")
@@ -252,6 +254,69 @@ def archive_registry_patient(patient_id: str, data: RegistryArchiveInput,
             "visible_in_active_registry":False,
             "audit_preserved":True}
 
+def registry_correction_role(u):
+    if u.role not in {"admin","pi","consultant","scientist"} and not u.pi_authorized:
+        raise HTTPException(403,"Named study staff permission required")
+
+@router.post("/patients/{patient_id}/archive-erroneous")
+def archive_erroneous_patient(patient_id:str,data:RegistryArchiveInput,
+                              u:AuthContext=Depends(current),s:Session=Depends(db)):
+    """Remove an erroneous registration, not a genuine screening failure."""
+    registry_correction_role(u)
+    if not data.confirm_archive:
+        raise HTTPException(422,"Confirm the record was entered in error")
+    p=s.scalar(select(Patient).where(Patient.id==patient_id).with_for_update())
+    if not p:raise HTTPException(404,"Registry record not found")
+    if p.cr_number!=data.expected_cr_number or p.revision!=data.expected_revision or patient_archived(s,p.id):
+        raise HTTPException(409,"Patient record changed; reload")
+    t=s.scalar(select(TrialSubject).where(TrialSubject.patient_id==p.id).with_for_update())
+    if p.study_id or (t and (t.study_code or t.enrolled_on or t.status not in {"screened","ineligible","consent_declined"})):
+        raise HTTPException(409,"Enrolled or otherwise closed trial records cannot be archived")
+    if t and s.scalar(select(RandomizationSlot.id).where(RandomizationSlot.subject_id==t.id).limit(1)):
+        raise HTTPException(409,"Randomized participants cannot be archived")
+    previous={"revision":p.revision,"subject_status":t.status if t else None}
+    p.revision+=1
+    if t:t.status="voided"
+    audit(s,u,ARCHIVE_ACTION,"patient",p.id,p.id,previous,
+          {"archived":True,"revision":p.revision,"subject_status":t.status if t else None},data.reason)
+    s.commit()
+    return {"patient_id":p.id,"archived":True,"audit_preserved":True}
+
+@router.get("/archived-patients")
+def archived_patients(u:AuthContext=Depends(current),s:Session=Depends(db)):
+    registry_correction_role(u)
+    rows=s.scalars(select(Patient).where(~active_patient_filter()).order_by(Patient.created_at.desc()).limit(350)).all()
+    result=[]
+    for p in rows:
+        event=s.scalar(latest_archive_event(p.id))
+        result.append({"id":p.id,"cr_number":p.cr_number,"name":p.name,"revision":p.revision,
+                       "archived_at":event.created_at,"reason":event.reason})
+    return result
+
+@router.post("/patients/{patient_id}/restore-archived")
+def restore_archived_patient(patient_id:str,data:RegistryArchiveInput,
+                             u:AuthContext=Depends(current),s:Session=Depends(db)):
+    registry_correction_role(u)
+    if not data.confirm_archive:raise HTTPException(422,"Confirm restoration")
+    p=s.scalar(select(Patient).where(Patient.id==patient_id).with_for_update())
+    if not p:raise HTTPException(404,"Registry record not found")
+    if p.cr_number!=data.expected_cr_number or p.revision!=data.expected_revision:
+        raise HTTPException(409,"Registry record changed; reload")
+    event=s.scalar(latest_archive_event(p.id))
+    if not event or event.action!=ARCHIVE_ACTION:
+        raise HTTPException(409,"Registry record is not archived")
+    t=s.scalar(select(TrialSubject).where(TrialSubject.patient_id==p.id).with_for_update())
+    old_status=(event.old_record or {}).get("subject_status")
+    if p.study_id or (t and (t.study_code or t.enrolled_on or t.status!="voided" or old_status not in {"screened","ineligible","consent_declined"})):
+        raise HTTPException(409,"Archived trial status needs investigator reconciliation")
+    previous={"archived":True,"revision":p.revision,"subject_status":t.status if t else None}
+    p.revision+=1
+    if t:t.status=old_status
+    audit(s,u,RESTORE_ACTION,"patient",p.id,p.id,previous,
+          {"archived":False,"revision":p.revision,"subject_status":t.status if t else None},data.reason)
+    s.commit()
+    return {"patient_id":p.id,"archived":False,"audit_preserved":True}
+
 
 class RegistryEntryByIdentifier(EntryIn):
     identifier: str = Field(min_length=2, max_length=100)
@@ -287,9 +352,10 @@ def exact_trial_subject(identifier: str, u: AuthContext, s: Session):
     candidates = find_subjects(q=identifier.strip(), limit=50,
                                before_id=None, u=u, s=s)
     key = identifier.strip().casefold()
+    screening_key = normalized_screening_code(identifier)
     exact = [candidate for candidate in candidates if any(
         isinstance(candidate.get(field), str)
-        and candidate[field].casefold() == key
+        and (candidate[field].casefold() == key or (field=='screening_code' and screening_key and candidate[field].casefold()==screening_key.casefold()))
         for field in ("study_code", "screening_code", "cr_number", "name")
     )]
     if not exact:
