@@ -8,6 +8,7 @@ from calendar import monthrange
 from datetime import date, datetime, timedelta
 from typing import Literal, Any
 import os
+import json
 import re
 import secrets
 import pyotp
@@ -197,6 +198,78 @@ def screen(data:ScreeningIn,u:AuthContext=Depends(current),s:Session=Depends(db)
     return subject_view(t)
 
 
+SCREENING_SOURCE_FIELDS=("screening_on","donor_cmv_igg","recipient_cmv_igg","donor_type",
+                         "ratg_induction","consent_on","consent_version","screening_note")
+SCREENING_META_FIELDS=("participant_initials","age_at_transplant","sex_at_birth","donor_relationship",
+                       "pis_version","consent_language","consent_obtained_by","signed_consent_source_ref")
+
+def screening_snapshot(t,meta):
+    source=as_dict(t)
+    details=as_dict(meta) if meta else {}
+    return {"source":{k:source[k] for k in SCREENING_SOURCE_FIELDS},
+            "metadata":{k:details.get(k) for k in SCREENING_META_FIELDS}}
+
+def screening_version(t,meta):
+    return sha(json.dumps(screening_snapshot(t,meta),sort_keys=True,separators=(",",":")))
+
+class ScreeningUpdateIn(ScreeningIn):
+    expected_version:str=Field(pattern=r"^[0-9a-f]{64}$")
+    correction_reason:str=Field(min_length=5,max_length=500)
+
+@router.put("/subjects/{subject_id}/screening")
+def update_screening(subject_id:int,data:ScreeningUpdateIn,u:AuthContext=Depends(current),s:Session=Depends(db)):
+    role(u,SCREENERS)
+    t=s.scalar(select(TrialSubject).where(TrialSubject.id==subject_id).with_for_update())
+    if not t:raise HTTPException(404,"Screening record not found")
+    eligible_patient(s,t.patient_id)
+    if t.patient_id!=data.patient_id or t.status!="screened" or t.study_code or t.enrolled_on:
+        raise HTTPException(409,"Only the exact never-enrolled screening record may be edited")
+    if data.screening_on>date.today() or (data.consent_on and data.consent_on>date.today()):
+        raise HTTPException(422,"Screening and consent dates cannot be in the future")
+    if bool(data.consent_on)!=bool(data.consent_version):
+        raise HTTPException(422,"Document signed consent date and version together")
+    if data.donor_relationship and (data.donor_type=="unknown" or
+            (data.donor_relationship=="deceased")!=(data.donor_type=="deceased")):
+        raise HTTPException(422,"Donor relationship conflicts with living/deceased stratum")
+    meta=s.get(TrialScreeningMeta,t.id)
+    if screening_version(t,meta)!=data.expected_version:
+        raise HTTPException(409,"Screening changed since loading; reload and reconcile")
+    old=screening_snapshot(t,meta)
+    if not meta:
+        meta=TrialScreeningMeta(subject_id=t.id);s.add(meta)
+    for key in SCREENING_SOURCE_FIELDS:
+        setattr(t,key,getattr(data,key))
+    for key in SCREENING_META_FIELDS:
+        # Do not erase source-link metadata that was not supplied by the editor.
+        if key in data.model_fields_set:
+            setattr(meta,key,getattr(data,key))
+    meta.icf_version=t.consent_version
+    updated=screening_snapshot(t,meta)
+    if updated==old:
+        return dict(subject_view(t),screening_version=screening_version(t,meta))
+    check=s.get(TrialEligibility,t.id)
+    material=any(old["source"][k]!=updated["source"][k] for k in SCREENING_SOURCE_FIELDS if k!="screening_note")
+    material=material or any(old["metadata"][k]!=updated["metadata"][k] for k in
+                             ("age_at_transplant","sex_at_birth","donor_relationship"))
+    if check and material:
+        before=as_dict(check)
+        baseline=dict(check.baseline)
+        baseline["requires_source_reverification"]=True
+        baseline["is_eligible"]=False
+        if baseline.get("exception_review"):
+            prior=dict(baseline["exception_review"])
+            prior.update({"status":"source_changed_re_review_required","pi_decision":None,
+                          "pi_actor_id":None,"pi_reviewed_at":None})
+            baseline["exception_review"]=prior
+        check.baseline=baseline;check.updated_at=now()
+        audit(s,u,"eligibility_revalidation_required","trial_eligibility",str(t.id),t.patient_id,
+              before,as_dict(check),"Screening correction requires a fresh signed eligibility review")
+    audit(s,u,"screening_correction","trial_subject",str(t.id),t.patient_id,
+          old,updated,data.correction_reason)
+    s.commit()
+    return dict(subject_view(t),screening_version=screening_version(t,meta),
+                screening_disposition=screening_disposition(t,check))
+
 class ScreeningSerostatusCorrectionIn(BaseModel):
     """Amend a documented screening serology, never silently change eligibility."""
     donor_cmv_igg:Literal["positive","negative","unknown"]|None=None
@@ -248,7 +321,7 @@ def restricted_screening(subject_id:int,u:AuthContext=Depends(current),s:Session
     role(u,{"pi","consultant","scientist"})
     t=find_subject(s,subject_id)
     meta=s.get(TrialScreeningMeta,t.id)
-    return {"screening_code":t.screening_code,
+    return {"screening_code":t.screening_code,"screening_version":screening_version(t,meta),
         "screening":{"consent_on":t.consent_on,"consent_version":t.consent_version,
                      "screening_note":t.screening_note},
         "restricted":as_dict(meta) if meta else None,
@@ -279,7 +352,7 @@ def subjects(q:str="",limit:int=50,before_id:int|None=None,u:AuthContext=Depends
 @router.get("/subjects/{subject_id}")
 def subject(subject_id:int,u:AuthContext=Depends(current),s:Session=Depends(db)):
     t=find_subject(s,subject_id)
-    return subject_view(t)
+    return dict(subject_view(t),screening_disposition=screening_disposition(t,s.get(TrialEligibility,t.id)))
 
 
 # Exact inclusion/exclusion concepts transcribed from signed CRF v3.0
@@ -432,7 +505,9 @@ def eligibility_detail(subject_id:int,u:AuthContext=Depends(current),s:Session=D
 def eligibility_review(subject_id:int,data:EligibilityReviewIn,
     u:AuthContext=Depends(current),s:Session=Depends(db)):
     role(u,{"pi","consultant"})
-    t=find_subject(s,subject_id)
+    t=s.scalar(select(TrialSubject).where(TrialSubject.id==subject_id).with_for_update())
+    if not t:raise HTTPException(404,"Screening record not found")
+    eligible_patient(s,t.patient_id)
     if t.status!="screened":
         raise HTTPException(409,"Eligibility cannot be rewritten after enrollment")
     if set(data.inclusion)!=set(INCLUSION_ITEMS) or set(data.exclusion)!=set(EXCLUSION_ITEMS):
