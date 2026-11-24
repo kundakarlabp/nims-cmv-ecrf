@@ -93,6 +93,20 @@ def month_date(start, m):
     month=(start.month-1+m)%12+1
     return date(year,month,min(start.day,monthrange(year,month)[1]))
 
+def screening_disposition(subject, review=None):
+    """Recruitment decision distinct from lifecycle status and Study ID."""
+    if subject.status != "screened":
+        return subject.status
+    baseline = review.baseline if review and isinstance(review.baseline, dict) else {}
+    if baseline.get("requires_source_reverification"):
+        return "pending_review"
+    if baseline.get("is_eligible") is True:
+        return "eligible_pending_enrollment"
+    if baseline.get("is_eligible") is False:
+        return "ineligible"
+    return "pending_review"
+
+
 def subject_view(subject):
     return {
       "id":subject.id,"screening_code":subject.screening_code,"study_code":subject.study_code,
@@ -127,9 +141,9 @@ def pcr_view(row):
 class ScreeningIn(BaseModel):
     patient_id:str
     screening_on:date
-    donor_cmv_igg:Literal["positive","negative","unknown"]
-    recipient_cmv_igg:Literal["positive","negative","unknown"]
-    donor_type:Literal["living","deceased"]
+    donor_cmv_igg:Literal["positive","negative","unknown"]="unknown"
+    recipient_cmv_igg:Literal["positive","negative","unknown"]="unknown"
+    donor_type:Literal["living","deceased","unknown"]="unknown"
     ratg_induction:bool|None=None
     consent_on:date|None=None
     consent_version:str|None=Field(default=None,max_length=60)
@@ -155,7 +169,7 @@ def screen(data:ScreeningIn,u:AuthContext=Depends(current),s:Session=Depends(db)
     if bool(data.consent_on)!=bool(data.consent_version):
         raise HTTPException(422,"Document signed consent date and version together")
     if data.donor_relationship:
-        if (data.donor_relationship=="deceased")!=(data.donor_type=="deceased"):
+        if data.donor_type=="unknown" or (data.donor_relationship=="deceased")!=(data.donor_type=="deceased"):
             raise HTTPException(422,"Donor relationship conflicts with living/deceased stratum")
     # CRF A metadata may be completed later; signed consent date/version,
     # checked eligibility and positive serostatus still gate enrollment.
@@ -235,6 +249,8 @@ def restricted_screening(subject_id:int,u:AuthContext=Depends(current),s:Session
     t=find_subject(s,subject_id)
     meta=s.get(TrialScreeningMeta,t.id)
     return {"screening_code":t.screening_code,
+        "screening":{"consent_on":t.consent_on,"consent_version":t.consent_version,
+                     "screening_note":t.screening_note},
         "restricted":as_dict(meta) if meta else None,
         "scope":"Restricted source-link metadata; never show in monitoring or lab pharmacy views"}
 
@@ -244,17 +260,20 @@ def subjects(q:str="",limit:int=50,before_id:int|None=None,u:AuthContext=Depends
     # Join registry identity once so staff can find the same CR throughout the
     # workflow. Preserve strict-role masking outside the owner-managed workspace.
     restricted=u.role in {"microbiology","pharmacy","technician","monitor"} and not u.workspace_full_access
-    statement=select(TrialSubject,Patient).join(Patient,Patient.id==TrialSubject.patient_id).order_by(TrialSubject.id.desc())
+    statement=select(TrialSubject,Patient,TrialEligibility).join(Patient,Patient.id==TrialSubject.patient_id).outerjoin(TrialEligibility,TrialEligibility.subject_id==TrialSubject.id).order_by(TrialSubject.id.desc())
     if before_id is not None:statement=statement.where(TrialSubject.id<before_id)
     if q.strip():
         term="%"+q.strip()+"%"
+        normalized=re.fullmatch(r"NCMV-S-?(\d{1,9})",q.strip(),re.I)
+        screening_term=f"NCMV-S-{int(normalized.group(1)):05d}" if normalized else None
         match=TrialSubject.study_code.ilike(term) | TrialSubject.screening_code.ilike(term)
+        if screening_term: match=match | (TrialSubject.screening_code==screening_term)
         if not restricted:match=match | Patient.cr_number.ilike(term) | Patient.name.ilike(term)
         statement=statement.where(match)
     records=s.execute(statement.limit(limit)).all()
-    return [dict(subject_view(t),patient_id=p.id,
+    return [dict(subject_view(t),patient_id=p.id,screening_disposition=screening_disposition(t,e),
                  cr_number=None if restricted else p.cr_number,
-                 name=None if restricted else p.name) for t,p in records
+                 name=None if restricted else p.name) for t,p,e in records
             if (os.getenv("CLINICAL_DATA_ENABLED","false").lower()=="true" or eligible_patient(s,t.patient_id))]
 
 @router.get("/subjects/{subject_id}")
@@ -714,6 +733,7 @@ def enroll(subject_id:int,data:EnrollmentIn,u:AuthContext=Depends(current),s:Ses
         raise HTTPException(422,"Enrollment date cannot precede the documented eligibility review date.")
     if not (t.consent_on and t.consent_version and
             t.donor_cmv_igg=="positive" and t.recipient_cmv_igg=="positive" and
+            t.donor_type in {"living","deceased"} and
             t.ratg_induction is not None and data.reviewed_eligibility_and_consent and
             data.approved_visit_anchor):
         raise HTTPException(422,"Cannot enroll until eligibility, D+/R+, consent and scheduling are reviewed")
@@ -1220,8 +1240,13 @@ def roles(u:AuthContext=Depends(current)):
 
 @router.get("/overview")
 def overview(u:AuthContext=Depends(current),s:Session=Depends(db)):
-    subject_counts=dict(s.execute(select(TrialSubject.status,func.count())
-        .group_by(TrialSubject.status)).all())
+    subjects=s.execute(select(TrialSubject,TrialEligibility).outerjoin(TrialEligibility,TrialEligibility.subject_id==TrialSubject.id)).all()
+    subject_counts={}
+    recruitment_counts={}
+    for t,e in subjects:
+        subject_counts[t.status]=subject_counts.get(t.status,0)+1
+        disposition=screening_disposition(t,e)
+        recruitment_counts[disposition]=recruitment_counts.get(disposition,0)+1
     pcr_counts=dict(s.execute(select(PCRRecord.status,func.count())
         .group_by(PCRRecord.status)).all())
     scheduled=s.scalar(select(func.count(PCRRecord.id)).where(PCRRecord.attempt==1)) or 0
@@ -1236,7 +1261,7 @@ def overview(u:AuthContext=Depends(current),s:Session=Depends(db)):
     randomized=s.scalar(select(func.count(RandomizationSlot.id)).where(RandomizationSlot.subject_id.is_not(None))) or 0
     return {"randomized":randomized,"screened":s.scalar(select(func.count(TrialSubject.id))),
         "enrolled":subject_counts.get("enrolled",0),
-        "ever_enrolled":total_enrolled,"subject_status":subject_counts,
+        "ever_enrolled":total_enrolled,"subject_status":subject_counts,"recruitment_status":recruitment_counts,
         "pcr":pcr_counts,"protocol_pcr_per_subject":len(MONTHS),
         "scheduled_pcr_slots":scheduled,"verified_protocol_pcr_slots":verified,
         "pcr_completion_percent":round(verified*100/scheduled,1) if scheduled else 0,
