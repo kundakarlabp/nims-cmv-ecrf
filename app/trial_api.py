@@ -18,7 +18,7 @@ from sqlalchemy import select, func, update, delete, text
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from .main import (
-    Patient, User, LoginSession, AuthContext, current, db, audit, as_dict, now, sha, PH, ROLES
+    Patient, User, LoginSession, AuthContext, current, db, audit, as_dict, now, sha, PH, ROLES, patient_archived, active_patient_filter
 )
 from .trial_models import (
     TrialSubject, PCRRecord, DrugLot, DrugAuthorization, DrugDispense,
@@ -67,7 +67,7 @@ def role(u, allowed):
 
 def eligible_patient(s, patient_id):
     p=s.get(Patient,patient_id)
-    if not p: raise HTTPException(404,"Registry record not found")
+    if not p or patient_archived(s,patient_id): raise HTTPException(404,"Registry record not found")
     # Defence in depth: no real registration via the new study module in staging.
     if os.getenv("CLINICAL_DATA_ENABLED","false").lower()!="true":
         if not (p.cr_number.upper().startswith("TEST-") and p.name.lower().startswith("synthetic")):
@@ -162,6 +162,7 @@ class ScreeningIn(BaseModel):
 @router.post("/screening")
 def screen(data:ScreeningIn,u:AuthContext=Depends(current),s:Session=Depends(db)):
     role(u,SCREENERS)
+    s.scalar(select(Patient).where(Patient.id==data.patient_id).with_for_update())
     p=eligible_patient(s,data.patient_id)
     if data.screening_on>date.today():
         raise HTTPException(422,"Screening date cannot be in the future")
@@ -323,7 +324,7 @@ def restricted_screening(subject_id:int,u:AuthContext=Depends(current),s:Session
     meta=s.get(TrialScreeningMeta,t.id)
     return {"screening_code":t.screening_code,"screening_version":screening_version(t,meta),
         "screening":{"consent_on":t.consent_on,"consent_version":t.consent_version,
-                     "screening_note":t.screening_note},
+                     "screening_note":t.screening_note,"disposition_reason":t.discontinuation_reason},
         "restricted":as_dict(meta) if meta else None,
         "scope":"Restricted source-link metadata; never show in monitoring or lab pharmacy views"}
 
@@ -333,7 +334,7 @@ def subjects(q:str="",limit:int=50,before_id:int|None=None,u:AuthContext=Depends
     # Join registry identity once so staff can find the same CR throughout the
     # workflow. Preserve strict-role masking outside the owner-managed workspace.
     restricted=u.role in {"microbiology","pharmacy","technician","monitor"} and not u.workspace_full_access
-    statement=select(TrialSubject,Patient,TrialEligibility).join(Patient,Patient.id==TrialSubject.patient_id).outerjoin(TrialEligibility,TrialEligibility.subject_id==TrialSubject.id).order_by(TrialSubject.id.desc())
+    statement=select(TrialSubject,Patient,TrialEligibility).join(Patient,Patient.id==TrialSubject.patient_id).outerjoin(TrialEligibility,TrialEligibility.subject_id==TrialSubject.id).where(active_patient_filter()).order_by(TrialSubject.id.desc())
     if before_id is not None:statement=statement.where(TrialSubject.id<before_id)
     if q.strip():
         term="%"+q.strip()+"%"
@@ -845,6 +846,50 @@ def enroll(subject_id:int,data:EnrollmentIn,u:AuthContext=Depends(current),s:Ses
         raise HTTPException(409,"Study ID or scheduled PCR already exists; refresh this participant")
     return {"subject":subject_view(t),"study_id":new_code,"pcr_orders":len(MONTHS)}
 
+class ScreeningDecisionIn(BaseModel):
+    reason:str=Field(min_length=5,max_length=500)
+    confirmed:Literal[True]
+
+@router.post("/subjects/{subject_id}/mark-ineligible")
+def mark_ineligible(subject_id:int,data:ScreeningDecisionIn,u:AuthContext=Depends(current),s:Session=Depends(db)):
+    """Document a confirmed screen failure even before the full checklist is available."""
+    role(u,SCREENERS)
+    t=s.scalar(select(TrialSubject).where(TrialSubject.id==subject_id).with_for_update())
+    if not t:raise HTTPException(404,"Screening record not found")
+    eligible_patient(s,t.patient_id)
+    if t.status!="screened" or t.enrolled_on or t.study_code:
+        raise HTTPException(409,"Only never-enrolled pending screening may be marked ineligible")
+    check=s.get(TrialEligibility,t.id)
+    if check and check.baseline.get("is_eligible") is True:
+        raise HTTPException(409,"Existing signed eligible assessment must be corrected by the investigator first")
+    if s.scalar(select(RandomizationSlot.id).where(RandomizationSlot.subject_id==t.id).limit(1)):
+        raise HTTPException(409,"Randomized records cannot be marked ineligible")
+    old=as_dict(t)
+    t.status="ineligible";t.discontinuation_reason=data.reason
+    audit(s,u,"mark_ineligible","trial_subject",str(t.id),t.patient_id,old,as_dict(t),data.reason)
+    s.commit()
+    return dict(subject_view(t),screening_disposition="ineligible")
+
+@router.post("/subjects/{subject_id}/reopen-screening")
+def reopen_screening(subject_id:int,data:ScreeningDecisionIn,u:AuthContext=Depends(current),s:Session=Depends(db)):
+    role(u,{"pi","consultant"})
+    t=s.scalar(select(TrialSubject).where(TrialSubject.id==subject_id).with_for_update())
+    if not t:raise HTTPException(404,"Screening record not found")
+    eligible_patient(s,t.patient_id)
+    if t.status!="ineligible" or t.enrolled_on or t.study_code:
+        raise HTTPException(409,"Only a closed, never-enrolled screening may be reopened")
+    old=as_dict(t);t.status="screened";t.discontinuation_reason=None
+    check=s.get(TrialEligibility,t.id)
+    if check:
+        previous=as_dict(check)
+        check.baseline=dict(check.baseline,is_eligible=False,requires_source_reverification=True)
+        check.updated_at=now()
+        audit(s,u,"eligibility_revalidation_required","trial_eligibility",str(t.id),t.patient_id,
+              previous,as_dict(check),data.reason)
+    audit(s,u,"reopen_screening","trial_subject",str(t.id),t.patient_id,old,as_dict(t),data.reason)
+    s.commit()
+    return dict(subject_view(t),screening_disposition="pending_review")
+
 class ConsentDeclinedIn(BaseModel):
     confirmed:Literal[True]
 
@@ -1315,7 +1360,7 @@ def roles(u:AuthContext=Depends(current)):
 
 @router.get("/overview")
 def overview(u:AuthContext=Depends(current),s:Session=Depends(db)):
-    subjects=s.execute(select(TrialSubject,TrialEligibility).outerjoin(TrialEligibility,TrialEligibility.subject_id==TrialSubject.id)).all()
+    subjects=s.execute(select(TrialSubject,TrialEligibility).join(Patient,Patient.id==TrialSubject.patient_id).outerjoin(TrialEligibility,TrialEligibility.subject_id==TrialSubject.id).where(active_patient_filter())).all()
     subject_counts={}
     recruitment_counts={}
     for t,e in subjects:
@@ -1334,7 +1379,7 @@ def overview(u:AuthContext=Depends(current),s:Session=Depends(db)):
     returned=s.scalar(select(func.coalesce(func.sum(DrugReturn.quantity_returned),0))) or 0
     from .trial_models import RandomizationSlot
     randomized=s.scalar(select(func.count(RandomizationSlot.id)).where(RandomizationSlot.subject_id.is_not(None))) or 0
-    return {"randomized":randomized,"screened":s.scalar(select(func.count(TrialSubject.id))),
+    return {"randomized":randomized,"screened":len(subjects),
         "enrolled":subject_counts.get("enrolled",0),
         "ever_enrolled":total_enrolled,"subject_status":subject_counts,"recruitment_status":recruitment_counts,
         "pcr":pcr_counts,"protocol_pcr_per_subject":len(MONTHS),
