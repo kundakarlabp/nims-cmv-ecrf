@@ -155,7 +155,7 @@ def list_forms(subject_id:int,section:str|None=None,
 @router.get("/patients/{patient_id}/context")
 def patient_context(patient_id:str,u:AuthContext=Depends(current),s:Session=Depends(db)):
     role(u,{"pi","consultant","scientist","nurse","pg","pharmacy","monitor","microbiology","technician"})
-    from .trial_api import eligible_patient, subject_view, screening_disposition
+    from .trial_api import eligible_patient, subject_view, screening_disposition, screening_version
     from .trial_models import TrialEligibility, TrialScreeningMeta
     from .randomization import read_allocation
     patient=eligible_patient(s,patient_id)
@@ -166,7 +166,7 @@ def patient_context(patient_id:str,u:AuthContext=Depends(current),s:Session=Depe
             "allocation":read_allocation(subject.id,u,s)}
     if u.role in {"pi","consultant","scientist"} or u.pi_authorized or u.workspace_full_access:
         meta=s.get(TrialScreeningMeta,subject.id)
-        result["screening"]={"consent_on":subject.consent_on,"consent_version":subject.consent_version,
+        result["screening"]={"version":screening_version(subject,meta),"consent_on":subject.consent_on,"consent_version":subject.consent_version,
             "screening_note":subject.screening_note,"metadata":as_dict(meta) if meta else {}}
     return result
 
