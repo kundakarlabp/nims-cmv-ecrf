@@ -90,7 +90,7 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
     const subject=subjects.find(x=>x.id===id);Object.assign(subject,{status:'enrolled',study_code:'NCMV001',enrolled_on:data.enrolled_on});
     people.find(x=>x.id===subject.patient_id).study_id=subject.study_code;
     result={subject,study_id:subject.study_code,pcr_orders:7};
-   }else if(p==='/api/trial/overview')result={screened:3,ever_enrolled:2,randomized:2,verified_protocol_pcr_slots:1,
+   }else if(p==='/api/trial/overview')result={screened:3,ever_enrolled:2,randomized:2,verified_protocol_pcr_slots:1,recruitment_status:{ineligible:1,enrolled:2},
       pcr:{},drug_accountability:{}};
    else if(p==='/api/trial/crf/completeness')result={visit_completion:Object.fromEntries(
       [1,2,3,4,6,9,12].map(m=>[m,{submitted:0,verified:0,needs_correction:0}]))};
@@ -507,7 +507,8 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   assert.equal(await page.getAttribute('#tw-mobile-menu','aria-expanded'),'true');
   await page.click('#tw-nav-overview');
   await page.waitForFunction(()=>activeTab==='dashboard');
-  await page.waitForFunction(()=>document.querySelectorAll('.tw-overview-kpi').length===4);
+  await page.waitForFunction(()=>document.querySelectorAll('.tw-overview-kpi').length===5);
+  assert.equal(await page.locator('.tw-overview-kpi').filter({hasText:'Ineligible'}).locator('strong').textContent(),'1','Dashboard must display the actual ineligible count');
   assert.equal(await page.locator('.dash-hero').count(),0,
     'Overview no longer duplicates a giant registry verification percentage');
   assert.equal(await page.locator('.tw-overview-action').count(),1,
