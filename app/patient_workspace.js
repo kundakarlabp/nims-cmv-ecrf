@@ -861,6 +861,9 @@ async function updateWorkflow(){
  }catch(e){if(request===workflowRequest)document.getElementById('tw-result-1').textContent='Reload to check';}
 }
 function syncNavigation(){
+ const archive=document.getElementById('tw-archive-panel');
+ const mayArchive=['admin','pi','consultant','scientist'].includes(document.getElementById('currentRole').textContent.trim())&&!!csrf;
+ if(archive){archive.classList.toggle('hide',!mayArchive);if(!mayArchive)document.getElementById('tw-archive-list').replaceChildren();}
  const name=activeTab,isPatient=patientTabs.has(name);
  for(const [key,b] of Object.entries(mainButtons)){
   const match=key==='patients'?isPatient:key==='overview'?name==='dashboard':
@@ -920,7 +923,7 @@ const directoryLayout=document.createElement('div');
 directoryLayout.className='tw-directory-columns';
 directory.insertBefore(directoryLayout,directory.firstChild);
 directoryLayout.append(directoryFinder,registration);
-const archivePanel=document.createElement('details');
+const archivePanel=document.createElement('details');archivePanel.className='hide';
 archivePanel.id='tw-archive-panel';archivePanel.innerHTML='<summary>Archived erroneous records</summary><p class="hint">Restoration retains all prior audit events.</p><button type="button" id="tw-archive-refresh" class="secondary">Load archive</button><div id="tw-archive-list"></div>';
 directoryFinder.appendChild(archivePanel);
 document.getElementById('tw-archive-refresh').onclick=()=>{void task('tw-status',async()=>{
