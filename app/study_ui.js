@@ -1959,6 +1959,7 @@ function renderParticipant(context){
   for(const id of ['age','weight','creatinine','sex'])$(id).value='';
  }
  participantContext=context;participantSubject=context.subject?.id||null;
+ if(typeof window.cmvRenderTrialCompletion==='function')window.cmvRenderTrialCompletion(context);
  const source=context.screening||{},meta=source.metadata||{},subject=context.subject;
  if(subject){
   const fields={'tw-screen-date':subject.screening_on,'tw-consent-date':source.consent_on,'tw-icf':source.consent_version,'tw-pis':meta.pis_version,'tw-consent-obtained':meta.consent_obtained_by,'tw-initials':meta.participant_initials,'tw-screen-age':meta.age_at_transplant,'tw-sex':meta.sex_at_birth,'tw-ratg':subject.ratg_induction==null?'':String(subject.ratg_induction),'tw-digg':subject.donor_cmv_igg,'tw-rigg':subject.recipient_cmv_igg,'tw-donor':subject.donor_type,'tw-relationship':meta.donor_relationship,'tw-consent-language':meta.consent_language,'tw-screening-notes':source.screening_note,'tw-enroll-date':subject.enrolled_on,'tw-anchor-date':subject.pcr_anchor_on||context.transplant_on};
