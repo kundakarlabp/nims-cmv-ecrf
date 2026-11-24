@@ -372,7 +372,8 @@ async function selectEnrollmentPatient(){
  $('tw-correct-rigg').value=subject?.recipient_cmv_igg||'';
  $('tw-correct-source').value='';
  $('tw-correct-reason').value='';
- for(const id of ['tw-screened','tw-checklist-subject'])$(id).value=subject?.status==='screened'?String(subject.id):'';
+ $('tw-screened').value=subject?.status==='screened'?String(subject.id):'';
+ $('tw-checklist-subject').value=subject?String(subject.id):'';
  if(participantContext?.patient_id===selected&&participantContext.transplant_on)$('tw-anchor-date').value=participantContext.transplant_on;
  await loadEligibilityReview();
 }
@@ -393,7 +394,7 @@ async function loadSubjects(){
  }
  studySubjects=gathered;
  fill('tw-screened',studySubjects.filter(x=>x.status==='screened'),'id',subjectLabel);
- fill('tw-checklist-subject',studySubjects.filter(x=>x.status==='screened'),'id',subjectLabel);
+ fill('tw-checklist-subject',studySubjects,'id',subjectLabel);
  var active=studySubjects.filter(x=>x.enrolled_on);
  for(const id of ['tw-pcr-subject','tw-drug-subject','tw-crf-subject','tw-rand-subject']){
   fill(id,id==='tw-rand-subject'?active.filter(x=>x.status==='enrolled'):active,'id',subjectLabel);$(id).value=participantSubject?String(participantSubject):'';
@@ -851,9 +852,13 @@ async function clearEligibilityDraft(sid){
 async function loadEligibilityReview(){
  if(eligibilityDraftDirty)await saveEligibilityDraftNow();
  const request=++eligibilityRequest,sid=n('tw-checklist-subject');
- eligibilityDraftSubject=sid||null;eligibilityDraftRevision=null;
+ const editable=studySubjects.some(x=>x.id===sid&&x.status==='screened');
+ eligibilityDraftSubject=editable?sid:null;eligibilityDraftRevision=null;
  eligibilityDraftLast=null;eligibilityDraftDirty=false;
- eligibilityDraftStatus(sid?'Loading eligibility and private draft…':'Select a screened participant');
+ eligibilityDraftStatus(sid?'Loading recorded eligibility…':'Select a patient');
+ for(const el of document.querySelectorAll('[data-eligibility]'))el.disabled=!editable;
+ for(const id of Object.values(eligibilityDraftInputs))if($(id))$(id).disabled=!editable;
+ $('tw-checklist-save').disabled=!editable;
  for(const el of document.querySelectorAll('[data-eligibility]')){
   el.value='';el.dataset.autoChecked='';
  }
@@ -871,8 +876,8 @@ async function loadEligibilityReview(){
  if(request!==eligibilityRequest||sid!==n('tw-checklist-subject'))return;
  const e=r.eligibility;
  window.cmvSavedEligibility={sid,assessment:e||null};
- if(!e){prefillObjectiveEligibility();updateEnrollmentReadiness();
-  await restoreEligibilityDraft(request,sid);return;}
+ if(!e){if(editable)prefillObjectiveEligibility();updateEligibilityProgress();updateEnrollmentReadiness();
+  if(editable)await restoreEligibilityDraft(request,sid);else eligibilityDraftStatus('No signed eligibility review recorded');return;}
  for(const el of document.querySelectorAll('[data-eligibility]')){
   const v=e[el.dataset.eligibility]?.[el.dataset.key];el.value=typeof v==='boolean'?String(v):'';
  }
@@ -899,8 +904,8 @@ async function loadEligibilityReview(){
     '; actual first-dose day: '+(exception.days_to_first_dose==null?'not documented':exception.days_to_first_dose)+
     '. Eligibility and randomisation still use the approved protocol.';
  }
- prefillObjectiveEligibility();updateEligibilityProgress();updateEnrollmentReadiness();
- await restoreEligibilityDraft(request,sid);
+ if(editable)prefillObjectiveEligibility();updateEligibilityProgress();updateEnrollmentReadiness();
+ if(editable)await restoreEligibilityDraft(request,sid);else eligibilityDraftStatus('Saved historical eligibility · read only');
 }
 for(const id of ['tw-checklist-subject','tw-screened'])$(id).onchange=()=>{void task('tw-status',async()=>{
  const sid=n(id);if(!sid)return;
@@ -1933,6 +1938,8 @@ function requireProcedureSubject(kind){
 function clearParticipant(){
  participantRequest++;participantSubject=null;participantContext=null;timelineCursor=null;
  selected=null;
+ for(const id of ['tw-screen-date','tw-consent-date','tw-icf','tw-pis','tw-consent-obtained','tw-initials','tw-screen-age','tw-sex','tw-ratg','tw-digg','tw-rigg','tw-donor','tw-relationship','tw-consent-language','tw-screening-notes','tw-enroll-date','tw-anchor-date'])if($(id)){$(id).value='';$(id).disabled=false;}
+ $('tw-screen-save').disabled=true;
  $('currentPatient').textContent='None';$('records').textContent='Select a participant.';$('entryList').textContent='';
  $('doseResult').textContent='';$('arm').disabled=false;
  resetPCRControls();resetDrugControls();
@@ -1959,6 +1966,7 @@ function renderParticipant(context){
  }
  $('tw-screen-save').disabled=!!subject&&(subject.status!=='screened'||!source.version);
  $('tw-screen-save').textContent=subject?(subject.status==='screened'?'Save screening changes':'Screening recorded'):'Save screening';
+ for(const id of ['tw-screen-date','tw-consent-date','tw-icf','tw-pis','tw-consent-obtained','tw-initials','tw-screen-age','tw-sex','tw-ratg','tw-digg','tw-rigg','tw-donor','tw-relationship','tw-consent-language','tw-screening-notes'])if($(id))$(id).disabled=!!subject&&subject.status!=='screened';
  // Synchronize the screening registry picker as soon as a patient is resolved.
  // The identity change must not await extra patient-banner/network requests.
  if(Array.from($('tw-patient').options).some(o=>o.value===context.patient_id))
