@@ -1864,3 +1864,82 @@ def test_signed_eligibility_supersedes_another_staff_members_old_partial_draft()
         assert fresh.json()['revision']==2
         assert scientist.get(url).json()['draft']['payload']['fields']['review_notes']==(
             'TEST new partial note after signed review')
+
+
+def test_incomplete_screening_reopen_readback_and_reversible_archive():
+    """No guessed clinical fields, no new Study ID, no lost screening history."""
+    with TestClient(app) as admin:
+        h=auth(admin)
+        response=admin.post('/api/patients',headers=h,json={
+            'name':'Synthetic incomplete screening','cr_number':'TEST-SCREEN-COMPLETE'})
+        assert response.status_code==200,response.text
+        pid=response.json()['id']
+        for username,role in [('completionstaff','scientist'),('completionpi','pi'),('completionlab','microbiology')]:
+            assert admin.post('/api/users',headers=h,json={'username':username,
+                'display_name':'Synthetic '+role,'role':role,
+                'password':'SyntheticCompletionPassword123!'}).status_code==200
+    with TestClient(app) as staff:
+        h=auth(staff,'completionstaff','SyntheticCompletionPassword123!')
+        minimal={'patient_id':pid,'screening_on':'2026-10-02'}
+        response=staff.post('/api/trial/screening',headers=h,json=minimal)
+        assert response.status_code==200,response.text
+        initial=response.json();sid=initial['id'];code=initial['screening_code']
+        assert initial['study_code'] is None and initial['donor_type']=='unknown'
+        context_url=f'/api/trial/crf/patients/{pid}/context'
+        before=staff.get(context_url).json()
+        assert before['subject']['screening_disposition']=='pending_review'
+        alias='NCMV-S'+str(sid).zfill(6)
+        assert staff.get('/api/patients',params={'q':alias}).json()[0]['id']==pid
+        assert staff.get('/api/trial/subjects',params={'q':alias}).json()[0]['id']==sid
+        amended=dict(minimal,donor_type='living',donor_cmv_igg='negative',
+                     recipient_cmv_igg='positive',donor_relationship='living_related',
+                     consent_on='2026-10-02',consent_version='ICF-v3',pis_version='PIS-v3',
+                     consent_language='Telugu',screening_note='Synthetic note',
+                     signed_consent_source_ref='TEST-ICF-SOURCE',age_at_transplant=45,
+                     sex_at_birth='female',expected_version=before['screening']['version'],
+                     correction_reason='Complete recorded source fields')
+        response=staff.put(f'/api/trial/subjects/{sid}/screening',headers=h,json=amended)
+        assert response.status_code==200,response.text
+        persisted=staff.get(context_url).json()
+        assert persisted['subject']['screening_code']==code
+        assert persisted['subject']['study_code'] is None
+        assert persisted['screening']['consent_version']=='ICF-v3'
+        assert persisted['screening']['screening_note']=='Synthetic note'
+        assert persisted['screening']['metadata']['age_at_transplant']==45
+        assert persisted['screening']['metadata']['signed_consent_source_ref']=='TEST-ICF-SOURCE'
+        assert staff.put(f'/api/trial/subjects/{sid}/screening',headers=h,json=amended).status_code==409
+        decision=staff.post(f'/api/trial/subjects/{sid}/mark-ineligible',headers=h,json={
+            'reason':'Documented protocol exclusion','confirmed':True})
+        assert decision.status_code==200,decision.text
+        assert staff.get(context_url).json()['subject']['screening_disposition']=='ineligible'
+        assert staff.get('/api/trial/overview').json()['recruitment_status']['ineligible']==1
+        assert staff.get('/api/patients/'+pid).json()['recruitment']['disposition']=='ineligible'
+        # Genuine screen failures remain in the log. Only an explicitly erroneous
+        # registration may be archived; this synthetic fixture exercises recovery.
+        archive_url=f'/api/assistant/patients/{pid}/archive-erroneous'
+        record=staff.get('/api/patients/'+pid).json()['patient']
+        action={'expected_revision':record['revision'],'expected_cr_number':record['cr_number'],
+                'reason':'Synthetic duplicate entered in error','confirm_archive':True}
+        assert staff.post(archive_url,headers=h,json=action).status_code==200
+        assert staff.get(context_url).status_code==404
+        assert staff.get('/api/trial/overview').json()['screened']==0
+        assert not staff.get('/api/patients',params={'q':code}).json()
+        saved=staff.get('/api/assistant/archived-patients').json()[0]
+        assert saved['id']==pid
+        action.update(expected_revision=saved['revision'],reason='Synthetic restoration review')
+        restored=staff.post(f'/api/assistant/patients/{pid}/restore-archived',headers=h,json=action)
+        assert restored.status_code==200,restored.text
+        assert staff.get(context_url).json()['subject']['screening_disposition']=='ineligible'
+        assert staff.get('/api/trial/overview').json()['screened']==1
+    with TestClient(app) as lab:
+        h=auth(lab,'completionlab','SyntheticCompletionPassword123!')
+        assert 'screening' not in lab.get(context_url).json()
+        assert lab.get('/api/assistant/archived-patients').status_code==403
+    with TestClient(app) as pi:
+        h=auth(pi,'completionpi','SyntheticCompletionPassword123!')
+        reopened=pi.post(f'/api/trial/subjects/{sid}/reopen-screening',headers=h,json={
+            'reason':'Source reconciliation required','confirmed':True})
+        assert reopened.status_code==200,reopened.text
+        assert pi.get(context_url).json()['subject']['screening_disposition']=='pending_review'
+        assert pi.get('/api/trial/overview').json()['randomized']==0
+        assert pi.get('/api/patients/'+pid).json()['patient']['study_id'] is None
