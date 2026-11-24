@@ -68,7 +68,7 @@ panel('study','Enrollment',
  choose('Sex (source record)','tw-sex',[['','Not recorded'],['female','Female'],['male','Male'],['other','Other']])+
  choose('Donor CMV IgG','tw-digg',[['','Select verified result'],['positive','Positive'],['negative','Negative'],['unknown','Unknown / not available']])+
  choose('Recipient CMV IgG','tw-rigg',[['','Select verified result'],['positive','Positive'],['negative','Negative'],['unknown','Unknown / not available']])+
- choose('Donor type','tw-donor',[['','Select verified donor type'],['living','Living'],['deceased','Deceased']])+
+ choose('Donor type','tw-donor',[['','Not assessed'],['living','Living'],['deceased','Deceased'],['unknown','Unknown / not available']])+
  choose('Donor relationship','tw-relationship',[['','Select verified relationship'],['living_related','Living related'],
     ['living_unrelated','Living unrelated'],['deceased','Deceased']])+
  choose('rATG induction','tw-ratg',[['','Undocumented'],['true','Yes'],['false','No']])+
@@ -339,8 +339,9 @@ tab=async function(name){
   for(const k of Object.keys(perms)){$(k).classList.add('hide');$('btn'+k).classList.remove('selected');}
  }
 };
-function registryLabel(p){return (p.cr_number?'CR '+p.cr_number+' · ':'')+(p.name||'')+(p.study_id?' · '+p.study_id:'');}
-function subjectLabel(s){return (s.cr_number?'CR '+s.cr_number+' · ':'')+(s.study_code||s.screening_code)+' · '+s.status;}
+function registryLabel(p){return (p.cr_number?'CR '+p.cr_number+' · ':'')+(p.name||'')+((p.study_id||p.screening_code)?' · '+(p.study_id||p.screening_code):'');}
+function recruitmentLabel(s){return String(s?.screening_disposition||s?.status||'Registered').replaceAll('_',' ');}
+function subjectLabel(s){return (s.cr_number?'CR '+s.cr_number+' · ':'')+(s.study_code||s.screening_code)+' · '+recruitmentLabel(s);}
 let registryLoadRequest=0;
 async function loadRegistry(){
  const request=++registryLoadRequest,selectedAtStart=selected;
@@ -400,7 +401,7 @@ async function loadSubjects(){
  fill('tw-context-subject',studySubjects,'id',subjectLabel);
  $('tw-context-subject').value=participantSubject?String(participantSubject):'';
  $('tw-register').innerHTML='<table><thead><tr><th>CR number / Study code</th><th>Status</th><th>D+/R+</th><th>Signed consent</th></tr></thead><tbody>'+
- studySubjects.map(x=>'<tr><td>'+txt(subjectLabel(x))+'</td><td>'+txt(x.status)+'</td><td>'+String(x.d_plus_r_plus)+'</td><td>'+String(x.consent_recorded)+'</td></tr>').join('')+'</tbody></table>';
+ studySubjects.map(x=>'<tr><td>'+txt(subjectLabel(x))+'</td><td>'+txt(recruitmentLabel(x))+'</td><td>'+String(x.d_plus_r_plus)+'</td><td>'+String(x.consent_recorded)+'</td></tr>').join('')+'</tbody></table>';
 }
 /* Patient-centred workflow: allocation remains a separate confirmed transaction
    within the enrollment page; never release it when enrollment is saved. */
@@ -543,12 +544,12 @@ function openStudyStage(number){
  return true;
 }
 $('tw-screen-save').onclick=()=>{void task('tw-status',async()=>{
- for(const [id,label] of [['tw-digg','donor CMV IgG'],['tw-rigg','recipient CMV IgG'],['tw-donor','donor type']])
-   if(!value(id))throw Error('Select the source-verified '+label+'; an unassessed default is not permitted');
+ if(!selected||value('tw-patient')!==selected)throw Error('Select the correct patient first');
+ if(!value('tw-screen-date'))throw Error('Enter the screening date');
   var r=await api('/api/trial/screening',{method:'POST',body:JSON.stringify({
   patient_id:value('tw-patient'),screening_on:value('tw-screen-date'),consent_on:value('tw-consent-date')||null,
-  consent_version:value('tw-icf')||null,donor_cmv_igg:value('tw-digg'),recipient_cmv_igg:value('tw-rigg'),
-  donor_type:value('tw-donor'),donor_relationship:value('tw-relationship'),
+  consent_version:value('tw-icf')||null,donor_cmv_igg:value('tw-digg')||'unknown',recipient_cmv_igg:value('tw-rigg')||'unknown',
+  donor_type:value('tw-donor')||'unknown',donor_relationship:value('tw-relationship')||null,
   participant_initials:value('tw-initials')||null,
   age_at_transplant:value('tw-screen-age')?n('tw-screen-age'):null,
   sex_at_birth:value('tw-sex')||null,pis_version:value('tw-pis')||null,
@@ -1575,7 +1576,7 @@ loadDashboard=async function(){
   ' · '+(build.service||'mode unavailable');
  const valueOrDash=x=>Number.isFinite(Number(x))?Number(x).toLocaleString('en-IN'):'—';
  const rows=[
-  ['Screened',trial?.screened],['Enrolled',trial?.ever_enrolled??trial?.enrolled],
+  ['Screened',trial?.screened],['Ineligible',trial?.recruitment_status?trial.recruitment_status.ineligible||0:undefined],['Enrolled',trial?.ever_enrolled??trial?.enrolled],
   ['Randomized',trial?.randomized],['PCR verified',trial?.verified_protocol_pcr_slots]
  ];
  const counts='<div class="tw-overview-metrics">'+rows.map(([label,count])=>
@@ -1933,15 +1934,23 @@ function clearParticipant(){
  $('tw-rand-assign').disabled=true;
 }
 function renderParticipant(context){
- if(context.patient_id!==participantContext?.patient_id){
+ const changed=context.patient_id!==participantContext?.patient_id;
+ if(changed){
   resetPCRControls();resetDrugControls();
-  for(const id of ['tw-consent-date','tw-icf','tw-pis','tw-consent-obtained','tw-initials','tw-screen-age','tw-sex','tw-ratg','tw-anchor-date'])$(id).value='';
+  for(const id of ['tw-screen-date','tw-consent-date','tw-icf','tw-pis','tw-consent-obtained','tw-initials','tw-screen-age','tw-sex','tw-ratg','tw-anchor-date','tw-digg','tw-rigg','tw-donor','tw-relationship','tw-consent-language','tw-screening-notes','tw-enroll-date'])$(id).value='';
   for(const id of ['tw-pi-consent'])$(id).checked=false;
   for(const id of ['tw-collected','tw-accession','tw-reported','tw-assay','tw-result-kind','tw-viral-load','tw-loq','tw-qc','tw-result-reason','tw-review-reason','tw-rx-date','tw-issue-date','tw-return-date'])$(id).value='';
   $('tw-rand-eligibility-confirm').checked=false;
   for(const id of ['age','weight','creatinine','sex'])$(id).value='';
  }
  participantContext=context;participantSubject=context.subject?.id||null;
+ const source=context.screening||{},meta=source.metadata||{},subject=context.subject;
+ if(subject){
+  const fields={'tw-screen-date':subject.screening_on,'tw-consent-date':source.consent_on,'tw-icf':source.consent_version,'tw-pis':meta.pis_version,'tw-consent-obtained':meta.consent_obtained_by,'tw-initials':meta.participant_initials,'tw-screen-age':meta.age_at_transplant,'tw-sex':meta.sex_at_birth,'tw-ratg':subject.ratg_induction==null?'':String(subject.ratg_induction),'tw-digg':subject.donor_cmv_igg,'tw-rigg':subject.recipient_cmv_igg,'tw-donor':subject.donor_type,'tw-relationship':meta.donor_relationship,'tw-consent-language':meta.consent_language,'tw-screening-notes':source.screening_note,'tw-enroll-date':subject.enrolled_on,'tw-anchor-date':subject.pcr_anchor_on||context.transplant_on};
+  for(const [id,v] of Object.entries(fields)){if($(id))$(id).value=v??'';}
+ }
+ $('tw-screen-save').disabled=!!subject;
+ $('tw-screen-save').textContent=subject?'Screening already saved':'Save screening';
  // Synchronize the screening registry picker as soon as a patient is resolved.
  // The identity change must not await extra patient-banner/network requests.
  if(Array.from($('tw-patient').options).some(o=>o.value===context.patient_id))
@@ -1957,7 +1966,7 @@ function renderParticipant(context){
   (a.randomized?(a.assigned_arm_mg?'Allocated '+a.assigned_arm_mg+' mg OD nominal arm':'Allocation concealed for this role')+
    ' · '+a.allocation_code:'Not randomized');
  $('tw-context-detail').textContent=context.subject?
-  'Transplant: '+(context.transplant_on||'not recorded')+' · '+context.subject.status+
+  'Transplant: '+(context.transplant_on||'not recorded')+' · '+recruitmentLabel(context.subject)+
   ' · rATG: '+(context.subject.ratg_induction===null?'unknown':context.subject.ratg_induction?'yes':'no')+
   ' · donor: '+context.subject.donor_type+
   (a.assigned_arm_mg?' · Assignment is permanent; actual dose follows the dated renal-adjusted signed prescription.':''):'';
@@ -2026,7 +2035,8 @@ window.choose=async function(id){
  $('tw-context-allocation').textContent='Checking participant and allocation…';
  $('tw-context-detail').textContent='';
  try{const context=await api('/api/trial/crf/patients/'+encodeURIComponent(id)+'/context');
-  if(request===participantRequest){await loadSubjects();if(request!==participantRequest)return;renderParticipant(context);
+  if(request===participantRequest){await loadSubjects();if(request!==participantRequest||selected!==id)return;renderParticipant(context);
+   if(activeTab==='study'){await selectEnrollmentPatient();await refreshInlineRandomization();}
    if(activeTab==='crf'){crfRender();await populateCrfLinkedIdentifiers();await crfRestoreDraft();await loadCrfEntries();}}
  }catch(e){if(request===participantRequest){clearParticipant();$('tw-context-error').textContent=e.message;}}
 };
