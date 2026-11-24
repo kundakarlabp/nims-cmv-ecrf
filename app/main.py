@@ -119,15 +119,22 @@ class EntryReview(Base):
 # and attribution history remain intact; active workspace lists exclude the
 # archived record and no new clinical entry may be attached to it.
 ARCHIVE_ACTION='archive_patient'
+RESTORE_ACTION='restore_patient'
+
+def latest_archive_event(patient_id):
+    return select(Audit).where(Audit.entity_type=='patient',
+        Audit.entity_id==patient_id,Audit.action.in_((ARCHIVE_ACTION,RESTORE_ACTION))
+        ).order_by(Audit.created_at.desc(),Audit.id.desc()).limit(1)
 
 def active_patient_filter():
-    return ~Patient.id.in_(select(Audit.entity_id).where(
-        Audit.entity_type=='patient',Audit.action==ARCHIVE_ACTION))
+    latest=select(Audit.action).where(Audit.entity_type=='patient',
+        Audit.entity_id==Patient.id,Audit.action.in_((ARCHIVE_ACTION,RESTORE_ACTION))
+        ).order_by(Audit.created_at.desc(),Audit.id.desc()).limit(1).correlate(Patient).scalar_subquery()
+    return func.coalesce(latest,'')!=ARCHIVE_ACTION
 
 def patient_archived(s:Session,patient_id:str)->bool:
-    return s.scalar(select(Audit.id).where(
-        Audit.entity_type=='patient',Audit.action==ARCHIVE_ACTION,
-        Audit.entity_id==patient_id).limit(1)) is not None
+    event=s.scalar(latest_archive_event(patient_id))
+    return bool(event and event.action==ARCHIVE_ACTION)
 
 # Register structured study models before the staging metadata is built.
 from .trial_models import TrialSubject, PCRRecord, DrugLot, DrugAuthorization, DrugDispense, DrugReturn, UserInvitation, LoginThrottle, UserTotp, StaffAccess, TrialEligibility, TrialCRFEntry, TrialCRFDraft, TrialCRFReview, TrialScreeningMeta, RandomizationPlan, RandomizationSlot
