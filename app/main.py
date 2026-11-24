@@ -1,6 +1,7 @@
 """NIMS transplant registry foundation. For staging/UAT only pending validation."""
 import hashlib
 import os
+import re
 import secrets
 import uuid
 from datetime import date, datetime, timedelta, timezone
@@ -533,23 +534,30 @@ def create_patient(data:PatientIn,u:AuthContext=Depends(current),s:Session=Depen
         s.commit()
     except IntegrityError: s.rollback();raise HTTPException(409,'Duplicate CR number or study ID')
     return {'id':p.id,'revision':p.revision}
+def normalized_screening_code(value):
+    match=re.fullmatch(r'NCMV-S-?(\d{1,9})',value.strip(),re.I)
+    return f'NCMV-S-{int(match.group(1)):05d}' if match else None
+
 @app.get('/api/patients')
 def patients(q:str='',limit:int=50,u:AuthContext=Depends(current),s:Session=Depends(db)):
     limit=min(max(limit,1),100)
-    st=select(Patient).where(active_patient_filter())
+    st=select(Patient,TrialSubject,TrialEligibility).outerjoin(TrialSubject,TrialSubject.patient_id==Patient.id).outerjoin(TrialEligibility,TrialEligibility.subject_id==TrialSubject.id).where(active_patient_filter())
     restricted=u.role in {'microbiology','pharmacy','technician','monitor'} and not u.workspace_full_access
     if q.strip():
         if restricted:
             st=st.where(Patient.study_id.ilike('%'+q.strip()+'%'))
         else:
-            st=st.where(Patient.name.ilike('%'+q.strip()+'%') |
-                Patient.cr_number.ilike('%'+q.strip()+'%') |
-                Patient.study_id.ilike('%'+q.strip()+'%') |
-                Patient.id.in_(select(TrialSubject.patient_id).where(TrialSubject.screening_code.ilike('%'+q.strip()+'%'))))
-    ps=s.scalars(st.order_by(Patient.created_at.desc()).limit(limit)).all()
+            normalized=normalized_screening_code(q)
+            match=Patient.name.ilike('%'+q.strip()+'%') | Patient.cr_number.ilike('%'+q.strip()+'%') | Patient.study_id.ilike('%'+q.strip()+'%') | TrialSubject.screening_code.ilike('%'+q.strip()+'%')
+            if normalized:match=match | (TrialSubject.screening_code==normalized)
+            st=st.where(match)
+    from .trial_api import screening_disposition
+    ps=s.execute(st.order_by(Patient.created_at.desc()).limit(limit)).all()
     return [{'id':p.id,'cr_number':None if restricted else p.cr_number,
              'name':None if restricted else p.name,'study_id':p.study_id,
-             'transplant_date':p.transplant_date,'revision':p.revision} for p in ps]
+             'screening_code':t.screening_code if t and not restricted else None,
+             'recruitment_disposition':screening_disposition(t,e) if t else 'registered',
+             'transplant_date':p.transplant_date,'revision':p.revision} for p,t,e in ps]
 @app.get('/api/patients/{patient_id}')
 def patient(patient_id:str,u:AuthContext=Depends(current),s:Session=Depends(db)):
     p=s.get(Patient,patient_id)
@@ -561,7 +569,14 @@ def patient(patient_id:str,u:AuthContext=Depends(current),s:Session=Depends(db))
         # Lab, pharmacy and external monitors never receive unrelated clinical entry payloads.
         permitted={'lab'} if u.role in {'microbiology','technician'} else ({'pharmacy'} if u.role=='pharmacy' else set())
         es=[e for e in es if e.kind in permitted]
-    return {'patient':data,'entries':[dict(as_dict(e),review_status=review_state(s,e)) for e in es]}
+    result={'patient':data,'entries':[dict(as_dict(e),review_status=review_state(s,e)) for e in es]}
+    if u.workspace_full_access or u.role in {'pi','consultant','scientist','nurse','pg'}:
+        from .trial_api import screening_disposition
+        t=s.scalar(select(TrialSubject).where(TrialSubject.patient_id==patient_id))
+        if t:
+            result['recruitment']={'screening_code':t.screening_code,'study_code':t.study_code,
+                'screening_on':t.screening_on,'disposition':screening_disposition(t,s.get(TrialEligibility,t.id))}
+    return result
 class EntryIn(BaseModel):
     kind:Literal['admission','visit','lab','infection','medication','transplant','safety','pharmacy','rejection']
     occurred_on:date
