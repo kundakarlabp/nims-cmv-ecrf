@@ -28,7 +28,7 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
  try{
   const page=await browser.newPage({viewport:{width:1280,height:900}});
   const errors=[],writes=[],drafts=new Map(),contextReads=[];let blinded=false,holdOldDraft=false,releaseOldDraft=null;
-  const eligibility=new Map(),eligibilityDrafts=new Map(),allocations=new Map();let assignedFresh=false,holdSearchContext=false,releaseSearchContext=null;
+  const eligibility=new Map(),eligibilityDrafts=new Map(),allocations=new Map(),screeningData=new Map();let assignedFresh=false,holdSearchContext=false,releaseSearchContext=null;
   let holdOldPCR=false,releaseOldPCR=null,holdScreenedContext=false,releaseScreenedContext=null;
   let signedIn=false,courseFailures=0;
   const session=()=>({username:'synthetic-nurse',display_name:'Synthetic nurse',role:'nurse',
@@ -55,7 +55,8 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
    else if(p==='/api/trial/screening'){
     const data=route.request().postDataJSON();writes.push({p,body:data});
     const person=people.find(x=>x.id===data.patient_id);
-    result={id:4,patient_id:person.id,cr_number:person.cr_number,screening_code:'TEST-SCREEN-4',status:'screened',enrolled_on:null,donor_type:data.donor_type,ratg_induction:data.ratg_induction,consent_recorded:!!data.consent_on,donor_cmv_igg:data.donor_cmv_igg,recipient_cmv_igg:data.recipient_cmv_igg};subjects.push(result);
+    screeningData.set(4,data);
+    result={id:4,screening_on:data.screening_on,patient_id:person.id,cr_number:person.cr_number,screening_code:'TEST-SCREEN-4',status:'screened',enrolled_on:null,donor_type:data.donor_type,ratg_induction:data.ratg_induction,consent_recorded:!!data.consent_on,donor_cmv_igg:data.donor_cmv_igg,recipient_cmv_igg:data.recipient_cmv_igg};subjects.push(result);
    }else if(p.endsWith('/eligibility-draft')){
     const id=Number(p.split('/')[4]),draft=eligibilityDrafts.get(id);
     if(method==='PUT'){
@@ -122,7 +123,9 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
     contextReads.push(p);
     const id=p.includes('/patients/')?Number(p.match(/TEST-P-(\d+)/)[1]):Number(p.split('/')[5]);
     const subject=subjects.find(x=>x.id===id)||null;
+    const saved=screeningData.get(id);
     result={subject,patient_id:'TEST-P-'+id,transplant_on:'2026-10-01',
+      ...(saved?{screening:{version:'a'.repeat(64),consent_on:saved.consent_on,consent_version:saved.consent_version,screening_note:saved.screening_note,metadata:saved}}:{}),
       allocation:allocations.get(id)||(id<3?{randomized:true,allocation_code:'TEST-ALLOC-'+id,...(blinded?{}:{assigned_arm_mg:id===1?'450':'900'})}:{randomized:false})};
     if(holdSearchContext&&id===1){holdSearchContext=false;await new Promise(resolve=>{releaseSearchContext=resolve;});}
     if(holdScreenedContext&&id===3){holdScreenedContext=false;await new Promise(resolve=>{releaseScreenedContext=resolve;});}
@@ -416,8 +419,11 @@ const forms={M_medication:{title:'M. Medication exposure',repeat:'event',supplem
   await page.waitForFunction(()=>$('tw-checklist-subject').value==='3');
   assert.equal(await page.inputValue('#tw-anc'),'','Another screened patient cannot inherit baseline values');
   assert.equal(await page.inputValue('#tw-cbc-date'),'','Another screened patient cannot inherit a CBC date');
+  assert.equal(await page.inputValue('#tw-screening-notes'),'','Another screening must not inherit saved notes');
   await page.selectOption('#tw-context-subject','4');
   await page.waitForFunction(()=>$('tw-screened').value==='4');
+  assert.equal(await page.inputValue('#tw-icf'),'ICF v3');
+  assert.equal(await page.inputValue('#tw-screening-notes'),'TEST: protocol screening reviewed from source.');
   await page.fill('#tw-enroll-date','2026-11-21');
   await page.waitForFunction(()=>$('tw-enroll-save').disabled);
   assert.match(await page.textContent('#tw-enrollment-readiness'),/0–10 days/,
