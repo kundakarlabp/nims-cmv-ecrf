@@ -546,7 +546,13 @@ function openStudyStage(number){
 $('tw-screen-save').onclick=()=>{void task('tw-status',async()=>{
  if(!selected||value('tw-patient')!==selected)throw Error('Select the correct patient first');
  if(!value('tw-screen-date'))throw Error('Enter the screening date');
-  var r=await api('/api/trial/screening',{method:'POST',body:JSON.stringify({
+ const existing=participantContext?.patient_id===selected?participantContext.subject:null;
+ const version=participantContext?.screening?.version;
+ if(existing&&(existing.status!=='screened'||!version))throw Error('Reload the editable screening record');
+ const correction=existing?window.prompt('Reason for screening correction or completion'):null;
+ if(existing&&(!correction||correction.trim().length<5))return;
+ const capturedPatient=selected;
+  var r=await api(existing?'/api/trial/subjects/'+existing.id+'/screening':'/api/trial/screening',{method:existing?'PUT':'POST',body:JSON.stringify({
   patient_id:value('tw-patient'),screening_on:value('tw-screen-date'),consent_on:value('tw-consent-date')||null,
   consent_version:value('tw-icf')||null,donor_cmv_igg:value('tw-digg')||'unknown',recipient_cmv_igg:value('tw-rigg')||'unknown',
   donor_type:value('tw-donor')||'unknown',donor_relationship:value('tw-relationship')||null,
@@ -556,10 +562,12 @@ $('tw-screen-save').onclick=()=>{void task('tw-status',async()=>{
   consent_language:value('tw-consent-language')||null,
   consent_obtained_by:value('tw-consent-obtained')||null,
   screening_note:value('tw-screening-notes')||null,
-  signed_consent_source_ref:null,
+  ...(!existing?{signed_consent_source_ref:null}:{}),
   ratg_induction:value('tw-ratg')===''?null:value('tw-ratg')==='true',
-  eligibility_attested:false})});
- notify('tw-status','Screening code '+r.screening_code+' assigned. Complete the eligibility checklist, then enrollment.');
+  eligibility_attested:false,
+  ...(existing?{expected_version:version,correction_reason:correction.trim()}:{})})});
+ if(selected!==capturedPatient)return;
+ notify('tw-status','Screening '+r.screening_code+' saved. Review the eligibility checklist before enrollment.');
  await loadSubjects();await selectParticipantSubject(r.id);await selectEnrollmentPatient();
  openStudyStage(2);
  window.dispatchEvent(new Event('cmv:workflow-updated'));
@@ -1949,8 +1957,8 @@ function renderParticipant(context){
   const fields={'tw-screen-date':subject.screening_on,'tw-consent-date':source.consent_on,'tw-icf':source.consent_version,'tw-pis':meta.pis_version,'tw-consent-obtained':meta.consent_obtained_by,'tw-initials':meta.participant_initials,'tw-screen-age':meta.age_at_transplant,'tw-sex':meta.sex_at_birth,'tw-ratg':subject.ratg_induction==null?'':String(subject.ratg_induction),'tw-digg':subject.donor_cmv_igg,'tw-rigg':subject.recipient_cmv_igg,'tw-donor':subject.donor_type,'tw-relationship':meta.donor_relationship,'tw-consent-language':meta.consent_language,'tw-screening-notes':source.screening_note,'tw-enroll-date':subject.enrolled_on,'tw-anchor-date':subject.pcr_anchor_on||context.transplant_on};
   for(const [id,v] of Object.entries(fields)){if($(id))$(id).value=v??'';}
  }
- $('tw-screen-save').disabled=!!subject;
- $('tw-screen-save').textContent=subject?'Screening already saved':'Save screening';
+ $('tw-screen-save').disabled=!!subject&&(subject.status!=='screened'||!source.version);
+ $('tw-screen-save').textContent=subject?(subject.status==='screened'?'Save screening changes':'Screening recorded'):'Save screening';
  // Synchronize the screening registry picker as soon as a patient is resolved.
  // The identity change must not await extra patient-banner/network requests.
  if(Array.from($('tw-patient').options).some(o=>o.value===context.patient_id))
